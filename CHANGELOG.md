@@ -2,6 +2,32 @@
 
 所有重要变更均记录于此。详细内容见 `context/changes/`。
 
+## 0.0.0.2 — 2026-11-04
+
+### 新增
+
+- 新增仅使用 Go 标准库的轻量后端，统一提供 SPA 静态页面和版本化 API。
+- 新增 Unix Socket Docker 客户端及健康、系统、Engine 信息和容器列表接口。
+- 新增 Docker 客户端与 HTTP 服务单元测试，以及真实接口端到端检查。
+- 系统管理页接入真实后端和 Docker 信息，诊断包同步纳入运行快照。
+
+### 修复与调整
+
+- 修复 shadcn 主题变量格式不一致导致的新建实例弹窗透明问题，并增加不透明度回归检查。
+- 一体化镜像由 Nginx 静态服务改为 Node＋Go 构建、Alpine＋Go 运行。
+- Demo 容器挂载 Docker Socket，镜像升级为 `flowpilot-web:0.0.0.2`，端口保持 `18080`。
+- 明确区分真实 Docker 数据与仍为 Demo 的硬件、GPU、实例、模型和任务数据。
+
+### 验证
+
+- Go `go test ./...`、`go vet ./...` 通过。
+- `npm run lint`、`npm run build` 通过，`npm audit --omit=dev` 为 0 项已知漏洞。
+- `npm run test:demo`：14 项检查通过，零控制台错误、零 HTTP 4xx／5xx 资源。
+- 真实 Docker Engine `29.4.2`／API `1.54` 读取成功。
+- 容器 `flowpilot-web-demo` 使用 `flowpilot-web:0.0.0.2`，状态为 `running／healthy`。
+
+详细记录：[0.0.0.2](context/changes/0.0.0.2.md)
+
 ## 0.0.0.1 — 2026-11-04
 
 ### 新增

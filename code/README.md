@@ -5,7 +5,7 @@
 | 子目录 | 职责 |
 |---|---|
 | `backend/` | Go 管理服务、SQLite、Docker API、任务和模型管理 |
-| `frontend/` | Vue 3＋TypeScript Web 控制台 |
+| `frontend/` | React＋TypeScript Web 控制台 |
 | `deploy/` | 安装、卸载、systemd、镜像模板和离线包配置 |
 | `scripts/` | 构建、测试、诊断和开发辅助脚本 |
 

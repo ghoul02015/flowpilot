@@ -31,6 +31,16 @@ async function screenshot(name) {
 }
 
 try {
+  const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
+  const health = await healthResponse.json()
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.0.2') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  check('Go 后端健康接口与版本')
+
+  const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
+  const docker = await dockerResponse.json()
+  if (!dockerResponse.ok() || !docker.info?.ServerVersion || !docker.version?.ApiVersion) throw new Error(`真实 Docker API 异常：${JSON.stringify(docker)}`)
+  check('真实 Docker Engine 信息接口')
+
   await page.goto(baseURL, { waitUntil: 'networkidle' })
   await page.getByRole('heading', { name: '下午好，管理员' }).waitFor()
   check('首页看板加载')
@@ -41,6 +51,13 @@ try {
   check('实例导航')
 
   await page.getByRole('button', { name: '新建实例', exact: true }).click()
+  const createDialog = page.getByRole('dialog')
+  await createDialog.waitFor()
+  await page.waitForTimeout(300)
+  const dialogStyle = await createDialog.evaluate((element) => ({ background: getComputedStyle(element).backgroundColor, opacity: getComputedStyle(element).opacity }))
+  if (['transparent', 'rgba(0, 0, 0, 0)'].includes(dialogStyle.background) || dialogStyle.opacity !== '1') throw new Error(`新建实例弹窗未正常显示：${JSON.stringify(dialogStyle)}`)
+  check('新建实例弹窗背景不透明')
+  await screenshot('02-create-dialog')
   await page.getByLabel('分配 GPU').selectOption('1')
   await page.getByRole('button', { name: /下一步/ }).click()
   await page.getByText('选择需要预置的全局模型').waitFor()
@@ -72,6 +89,8 @@ try {
 
   await page.getByRole('button', { name: '系统管理', exact: true }).click()
   await page.getByRole('heading', { name: '系统管理' }).waitFor()
+  await page.getByText('后端已连接', { exact: true }).waitFor()
+  check('系统页后端与真实 Docker 联调')
   await page.getByRole('button', { name: '重新检测' }).click()
   await page.getByText('环境检测完成', { exact: true }).waitFor()
   check('环境重新检测')
