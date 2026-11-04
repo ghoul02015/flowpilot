@@ -2,7 +2,7 @@
 
 面向 GPU 服务器的轻量化 ComfyUI 一体化部署与管理平台。
 
-- 当前版本：`0.0.0.2`
+- 当前版本：`0.0.0.3`
 - 当前阶段：Go 后端与真实 Docker 只读接口已联调，Web Demo 业务流程保留
 - 核心目标：一次安装、Web 管理、Docker 部署、模型共享、数据持久化。
 
@@ -13,7 +13,7 @@ cd code
 ./scripts/demo-docker.sh up
 ```
 
-访问 `http://localhost:18080`。容器名为 `flowpilot-web-demo`，镜像为 `flowpilot-web:0.0.0.2`。
+访问 `http://localhost:18080`。容器名为 `flowpilot-web-demo`，镜像为 `flowpilot-web:0.0.0.3`。
 
 Go 服务统一提供前端页面和 `/api/v1/` 接口。系统管理页读取真实 Docker Engine 与容器信息；实例、模型、任务和大部分硬件／GPU 数据仍为明确标记的 Demo，保存在浏览器 `localStorage`。尚未实现真实 ComfyUI 生命周期管理。
 
@@ -42,7 +42,7 @@ Go 服务统一提供前端页面和 `/api/v1/` 接口。系统管理页读取�
 - [MVP 产品需求文档](docs/mvp/FlowPilot_MVP_PRD.md)
 - [项目协作与版本管理规则](PROJECT_RULES.md)
 - [版本变更日志](CHANGELOG.md)
-- [最新对话上下文](context/conversations/2026-11-04-003-弹窗修复与后端基础.md)
+- [最新对话上下文](context/conversations/2026-11-04-004-首页多机型硬件监控.md)
 
 ## 修改要求
 

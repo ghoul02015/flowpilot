@@ -59,3 +59,36 @@ export interface AddModelInput {
   source: string
   sourceType: 'URL 下载' | '本地导入'
 }
+
+export type GpuMemoryMode = 'discrete' | 'unified' | 'coherent'
+
+export interface GpuDevice {
+  id: number
+  model: string
+  memoryTotalGB: number
+  memoryUsedGB: number
+  memoryUsageSupported: boolean
+  utilization: number
+  temperatureC: number
+  powerW: number
+  powerLimitW: number
+}
+
+export interface HardwareProfile {
+  id: string
+  hostName: string
+  productName: string
+  os: string
+  architecture: 'x86_64' | 'arm64'
+  cpuModel: string
+  cpuCores: number
+  cpuUsage: number
+  memoryTotalGB: number
+  memoryUsedGB: number
+  memoryDescription: string
+  storageTotalGB: number
+  storageUsedGB: number
+  storageDescription: string
+  gpuMemoryMode: GpuMemoryMode
+  gpus: GpuDevice[]
+}

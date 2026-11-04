@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.0.2') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.0.3') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
@@ -43,8 +43,29 @@ try {
 
   await page.goto(baseURL, { waitUntil: 'networkidle' })
   await page.getByRole('heading', { name: '下午好，管理员' }).waitFor()
-  check('首页看板加载')
+  await page.getByRole('heading', { name: '硬件与实时监控' }).waitFor()
+  check('首页看板与完整硬件信息加载')
   await screenshot('01-dashboard')
+
+  const firstSample = await page.locator('[data-telemetry-sample]').getAttribute('data-telemetry-sample')
+  await page.waitForFunction((previous) => document.querySelector('[data-telemetry-sample]')?.getAttribute('data-telemetry-sample') !== previous, firstSample, { timeout: 4000 })
+  check('GPU 遥测每 2 秒自动刷新')
+
+  await page.getByLabel('演示硬件机型').selectOption('dgx-spark')
+  await page.getByText('128 GB CPU／GPU 共享，不重复累计', { exact: false }).waitFor()
+  await page.getByText('独立显存占用不适用；此处显示系统统一内存使用率。', { exact: true }).waitFor()
+  check('DGX Spark 统一内存展示')
+  await screenshot('01-hardware-dgx-spark')
+
+  await page.getByLabel('演示硬件机型').selectOption('dgx-station-gb300')
+  await page.getByText('LPDDR5X · 与 252 GB HBM3e 构成最高 748 GB 一致性地址空间', { exact: true }).waitFor()
+  check('DGX Station GB300 一致性内存展示')
+
+  await page.getByLabel('演示硬件机型').selectOption('rtx5090-16')
+  await page.getByTestId('gpu-card-15').waitFor()
+  if (await page.locator('[data-testid^="gpu-card-"]').count() !== 16) throw new Error('十六卡机型未完整展示 16 个 GPU 设备')
+  check('十六卡 RTX 5090 完整展示')
+  await screenshot('01-hardware-16-gpu')
 
   await page.getByRole('button', { name: 'ComfyUI 实例', exact: true }).click()
   await page.getByRole('heading', { name: '实例管理' }).waitFor()
