@@ -1,0 +1,121 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: oklch(0.975 0.006 220);
+    --foreground: oklch(0.23 0.025 240);
+    --card: oklch(0.995 0.003 220);
+    --card-foreground: oklch(0.23 0.025 240);
+    --popover: oklch(0.995 0.003 220);
+    --popover-foreground: oklch(0.23 0.025 240);
+    --primary: oklch(0.45 0.1 190);
+    --primary-foreground: oklch(0.99 0.003 190);
+    --secondary: oklch(0.95 0.008 220);
+    --secondary-foreground: oklch(0.28 0.025 240);
+    --muted: oklch(0.95 0.008 220);
+    --muted-foreground: oklch(0.46 0.02 240);
+    --accent: oklch(0.94 0.02 190);
+    --accent-foreground: oklch(0.32 0.06 190);
+    --destructive: oklch(0.5 0.18 25);
+    --destructive-foreground: oklch(0.99 0.003 25);
+    --border: oklch(0.89 0.012 220);
+    --input: oklch(0.87 0.014 220);
+    --ring: oklch(0.55 0.11 190);
+    --radius: 0.625rem;
+  }
+
+  * {
+    border-color: var(--border);
+  }
+
+  html {
+    font-family: "Avenir Next", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--background);
+  }
+
+  body {
+    margin: 0;
+    min-width: 320px;
+    min-height: 100dvh;
+    background: var(--background);
+    color: var(--foreground);
+    font-size: 16px;
+    line-height: 1.6;
+  }
+
+  button, input, select, textarea {
+    font: inherit;
+  }
+
+  button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  ::selection {
+    background: oklch(0.86 0.06 190);
+    color: oklch(0.25 0.04 190);
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 text-sm font-semibold text-white shadow-sm transition-colors duration-200 hover:bg-teal-800 active:bg-teal-900;
+  }
+
+  .btn-secondary {
+    @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors duration-200 hover:border-slate-400 hover:bg-slate-50 active:bg-slate-100;
+  }
+
+  .btn-danger {
+    @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg bg-rose-700 px-4 text-sm font-semibold text-white transition-colors duration-200 hover:bg-rose-800;
+  }
+
+  .btn-quiet {
+    @apply inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-slate-600 transition-colors duration-200 hover:bg-slate-100 hover:text-slate-900;
+  }
+
+  .icon-button {
+    @apply inline-flex size-11 cursor-pointer items-center justify-center rounded-lg text-slate-500 transition-colors duration-200 hover:bg-slate-100 hover:text-slate-900;
+  }
+
+  .field-label {
+    @apply grid gap-2 text-sm font-medium text-slate-700;
+  }
+
+  .field-input {
+    @apply min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 transition-colors duration-200 placeholder:text-slate-400 hover:border-slate-400 focus:border-teal-600;
+  }
+
+  .data-table {
+    @apply w-full border-collapse text-left text-sm;
+  }
+
+  .data-table th {
+    @apply bg-slate-50 px-5 py-3 text-xs font-semibold tracking-wide text-slate-500;
+  }
+
+  .data-table td {
+    @apply border-t border-slate-100 px-5 py-4 align-middle text-slate-700;
+  }
+
+  .data-table tbody tr {
+    @apply transition-colors duration-200 hover:bg-slate-50/80;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

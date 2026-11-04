@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Local runtime and test artifacts
+.playwright/
+playwright-report/
+test-results/
+coverage/
+.tmp/
+
+# Logs and diagnostics
+*.log
+diagnostics/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# OS and editor files
+.DS_Store
+.idea/
+.vscode/
