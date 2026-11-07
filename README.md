@@ -2,8 +2,8 @@
 
 面向 GPU 服务器的轻量化 ComfyUI 一体化部署与管理平台。
 
-- 当前版本：`0.0.0.4`
-- 当前阶段：Go 后端与真实 Docker 只读接口已联调，新增离线安装包与一键卸载，已在 DGX Spark 远程验证
+- 当前版本：`0.0.0.5`
+- 当前阶段：真实硬件采集（nvidia-smi＋统一内存）已接入 `/api/v1/hardware` 并在 DGX Spark 实测；离线安装包与一键卸载可用
 - 核心目标：一次安装、Web 管理、Docker 部署、模型共享、数据持久化。
 
 ## 运行本机 Demo
@@ -13,7 +13,7 @@ cd code
 ./scripts/demo-docker.sh up
 ```
 
-访问 `http://localhost:18080`。容器名为 `flowpilot-web-demo`，镜像为 `flowpilot-web:0.0.0.4`。
+访问 `http://localhost:18080`。容器名为 `flowpilot-web-demo`，镜像为 `flowpilot-web:0.0.0.5`。
 
 ## 离线安装与一键卸载（生产交付）
 
@@ -22,7 +22,7 @@ cd code
 code/scripts/package-release.sh
 
 # 目标服务器上安装（用户目录、无需 sudo、不修改系统包）
-tar -xzf flowpilot-0.0.0.4-arm64.tar.gz -C /tmp/flowpilot-install --strip-components=1
+tar -xzf flowpilot-0.0.0.5-arm64.tar.gz -C /tmp/flowpilot-install --strip-components=1
 /tmp/flowpilot-install/scripts/install.sh
 
 # 一键卸载（只删除 FlowPilot 容器、镜像和用户目录，不碰其他业务容器）
@@ -58,7 +58,7 @@ Go 服务统一提供前端页面和 `/api/v1/` 接口。系统管理页读取�
 - [MVP 产品需求文档](docs/mvp/FlowPilot_MVP_PRD.md)
 - [项目协作与版本管理规则](PROJECT_RULES.md)
 - [版本变更日志](CHANGELOG.md)
-- [最新对话上下文](context/conversations/2026-11-07-005-DGXSpark远程部署验证.md)
+- [最新对话上下文](context/conversations/2026-11-07-006-真实硬件采集接口.md)
 
 ## 修改要求
 

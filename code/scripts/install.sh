@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.0.0.4"
+VERSION="0.0.0.5"
 IMAGE="flowpilot-web:${VERSION}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -43,6 +43,30 @@ if docker ps -a --format '{{.Names}}' | grep -Fxq "${CONTAINER_NAME}"; then
   docker rm -f "${CONTAINER_NAME}" >/dev/null
 fi
 
+# GPU 透传：优先使用 NVIDIA Container Toolkit；缺失时手动挂载
+# 宿主机 nvidia-smi、libnvidia-ml 与 /dev/nvidia* 设备，保证容器内
+# 可以采集 GPU 指标。无 GPU 主机则跳过，硬件接口自动降级。
+GPU_ARGS=()
+if command -v nvidia-smi >/dev/null 2>&1; then
+  if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -qi nvidia; then
+    GPU_ARGS+=(--gpus all)
+    printf 'GPU 透传：NVIDIA Container Toolkit（--gpus all）\n'
+  else
+    NVIDIA_BIN="$(command -v nvidia-smi)"
+    GPU_ARGS+=(-v "${NVIDIA_BIN}:/usr/bin/nvidia-smi:ro")
+    ML_LIB="$(ldconfig -p 2>/dev/null | awk '/libnvidia-ml\.so\.1 /{print $NF; exit}')"
+    if [ -n "${ML_LIB}" ] && [ -e "${ML_LIB}" ]; then
+      GPU_ARGS+=(-v "${ML_LIB}:${ML_LIB}:ro" --env "LD_LIBRARY_PATH=$(dirname "${ML_LIB}")")
+    fi
+    for dev in /dev/nvidia*; do
+      [ -e "${dev}" ] && GPU_ARGS+=(--device "${dev}:${dev}")
+    done
+    printf 'GPU 透传：手动挂载 nvidia-smi 与驱动设备\n'
+  fi
+else
+  printf 'GPU 透传：未检测到 nvidia-smi，硬件接口将只返回主机指标\n'
+fi
+
 docker run -d \
   --name "${CONTAINER_NAME}" \
   --restart unless-stopped \
@@ -50,6 +74,10 @@ docker run -d \
   --label flowpilot.version="${VERSION}" \
   -p "${PORT}:18080" \
   -v "${DOCKER_SOCKET}:/var/run/docker.sock" \
+  -v "${INSTALL_HOME}/shared:/data/flowpilot" \
+  -v /etc/hostname:/host/etc/hostname:ro \
+  -v /etc/os-release:/host/etc/os-release:ro \
+  "${GPU_ARGS[@]}" \
   "${IMAGE}" >/dev/null
 
 cat > "${INSTALL_HOME}/environment" <<EOF
@@ -57,6 +85,7 @@ FLOWPILOT_VERSION=${VERSION}
 FLOWPILOT_IMAGE=${IMAGE}
 FLOWPILOT_CONTAINER=${CONTAINER_NAME}
 FLOWPILOT_PORT=${PORT}
+FLOWPILOT_GPU_ARGS=${GPU_ARGS[*]:-}
 EOF
 
 for _ in $(seq 1 30); do

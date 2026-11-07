@@ -2,6 +2,30 @@
 
 所有重要变更均记录于此。详细内容见 `context/changes/`。
 
+## 0.0.0.5 — 2026-11-07
+
+### 新增
+
+- 新增真实硬件采集接口 `GET /api/v1/hardware`：nvidia-smi GPU 指标（型号、利用率、温度、功耗、显存）＋ `/proc` 主机指标（CPU、内存）＋ 数据盘 statfs，纯 Go 标准库实现。
+- 统一内存架构自动识别：GB10 等 `nvidia-smi` 显存返回 `[N/A]` 的机型标记为 unified，显存字段降级为系统统一内存。
+- 前端硬件面板接入真实接口，2 秒轮询；采集成功显示"本机实测"，失败自动回退 Demo 并明确标注；不可用的 GPU 指标显示为"—"。
+- 安装脚本新增 GPU 透传：优先 `--gpus all`（NVIDIA Container Toolkit），缺失时手动挂载宿主机 nvidia-smi、libnvidia-ml 和 `/dev/nvidia*` 设备。
+
+### 调整
+
+- 一体化镜像运行基底由 Alpine 改为 Ubuntu 24.04，保证宿主机 glibc 链接的 nvidia-smi 可在容器内执行；离线发布包由约 6.7 MB 增至约 33 MB。
+- 容器新增挂载：共享数据目录 `/data/flowpilot`、只读宿主机信息 `/host/etc/hostname`、`/host/etc/os-release`。
+- 回归脚本新增真实硬件分支断言，Demo 分支全部保留。
+
+### 验证
+
+- Go `go test ./...`、`go vet ./...` 通过（hardware 包 8 个用例）；前端 `lint`／`build` 通过。
+- DGX Spark 实测：`/api/v1/hardware` 返回真实数据（spark-6558、NVIDIA GB10、unified、38℃、10.78 W、121.7 GB 统一内存、3.67 TB 数据盘）。
+- `FLOWPILOT_DEMO_URL=http://192.168.0.77:18080 npm run test:demo`：18 项检查全部通过，含真实硬件面板断言。
+- 原业务容器 `comfyui-h3` 保持 `running Paused=false`。
+
+详细记录：[0.0.0.5](context/changes/0.0.0.5.md)
+
 ## 0.0.0.4 — 2026-11-07
 
 ### 新增

@@ -10,20 +10,23 @@ import (
 	"strings"
 
 	"github.com/ghoul02015/flowpilot/internal/docker"
+	"github.com/ghoul02015/flowpilot/internal/hardware"
 )
 
-const Version = "0.0.0.4"
+const Version = "0.0.0.5"
 
 type Handler struct {
 	docker    *docker.Client
 	staticDir string
+	hardware  *hardware.Collector
 }
 
-func New(staticDir string, dockerClient *docker.Client) http.Handler {
-	handler := &Handler{docker: dockerClient, staticDir: staticDir}
+func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector) http.Handler {
+	handler := &Handler{docker: dockerClient, staticDir: staticDir, hardware: hardwareCollector}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", handler.health)
 	mux.HandleFunc("GET /api/v1/system/info", handler.systemInfo)
+	mux.HandleFunc("GET /api/v1/hardware", handler.hardwareReport)
 	mux.HandleFunc("GET /api/v1/docker/info", handler.dockerInfo)
 	mux.HandleFunc("GET /api/v1/docker/containers", handler.dockerContainers)
 	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, _ *http.Request) {
@@ -52,6 +55,14 @@ func (h *Handler) systemInfo(w http.ResponseWriter, r *http.Request) {
 		"staticDir":   h.staticDir,
 		"requestHost": r.Host,
 	})
+}
+
+func (h *Handler) hardwareReport(w http.ResponseWriter, r *http.Request) {
+	if h.hardware == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "硬件采集未启用"})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.hardware.Collect(r.Context()))
 }
 
 func (h *Handler) dockerInfo(w http.ResponseWriter, r *http.Request) {

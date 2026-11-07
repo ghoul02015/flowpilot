@@ -33,13 +33,21 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.0.4') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.0.5') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
   const docker = await dockerResponse.json()
   if (!dockerResponse.ok() || !docker.info?.ServerVersion || !docker.version?.ApiVersion) throw new Error(`真实 Docker API 异常：${JSON.stringify(docker)}`)
   check('真实 Docker Engine 信息接口')
+
+  const hardwareResponse = await page.request.get(`${baseURL}/api/v1/hardware`)
+  const hardware = hardwareResponse.ok() ? await hardwareResponse.json() : null
+  const hasRealHardware = Boolean(hardware && hardware.collectedAt)
+  if (hasRealHardware) {
+    check('真实硬件采集接口')
+    if (hardware.gpuAvailable) check(`真实 GPU 数据（${hardware.gpuMemoryMode} · ${hardware.gpus.length} 卡）`)
+  }
 
   await page.goto(baseURL, { waitUntil: 'networkidle' })
   await page.getByRole('heading', { name: '下午好，管理员' }).waitFor()
@@ -51,21 +59,32 @@ try {
   await page.waitForFunction((previous) => document.querySelector('[data-telemetry-sample]')?.getAttribute('data-telemetry-sample') !== previous, firstSample, { timeout: 4000 })
   check('GPU 遥测每 2 秒自动刷新')
 
-  await page.getByLabel('演示硬件机型').selectOption('dgx-spark')
-  await page.getByText('128 GB CPU／GPU 共享，不重复累计', { exact: false }).waitFor()
-  await page.getByText('独立显存占用不适用；此处显示系统统一内存使用率。', { exact: true }).waitFor()
-  check('DGX Spark 统一内存展示')
-  await screenshot('01-hardware-dgx-spark')
+  if (hasRealHardware && hardware.gpuAvailable) {
+    await page.locator('[data-hardware-source="real"]').waitFor()
+    await page.getByText(hardware.hostName, { exact: false }).first().waitFor()
+    if (hardware.gpuMemoryMode === 'unified') {
+      await page.getByText('CPU／GPU 共享，不重复累计', { exact: false }).waitFor()
+      await page.getByText('独立显存占用不适用；此处显示系统统一内存使用率。', { exact: true }).first().waitFor()
+    }
+    check('真实硬件面板展示宿主机数据')
+    await screenshot('01-hardware-real')
+  } else {
+    await page.getByLabel('演示硬件机型').selectOption('dgx-spark')
+    await page.getByText('128 GB CPU／GPU 共享，不重复累计', { exact: false }).waitFor()
+    await page.getByText('独立显存占用不适用；此处显示系统统一内存使用率。', { exact: true }).waitFor()
+    check('DGX Spark 统一内存展示（Demo 回退）')
+    await screenshot('01-hardware-dgx-spark')
 
-  await page.getByLabel('演示硬件机型').selectOption('dgx-station-gb300')
-  await page.getByText('LPDDR5X · 与 252 GB HBM3e 构成最高 748 GB 一致性地址空间', { exact: true }).waitFor()
-  check('DGX Station GB300 一致性内存展示')
+    await page.getByLabel('演示硬件机型').selectOption('dgx-station-gb300')
+    await page.getByText('LPDDR5X · 与 252 GB HBM3e 构成最高 748 GB 一致性地址空间', { exact: true }).waitFor()
+    check('DGX Station GB300 一致性内存展示（Demo 回退）')
 
-  await page.getByLabel('演示硬件机型').selectOption('rtx5090-16')
-  await page.getByTestId('gpu-card-15').waitFor()
-  if (await page.locator('[data-testid^="gpu-card-"]').count() !== 16) throw new Error('十六卡机型未完整展示 16 个 GPU 设备')
-  check('十六卡 RTX 5090 完整展示')
-  await screenshot('01-hardware-16-gpu')
+    await page.getByLabel('演示硬件机型').selectOption('rtx5090-16')
+    await page.getByTestId('gpu-card-15').waitFor()
+    if (await page.locator('[data-testid^="gpu-card-"]').count() !== 16) throw new Error('十六卡机型未完整展示 16 个 GPU 设备')
+    check('十六卡 RTX 5090 完整展示（Demo 回退）')
+    await screenshot('01-hardware-16-gpu')
+  }
 
   await page.getByRole('button', { name: 'ComfyUI 实例', exact: true }).click()
   await page.getByRole('heading', { name: '实例管理' }).waitFor()

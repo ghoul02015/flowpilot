@@ -68,10 +68,10 @@ export interface GpuDevice {
   memoryTotalGB: number
   memoryUsedGB: number
   memoryUsageSupported: boolean
-  utilization: number
-  temperatureC: number
-  powerW: number
-  powerLimitW: number
+  utilization: number | null
+  temperatureC: number | null
+  powerW: number | null
+  powerLimitW: number | null
 }
 
 export interface HardwareProfile {

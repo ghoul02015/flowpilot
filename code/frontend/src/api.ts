@@ -37,6 +37,36 @@ export interface DockerContainer {
   Labels: Record<string, string>
 }
 
+export interface RealGPU {
+  index: number
+  name: string
+  memoryTotalMB: number | null
+  memoryUsedMB: number | null
+  utilizationPercent: number | null
+  temperatureC: number | null
+  powerDrawW: number | null
+  powerLimitW: number | null
+}
+
+export interface HardwareReport {
+  collectedAt: string
+  hostName: string
+  os: string
+  architecture: string
+  cpuModel: string
+  cpuCores: number
+  cpuUsagePercent: number | null
+  memoryTotalMB: number
+  memoryUsedMB: number
+  storagePath: string
+  storageTotalBytes: number
+  storageUsedBytes: number
+  gpuAvailable: boolean
+  gpuError?: string
+  gpuMemoryMode: 'discrete' | 'unified' | 'none'
+  gpus: RealGPU[]
+}
+
 export interface RuntimeSnapshot {
   health: HealthResponse
   engine: DockerEngine
@@ -59,4 +89,8 @@ export async function getRuntimeSnapshot(signal?: AbortSignal): Promise<RuntimeS
     getJSON<DockerContainer[]>('/api/v1/docker/containers', signal),
   ])
   return { health, engine, containers }
+}
+
+export async function getHardware(signal?: AbortSignal): Promise<HardwareReport> {
+  return getJSON<HardwareReport>('/api/v1/hardware', signal)
 }

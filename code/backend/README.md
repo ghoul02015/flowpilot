@@ -1,6 +1,6 @@
 # FlowPilot 后端
 
-当前版本：`0.0.0.4`。
+当前版本：`0.0.0.5`。
 
 轻量 Go 服务同时提供前端静态页面和只读 Docker API。仅使用 Go 标准库，通过 `/var/run/docker.sock` 访问 Docker Engine，不引入第三方 Docker SDK。
 
@@ -15,6 +15,7 @@
 ## API
 
 - `GET /api/v1/health`：后端健康状态和版本。
+- `GET /api/v1/hardware`：真实宿主机硬件采集——nvidia-smi GPU 指标（统一内存架构显存字段为 `null`）、CPU／内存（/proc）、数据盘用量（statfs）；GPU 不可用时单项降级。
 - `GET /api/v1/system/info`：当前管理服务的 Go 运行环境，不代表宿主机完整硬件或 GPU 信息。
 - `GET /api/v1/docker/info`：真实 Docker `/info` 与 `/version` 摘要。
 - `GET /api/v1/docker/containers`：包含已停止容器的真实 Docker 容器列表。
