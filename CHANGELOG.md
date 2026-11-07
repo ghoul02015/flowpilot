@@ -2,6 +2,23 @@
 
 所有重要变更均记录于此。详细内容见 `context/changes/`。
 
+## 0.0.0.4 — 2026-11-07
+
+### 新增
+
+- 新增离线打包、用户目录安装、一键卸载和远程部署脚本：`package-release.sh`、`install.sh`、`uninstall.sh`、`deploy-remote.sh`。
+- 安装脚本无需 sudo、不修改系统包，数据统一放入用户目录（默认 `~/.local/share/flowpilot`）。
+- 卸载脚本需 `--yes` 或交互确认，只删除 FlowPilot 容器、镜像和用户目录；通过 `flowpilot.managed=true` 容器标签判断镜像是否仍被其他 FlowPilot 实例共享。
+- 安装目录设白名单保护，只允许删除 `~/.local/share/flowpilot` 及其 `flowpilot-*` 变体，防止误删系统目录。
+
+### 验证
+
+- 在 DGX Spark（`spark-6558`，Ubuntu 24.04.4 LTS arm64，NVIDIA GB10，Docker 29.2.1／API 1.53）完成真实远程安装、API 联调和 18 项界面回归，全部通过。
+- 沙箱卸载验证：共享镜像正确保留；完整卸载验证：容器、镜像、目录全部清理；重装后 `running healthy`。
+- 原业务容器 `comfyui-h3` 测试期间曾暂停，最终恢复运行且未被卸载流程影响。
+
+详细记录：[0.0.0.4](context/changes/0.0.0.4.md)
+
 ## 0.0.0.3 — 2026-11-04
 
 ### 新增

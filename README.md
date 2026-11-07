@@ -2,8 +2,8 @@
 
 面向 GPU 服务器的轻量化 ComfyUI 一体化部署与管理平台。
 
-- 当前版本：`0.0.0.3`
-- 当前阶段：Go 后端与真实 Docker 只读接口已联调，Web Demo 业务流程保留
+- 当前版本：`0.0.0.4`
+- 当前阶段：Go 后端与真实 Docker 只读接口已联调，新增离线安装包与一键卸载，已在 DGX Spark 远程验证
 - 核心目标：一次安装、Web 管理、Docker 部署、模型共享、数据持久化。
 
 ## 运行本机 Demo
@@ -13,7 +13,23 @@ cd code
 ./scripts/demo-docker.sh up
 ```
 
-访问 `http://localhost:18080`。容器名为 `flowpilot-web-demo`，镜像为 `flowpilot-web:0.0.0.3`。
+访问 `http://localhost:18080`。容器名为 `flowpilot-web-demo`，镜像为 `flowpilot-web:0.0.0.4`。
+
+## 离线安装与一键卸载（生产交付）
+
+```bash
+# 打包（输出到 .tmp/release/，约 6.7 MB，不纳入 Git）
+code/scripts/package-release.sh
+
+# 目标服务器上安装（用户目录、无需 sudo、不修改系统包）
+tar -xzf flowpilot-0.0.0.4-arm64.tar.gz -C /tmp/flowpilot-install --strip-components=1
+/tmp/flowpilot-install/scripts/install.sh
+
+# 一键卸载（只删除 FlowPilot 容器、镜像和用户目录，不碰其他业务容器）
+~/.local/share/flowpilot/bin/flowpilot-uninstall --yes
+```
+
+远程部署辅助：`code/scripts/deploy-remote.sh <user@host> <发布包路径> [端口]`。卸载脚本通过 `flowpilot.managed=true` 容器标签判断镜像是否仍被其他 FlowPilot 实例使用，避免误删共享镜像。已在 DGX Spark（Ubuntu 24.04 arm64、NVIDIA GB10、Docker 29.2.1）实测通过。
 
 Go 服务统一提供前端页面和 `/api/v1/` 接口。系统管理页读取真实 Docker Engine 与容器信息；实例、模型、任务和大部分硬件／GPU 数据仍为明确标记的 Demo，保存在浏览器 `localStorage`。尚未实现真实 ComfyUI 生命周期管理。
 
@@ -42,7 +58,7 @@ Go 服务统一提供前端页面和 `/api/v1/` 接口。系统管理页读取�
 - [MVP 产品需求文档](docs/mvp/FlowPilot_MVP_PRD.md)
 - [项目协作与版本管理规则](PROJECT_RULES.md)
 - [版本变更日志](CHANGELOG.md)
-- [最新对话上下文](context/conversations/2026-11-04-004-首页多机型硬件监控.md)
+- [最新对话上下文](context/conversations/2026-11-07-005-DGXSpark远程部署验证.md)
 
 ## 修改要求
 

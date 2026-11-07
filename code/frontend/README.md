@@ -1,6 +1,6 @@
 # FlowPilot Web Demo
 
-慧浪智算·FlowPilot 的 MVP 前端，当前版本 `0.0.0.3`。
+慧浪智算·FlowPilot 的 MVP 前端，当前版本 `0.0.0.4`。
 
 ## 已实现页面
 
@@ -64,3 +64,20 @@ npm run test:demo
 ```
 
 可通过 `FLOWPILOT_DEMO_PORT` 修改主机端口，通过 `FLOWPILOT_DOCKER_SOCKET` 指定 Docker Socket。
+
+## 离线安装与一键卸载
+
+面向目标服务器的生产安装使用 `code/scripts/` 下的离线包流程，无需 sudo、不修改系统包：
+
+```bash
+# 打包（在仓库根目录执行，产物在 .tmp/release/）
+code/scripts/package-release.sh
+
+# 目标服务器安装（默认容器 flowpilot-web-demo，端口 18080）
+/tmp/flowpilot-install/scripts/install.sh
+
+# 一键卸载（只删除 FlowPilot 容器、镜像和用户目录）
+~/.local/share/flowpilot/bin/flowpilot-uninstall --yes
+```
+
+支持 `FLOWPILOT_HOME`、`FLOWPILOT_CONTAINER`、`FLOWPILOT_PORT` 环境变量覆盖默认值。已在 DGX Spark（Ubuntu 24.04 arm64）实测，远程回归命令：`FLOWPILOT_DEMO_URL=http://192.168.0.77:18080 npm run test:demo`。
