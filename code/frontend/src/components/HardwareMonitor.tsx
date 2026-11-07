@@ -15,6 +15,11 @@ function formatCapacity(gb: number) {
   return gb >= 1024 ? `${Number((gb / 1024).toFixed(2))} TB` : `${gb} GB`
 }
 
+// 采集失败时总量可能为 0，统一防除零产生 NaN。
+function safePercent(used: number, total: number) {
+  return total > 0 ? Math.round((used / total) * 100) : 0
+}
+
 function mbToGB(mb: number) {
   return Number((mb / 1024).toFixed(1))
 }
@@ -28,7 +33,7 @@ function profileFromReport(report: HardwareReport): HardwareProfile {
   return {
     id: 'real-host',
     hostName: report.hostName,
-    productName: '本机硬件 · 实时采集',
+    productName: report.machineModel ? `${report.machineModel} · 实时采集` : '本机硬件 · 实时采集',
     os: report.os,
     architecture: report.architecture === 'arm64' ? 'arm64' : 'x86_64',
     cpuModel: report.cpuModel,
@@ -76,7 +81,7 @@ function SummaryCard({ icon: Icon, label, value, description, usage }: { icon: t
 
 function GpuCard({ gpu, profile }: { gpu: GpuDevice; profile: HardwareProfile }) {
   const memoryLabel = profile.gpuMemoryMode === 'unified' ? '统一内存' : profile.gpuMemoryMode === 'coherent' ? 'HBM 显存' : '显存'
-  const memoryPercent = gpu.memoryUsageSupported ? (gpu.memoryUsedGB / gpu.memoryTotalGB) * 100 : (profile.memoryUsedGB / profile.memoryTotalGB) * 100
+  const memoryPercent = gpu.memoryUsageSupported ? safePercent(gpu.memoryUsedGB, gpu.memoryTotalGB) : safePercent(profile.memoryUsedGB, profile.memoryTotalGB)
   const utilization = gpu.utilization ?? 0
   return <article className="min-w-0 rounded-lg border border-slate-200 bg-slate-50/70 p-4" data-testid={`gpu-card-${gpu.id}`}>
     <div className="flex items-start justify-between gap-2">
@@ -141,8 +146,8 @@ export function HardwareMonitor() {
       : `${devices.length} 卡共 ${formatCapacity(totalGpuMemory)} 显存`
 
   const cpuUsage = isReal ? Math.round(profile.cpuUsage) : Math.round(clamp(profile.cpuUsage + Math.sin(sample * 0.43) * 5))
-  const memoryUsage = Math.round((profile.memoryUsedGB / profile.memoryTotalGB) * 100)
-  const storageUsage = Math.round((profile.storageUsedGB / profile.storageTotalGB) * 100)
+  const memoryUsage = safePercent(profile.memoryUsedGB, profile.memoryTotalGB)
+  const storageUsage = safePercent(profile.storageUsedGB, profile.storageTotalGB)
 
   return <Panel className="mt-5" data-hardware-source={isReal ? 'real' : 'demo'}>
     <PanelHeader title="硬件与实时监控" description={`${profile.hostName} · ${profile.productName}`} action={isReal

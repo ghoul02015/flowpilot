@@ -13,7 +13,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/hardware"
 )
 
-const Version = "0.0.0.5"
+const Version = "0.0.0.6"
 
 type Handler struct {
 	docker    *docker.Client

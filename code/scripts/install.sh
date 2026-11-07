@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.0.0.5"
+VERSION="0.0.0.6"
 IMAGE="flowpilot-web:${VERSION}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -67,6 +67,16 @@ else
   printf 'GPU 透传：未检测到 nvidia-smi，硬件接口将只返回主机指标\n'
 fi
 
+# 宿主机只读信息：主机名、系统版本；DMI 产品名存在时才挂载，
+# 用于界面展示真实机型（如 NVIDIA DGX Spark）。
+HOST_MOUNTS=(
+  -v /etc/hostname:/host/etc/hostname:ro
+  -v /etc/os-release:/host/etc/os-release:ro
+)
+if [ -f /sys/devices/virtual/dmi/id/product_name ]; then
+  HOST_MOUNTS+=(-v /sys/devices/virtual/dmi/id/product_name:/host/dmi/product_name:ro)
+fi
+
 docker run -d \
   --name "${CONTAINER_NAME}" \
   --restart unless-stopped \
@@ -75,8 +85,7 @@ docker run -d \
   -p "${PORT}:18080" \
   -v "${DOCKER_SOCKET}:/var/run/docker.sock" \
   -v "${INSTALL_HOME}/shared:/data/flowpilot" \
-  -v /etc/hostname:/host/etc/hostname:ro \
-  -v /etc/os-release:/host/etc/os-release:ro \
+  "${HOST_MOUNTS[@]}" \
   "${GPU_ARGS[@]}" \
   "${IMAGE}" >/dev/null
 

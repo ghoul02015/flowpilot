@@ -51,6 +51,7 @@ export interface RealGPU {
 export interface HardwareReport {
   collectedAt: string
   hostName: string
+  machineModel?: string
   os: string
   architecture: string
   cpuModel: string
@@ -92,5 +93,6 @@ export async function getRuntimeSnapshot(signal?: AbortSignal): Promise<RuntimeS
 }
 
 export async function getHardware(signal?: AbortSignal): Promise<HardwareReport> {
-  return getJSON<HardwareReport>('/api/v1/hardware', signal)
+  // 面板每 2 秒轮询一次，请求必须带超时，避免挂起的请求持续堆积。
+  return getJSON<HardwareReport>('/api/v1/hardware', signal ?? AbortSignal.timeout(4000))
 }

@@ -85,6 +85,7 @@ func newFixtureCollector(t *testing.T, gpuOutput string) (*Collector, string) {
 	writeFixture(t, proc, "cpuinfo", "processor\t: 0\nmodel name\t: Test CPU\n\nprocessor\t: 1\nmodel name\t: Test CPU\n")
 	writeFixture(t, host, "etc/hostname", "test-host-01\n")
 	writeFixture(t, host, "etc/os-release", "NAME=\"Ubuntu\"\nPRETTY_NAME=\"Ubuntu 24.04.4 LTS\"\n")
+	writeFixture(t, host, "dmi/product_name", "NVIDIA_DGX_Spark\n")
 	collector := NewCollector(Config{ProcRoot: proc, HostRoot: host, DataDir: root, NvidiaSMIBin: "nvidia-smi"})
 	collector.queryGPU = func(context.Context) (string, error) { return gpuOutput, nil }
 	return collector, root
@@ -98,6 +99,9 @@ func TestCollectHostBasics(t *testing.T) {
 	}
 	if report.OS != "Ubuntu 24.04.4 LTS" {
 		t.Fatalf("unexpected os %q", report.OS)
+	}
+	if report.MachineModel != "NVIDIA DGX Spark" {
+		t.Fatalf("unexpected machine model %q", report.MachineModel)
 	}
 	if report.CPUModel != "Test CPU" || report.CPUCores != 2 {
 		t.Fatalf("unexpected cpu %q cores %d", report.CPUModel, report.CPUCores)
@@ -151,6 +155,12 @@ func TestCPUUsageDelta(t *testing.T) {
 	// total delta = 500, idle delta = 400 → 20%
 	if *usage != 20 {
 		t.Fatalf("expected 20%% usage, got %v", *usage)
+	}
+	// 计数器异常（idle 增量超过 total 增量）时必须钳制到 0，不得返回负值。
+	writeFixture(t, proc, "stat", "cpu  150 0 150 3000 0 0 0 0 0 0\n")
+	clamped := collector.Collect(context.Background()).CPUUsagePercent
+	if clamped == nil || *clamped != 0 {
+		t.Fatalf("expected clamped 0%% usage, got %v", clamped)
 	}
 }
 

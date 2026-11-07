@@ -35,6 +35,7 @@ type GPU struct {
 type Report struct {
 	CollectedAt       time.Time `json:"collectedAt"`
 	HostName          string    `json:"hostName"`
+	MachineModel      string    `json:"machineModel,omitempty"`
 	OS                string    `json:"os"`
 	Architecture      string    `json:"architecture"`
 	CPUModel          string    `json:"cpuModel"`
@@ -103,6 +104,7 @@ func (c *Collector) Collect(ctx context.Context) Report {
 	report := Report{
 		CollectedAt:   time.Now().UTC(),
 		HostName:      c.hostName(),
+		MachineModel:  c.machineModel(),
 		OS:            c.osName(),
 		Architecture:  normalizeArch(runtime.GOARCH),
 		CPUModel:      c.cpuModel(),
@@ -133,6 +135,15 @@ func (c *Collector) hostName() string {
 		return "unknown"
 	}
 	return name
+}
+
+// machineModel 读取宿主机 DMI 产品名（安装脚本只读挂载），用于界面展示机型。
+func (c *Collector) machineModel() string {
+	content, err := os.ReadFile(filepath.Join(c.hostRoot, "dmi", "product_name"))
+	if err != nil {
+		return ""
+	}
+	return strings.ReplaceAll(strings.TrimSpace(string(content)), "_", " ")
 }
 
 func (c *Collector) osName() string {
@@ -236,6 +247,8 @@ func (c *Collector) cpuUsage() *float64 {
 		totalDelta := float64(total - c.prevTotal)
 		c.prevIdle, c.prevTotal = idle, total
 		usage := (1 - idleDelta/totalDelta) * 100
+		// 计数器抖动或 cgroup 统计边界可能产生越界值，统一钳制。
+		usage = max(0, min(100, usage))
 		usage = float64(int(usage*10+0.5)) / 10
 		return &usage
 	}

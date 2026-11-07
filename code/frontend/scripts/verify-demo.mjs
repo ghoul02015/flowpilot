@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.0.5') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.0.6') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
@@ -62,6 +62,9 @@ try {
   if (hasRealHardware && hardware.gpuAvailable) {
     await page.locator('[data-hardware-source="real"]').waitFor()
     await page.getByText(hardware.hostName, { exact: false }).first().waitFor()
+    if (hardware.machineModel) {
+      await page.getByText(hardware.machineModel, { exact: false }).first().waitFor()
+    }
     if (hardware.gpuMemoryMode === 'unified') {
       await page.getByText('CPU／GPU 共享，不重复累计', { exact: false }).waitFor()
       await page.getByText('独立显存占用不适用；此处显示系统统一内存使用率。', { exact: true }).first().waitFor()
