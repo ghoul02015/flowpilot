@@ -1,6 +1,6 @@
 # FlowPilot Web Demo
 
-慧浪智算·FlowPilot 的 MVP 前端，当前版本 `0.0.4.0`。
+慧浪智算·FlowPilot 的 MVP 前端，当前版本 `0.0.4.1`。
 
 ## 已实现页面
 

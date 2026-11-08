@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.0.4.0"
+VERSION="0.0.4.1"
 IMAGE="${FLOWPILOT_IMAGE:-flowpilot-web:${VERSION}}"
 CONTAINER_NAME="${FLOWPILOT_CONTAINER:-flowpilot-web-demo}"
 INSTALL_HOME="${FLOWPILOT_HOME:-${XDG_DATA_HOME:-${HOME}/.local/share}/flowpilot}"
@@ -23,13 +23,14 @@ if command -v docker >/dev/null 2>&1; then
     docker rm -f "${CONTAINER_NAME}" >/dev/null
     printf '已删除容器：%s\n' "${CONTAINER_NAME}"
   fi
-  if docker image inspect "${IMAGE}" >/dev/null 2>&1; then
-    if docker ps -a --filter 'label=flowpilot.managed=true' --format '{{.Names}}' | grep -q .; then
-      printf '镜像仍被其他 FlowPilot 容器使用，已保留：%s\n' "${IMAGE}"
-    else
-      docker image rm "${IMAGE}" >/dev/null
-      printf '已删除镜像：%s\n' "${IMAGE}"
-    fi
+  if docker ps -a --filter 'label=flowpilot.managed=true' --format '{{.Names}}' | grep -q .; then
+    printf '仍有其他 FlowPilot 容器，已保留全部 flowpilot-web 镜像：%s\n' "${IMAGE}"
+  else
+    # 没有遗留 FlowPilot 容器时，清理本产品的全部版本镜像，
+    # 避免历次升级的旧版本在客户机器上持续累积。
+    for image in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep '^flowpilot-web:' || true); do
+      docker image rm "${image}" >/dev/null 2>&1 && printf '已删除镜像：%s\n' "${image}"
+    done
   fi
 fi
 

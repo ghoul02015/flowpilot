@@ -87,3 +87,35 @@ func TestDeleteRejectsTraversal(t *testing.T) {
 		}
 	}
 }
+
+// 扫描结果在 TTL 内走缓存，删除操作主动失效缓存。
+func TestScanCacheAndDeleteInvalidation(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "checkpoints/a.safetensors", 10)
+	manager := NewManager(root)
+
+	first, err := manager.Scan()
+	if err != nil || len(first.Files) != 1 {
+		t.Fatalf("首次扫描异常：%v %+v", err, first)
+	}
+	// TTL 内新增文件不可见（缓存命中）。
+	writeFile(t, root, "checkpoints/b.safetensors", 10)
+	cached, err := manager.Scan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cached.Files) != 1 {
+		t.Fatalf("TTL 内应返回缓存结果：%+v", cached.Files)
+	}
+	// 删除后缓存必须立即失效。
+	if err := manager.Delete("checkpoints/a.safetensors"); err != nil {
+		t.Fatal(err)
+	}
+	afterDelete, err := manager.Scan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterDelete.Files) != 1 || afterDelete.Files[0].Path != "checkpoints/b.safetensors" {
+		t.Fatalf("删除后应立即看到最新仓库：%+v", afterDelete.Files)
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -52,10 +53,17 @@ type NotFoundError struct{ Path string }
 
 func (e *NotFoundError) Error() string { return fmt.Sprintf("模型文件不存在：%s", e.Path) }
 
-// Manager 管理共享模型仓库。
+// Manager 管理共享模型仓库。扫描结果缓存 scanCacheTTL 秒，
+// 避免界面轮询对大仓库造成持续全盘 IO；删除操作会主动失效缓存。
 type Manager struct {
 	root string
+
+	mu       sync.Mutex
+	cached   *Report
+	cachedAt time.Time
 }
+
+const scanCacheTTL = 2 * time.Second
 
 // NewManager 创建模型仓库管理器，root 为容器内模型目录（如 /data/flowpilot/models）。
 func NewManager(root string) *Manager {
@@ -66,7 +74,29 @@ func NewManager(root string) *Manager {
 func (m *Manager) Root() string { return m.root }
 
 // Scan 遍历仓库，返回全部模型文件；目录不存在时返回空仓库而非报错。
+// TTL 内命中缓存直接返回；返回的是副本，调用方修改不影响缓存。
 func (m *Manager) Scan() (Report, error) {
+	m.mu.Lock()
+	if m.cached != nil && time.Since(m.cachedAt) < scanCacheTTL {
+		report := *m.cached
+		m.mu.Unlock()
+		return report, nil
+	}
+	m.mu.Unlock()
+
+	report, err := m.scan()
+	if err != nil {
+		return report, err
+	}
+	m.mu.Lock()
+	m.cached = &report
+	m.cachedAt = time.Now()
+	m.mu.Unlock()
+	return report, nil
+}
+
+// scan 实际遍历仓库目录。
+func (m *Manager) scan() (Report, error) {
 	report := Report{Root: m.root, Files: make([]File, 0), ScannedAt: time.Now()}
 	if _, err := os.Stat(m.root); err != nil {
 		if os.IsNotExist(err) {
@@ -134,6 +164,9 @@ func (m *Manager) Delete(relPath string) error {
 	if err := os.Remove(target); err != nil {
 		return fmt.Errorf("删除模型文件失败：%w", err)
 	}
+	m.mu.Lock()
+	m.cached = nil
+	m.mu.Unlock()
 	return nil
 }
 

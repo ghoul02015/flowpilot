@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -106,9 +107,17 @@ func NewManager(root string, importDirs []string) *Manager {
 	return &Manager{
 		root:       root,
 		importDirs: importDirs,
-		client:     &http.Client{}, // 下载可能持续很久，不设整体超时，由 ctx 控制
-		tasks:      make(map[string]*taskState),
-		now:        time.Now,
+		// 不设整体超时（下载可能持续很久，由 ctx 控制），但对连接建立、
+		// TLS 握手与响应头设置超时，避免对端挂起时任务永远卡在建连阶段。
+		client: &http.Client{Transport: &http.Transport{
+			DialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+			TLSHandshakeTimeout:   15 * time.Second,
+			ResponseHeaderTimeout: 60 * time.Second,
+			ExpectContinueTimeout: 15 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+		}},
+		tasks: make(map[string]*taskState),
+		now:   time.Now,
 	}
 }
 
@@ -573,6 +582,7 @@ func (m *Manager) finish(id string, partPath string) {
 	}
 	expected := state.task.SHA256
 	relPath := state.task.Path
+	kind := state.task.Kind
 	downloaded := state.task.DownloadedBytes
 	m.mu.Unlock()
 
@@ -589,6 +599,12 @@ func (m *Manager) finish(id string, partPath string) {
 	}
 
 	target := filepath.Join(m.root, filepath.FromSlash(relPath))
+	// 归档前再确认目标不存在：下载期间用户可能手工放入同名文件，
+	// os.Rename 在 Linux 上会静默覆盖，必须避免。
+	if _, err := os.Stat(target); err == nil {
+		m.fail(id, fmt.Errorf("仓库中已存在文件 %s，已保留原文件", relPath))
+		return
+	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		m.fail(id, err)
 		return
@@ -602,7 +618,11 @@ func (m *Manager) finish(id string, partPath string) {
 	defer m.mu.Unlock()
 	if state, ok := m.tasks[id]; ok {
 		state.task.Status = "completed"
-		state.task.Message = "下载完成，已写入共享仓库"
+		if kind == "import" {
+			state.task.Message = "导入完成，已写入共享仓库"
+		} else {
+			state.task.Message = "下载完成，已写入共享仓库"
+		}
 		if expected != "" {
 			state.task.Message = "SHA256 校验通过，已写入共享仓库"
 		}
@@ -627,7 +647,15 @@ func (m *Manager) stopOrFail(ctx context.Context, id string, err error) {
 				reason = "paused"
 			}
 			state.task.Status = reason
-			state.task.Message = map[string]string{"paused": "用户暂停了下载，可断点续传", "cancelled": "任务已取消"}[reason]
+			if reason == "paused" {
+				if state.task.Kind == "import" {
+					state.task.Message = "用户暂停了导入，继续时将重新复制"
+				} else {
+					state.task.Message = "用户暂停了下载，可断点续传"
+				}
+			} else {
+				state.task.Message = "任务已取消"
+			}
 			state.task.UpdatedAt = m.now()
 			if reason == "cancelled" {
 				_ = os.Remove(m.partPath(id))

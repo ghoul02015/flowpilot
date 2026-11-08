@@ -239,6 +239,35 @@ func TestImportCopiesIntoRepository(t *testing.T) {
 	}
 }
 
+// 下载期间用户手工放入同名文件时，归档不得覆盖该文件。
+func TestFinishDoesNotOverwriteManuallyPlacedFile(t *testing.T) {
+	server := rangeServer(t, 256) // 限速，留出放入文件的窗口
+	defer server.Close()
+	root := t.TempDir()
+	manager := NewManager(root, nil)
+
+	task, err := manager.Create(Spec{URL: server.URL + "/m.bin", Category: "vae"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if err := os.MkdirAll(filepath.Join(root, "vae"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manual := []byte("manually-placed")
+	if err := os.WriteFile(filepath.Join(root, "vae", "m.bin"), manual, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	failed := waitStatus(t, manager, task.ID, "failed")
+	if !strings.Contains(failed.Message, "已存在") {
+		t.Fatalf("应报告目标已存在：%s", failed.Message)
+	}
+	content, _ := os.ReadFile(filepath.Join(root, "vae", "m.bin"))
+	if string(content) != string(manual) {
+		t.Fatal("手工放入的文件不应被覆盖")
+	}
+}
+
 func TestImportRejectsOutsideAllowedDirs(t *testing.T) {
 	root := t.TempDir()
 	manager := NewManager(root, []string{filepath.Join(root, "allowed")})

@@ -1,6 +1,6 @@
 # FlowPilot 后端
 
-当前版本：`0.0.4.0`。
+当前版本：`0.0.4.1`。
 
 轻量 Go 服务同时提供前端静态页面和 Docker API。仅使用 Go 标准库，通过 `/var/run/docker.sock` 访问 Docker Engine，不引入第三方 Docker SDK。
 
@@ -33,13 +33,13 @@
 实例即带 `flowpilot.instance=true` 标签的 Docker 容器（命名 `flowpilot-comfyui-<name>`），名称、GPU、端口、自启动配置全部存标签，无需数据库；只管理本标签容器，绝不触碰宿主机其他容器。
 
 - `GET /api/v1/instances`：实例列表＋默认配置 `{instances, defaults}`。
-- `POST /api/v1/instances`：创建实例。请求体 `{name, image?, gpu, port, containerPort?, autoStart?, modelsTarget?, outputsTarget?, workflowsTarget?}`；校验名称正则、端口 1024–65535、GPU 越界、名称/端口/GPU 冲突、镜像本地存在；`gpu=-1` 表示仅 CPU；自动挂载 `<hostDataDir>/{models,workflows,outputs}` 到实例内目标路径（默认 `/data/*`，install.sh 按镜像 WorkingDir 自适应为如 `/app/ComfyUI/*`）；启动失败自动删除容器回滚。
-- `POST /api/v1/instances/{name}/start|stop|restart`：启停与重启；停止请求不套用默认客户端超时，失败时回查容器真实状态（已退出视为成功，幂等）。
+- `POST /api/v1/instances`：创建实例。请求体 `{name, image?, gpu, port, containerPort?, autoStart?, modelsTarget?, outputsTarget?, workflowsTarget?}`；校验名称正则、端口 1024–65535、GPU 越界、名称/端口/GPU 冲突、镜像本地存在；`gpu=-1` 表示仅 CPU；自动挂载 `<hostDataDir>/{models,workflows,outputs}` 到实例内目标路径（默认 `/data/*`，install.sh 按镜像 WorkingDir 自适应为如 `/app/ComfyUI/*`；models 只读挂载，workflows/outputs 可写）；启动失败自动删除容器回滚。
+- `POST /api/v1/instances/{name}/start|stop|restart`：启停与重启；启动/重启前校验 GPU 未被其他运行中实例占用；停止请求不套用默认客户端超时，失败时回查容器真实状态（已退出视为成功，幂等）。
 - `DELETE /api/v1/instances/{name}?force=1`：删除（运行中需 `force=1`）。
 
 ### 模型仓库（真实目录扫描）
 
-模型列表即共享仓库目录（容器内 `<FLOWPILOT_DATA_DIR>/models`，宿主机 `~/.local/share/flowpilot/shared/models`）的实时扫描结果，文件即真相、无数据库；第一层子目录映射 ComfyUI 类别约定（checkpoints／loras／vae／controlnet／embeddings／upscale_models）。
+模型列表即共享仓库目录（容器内 `<FLOWPILOT_DATA_DIR>/models`，宿主机 `~/.local/share/flowpilot/shared/models`）的实时扫描结果，文件即真相、无数据库；第一层子目录映射 ComfyUI 类别约定（checkpoints／loras／vae／controlnet／embeddings／upscale_models）。扫描结果缓存 2 秒以吸收界面轮询压力，删除操作主动失效缓存。
 
 - `GET /api/v1/models`：扫描结果 `{root, files[], totalBytes, scannedAt}`。
 - `DELETE /api/v1/models?path=<相对路径>`：物理删除文件，拒绝路径穿越与目录删除。

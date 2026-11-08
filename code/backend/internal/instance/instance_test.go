@@ -231,6 +231,70 @@ func TestActionsAndDelete(t *testing.T) {
 	}
 }
 
+// 停止的实例在 GPU 已被其他运行实例占用时不得启动（创建时校验不够，
+// 实例停止后 GPU 可能被新实例占用）。
+func TestStartRejectsGPUConflict(t *testing.T) {
+	fake := &fakeDocker{images: map[string]bool{"comfyui:test": true}}
+	manager := newManager(fake, 1)
+	if _, err := manager.Create(context.Background(), validSpec()); err != nil {
+		t.Fatal(err)
+	}
+	// 模拟第二个实例：创建时 GPU 空闲，之后停止，GPU 被 draw-01 占用。
+	fake.containers = append(fake.containers, docker.Container{
+		ID:    "cdcdcdcdcdcd",
+		Names: []string{"/flowpilot-comfyui-draw-02"},
+		Image: "comfyui:test",
+		State: "exited",
+		Labels: map[string]string{
+			LabelInstance: "true",
+			labelName:     "draw-02",
+			labelGPU:      "0",
+			labelPort:     "18189",
+		},
+		Created: time.Now().Unix(),
+	})
+
+	_, err := manager.Action(context.Background(), "draw-02", "start")
+	if err == nil {
+		t.Fatal("GPU 被占用时启动应被拒绝")
+	}
+	var validationError *ValidationError
+	if !errors.As(err, &validationError) {
+		t.Fatalf("expected ValidationError, got %T: %v", err, err)
+	}
+	if len(fake.started) != 1 {
+		t.Fatalf("冲突实例不应被启动: %v", fake.started)
+	}
+
+	// GPU 空闲的实例不受影响。
+	fake.containers[1].Labels[labelGPU] = "-1"
+	if _, err := manager.Action(context.Background(), "draw-02", "start"); err != nil {
+		t.Fatalf("仅 CPU 实例应可启动: %v", err)
+	}
+}
+
+// 模型仓库必须以只读方式挂载进实例（PRD 10.1），防止容器内误删共享模型。
+func TestModelsMountIsReadOnly(t *testing.T) {
+	fake := &fakeDocker{images: map[string]bool{"comfyui:test": true}}
+	manager := newManager(fake, 1)
+	if _, err := manager.Create(context.Background(), validSpec()); err != nil {
+		t.Fatal(err)
+	}
+	hostConfig := fake.lastConfig["HostConfig"].(map[string]any)
+	binds, ok := hostConfig["Binds"].([]string)
+	if !ok || len(binds) != 3 {
+		t.Fatalf("unexpected binds: %+v", hostConfig)
+	}
+	if !strings.HasSuffix(binds[0], ":ro") {
+		t.Fatalf("models bind must be read-only: %s", binds[0])
+	}
+	for _, bind := range binds[1:] {
+		if strings.HasSuffix(bind, ":ro") {
+			t.Fatalf("workflows/outputs must stay writable: %s", bind)
+		}
+	}
+}
+
 func TestListIgnoresUnmanagedContainers(t *testing.T) {
 	fake := &fakeDocker{
 		images: map[string]bool{"comfyui:test": true},

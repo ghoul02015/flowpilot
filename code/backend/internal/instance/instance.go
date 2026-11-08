@@ -200,7 +200,9 @@ func (m *Manager) Create(ctx context.Context, spec Spec) (Instance, error) {
 	hostConfig := map[string]any{
 		"PortBindings": map[string]any{portKey: []map[string]string{{"HostPort": strconv.Itoa(spec.Port)}}},
 		"Binds": []string{
-			m.hostDataDir + "/models:" + spec.ModelsTarget,
+			// 模型仓库只读共享（PRD 10.1）：实例可读取全部模型，
+			// 但不能在容器内改动或删除共享文件。
+			m.hostDataDir + "/models:" + spec.ModelsTarget + ":ro",
 			m.hostDataDir + "/workflows:" + spec.WorkflowsTarget,
 			m.hostDataDir + "/outputs:" + spec.OutputsTarget,
 		},
@@ -292,12 +294,18 @@ func (m *Manager) Action(ctx context.Context, name, action string) (Instance, er
 	}
 	switch action {
 	case "start":
+		if conflictErr := m.checkGPUConflict(ctx, target); conflictErr != nil {
+			return Instance{}, conflictErr
+		}
 		err = m.docker.StartContainer(ctx, target.ContainerID)
 	case "stop":
 		err = m.docker.StopContainer(ctx, target.ContainerID, stopTimeoutSecond)
 	case "restart":
 		if stopErr := m.docker.StopContainer(ctx, target.ContainerID, stopTimeoutSecond); stopErr != nil {
 			return Instance{}, fmt.Errorf("停止容器失败：%w", stopErr)
+		}
+		if conflictErr := m.checkGPUConflict(ctx, target); conflictErr != nil {
+			return Instance{}, conflictErr
 		}
 		err = m.docker.StartContainer(ctx, target.ContainerID)
 	default:
@@ -307,6 +315,24 @@ func (m *Manager) Action(ctx context.Context, name, action string) (Instance, er
 		return Instance{}, err
 	}
 	return m.Get(ctx, name)
+}
+
+// checkGPUConflict 在启动前校验目标实例的 GPU 未被其他运行中实例占用；
+// 仅创建时校验不够——停止后的实例可以在 GPU 已被占用时被再次启动。
+func (m *Manager) checkGPUConflict(ctx context.Context, target Instance) error {
+	if target.GPU < 0 {
+		return nil
+	}
+	instances, err := m.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, other := range instances {
+		if other.Name != target.Name && other.GPU == target.GPU && other.Status == "running" {
+			return &ValidationError{Message: fmt.Sprintf("GPU %d 正被运行中的实例 %s 使用，请先停止该实例", target.GPU, other.Name)}
+		}
+	}
+	return nil
 }
 
 // Delete 删除实例容器；force 为 true 时允许删除运行中的实例。
