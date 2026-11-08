@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.6.2') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.6.3') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
@@ -290,6 +290,12 @@ try {
     if (!onlineBody?.results?.some((repo) => repo.repo === 'Comfy-Org/MiniMax-H3')) throw new Error(`在线搜索未命中 Comfy-Org/MiniMax-H3：${JSON.stringify(onlineBody)?.slice(0, 300)}`)
     check('ModelScope 在线搜索接口（MiniMax-H3）')
 
+    // 搜索习惯（0.0.6.3）：周董实测搜 nvfp4 空结果（风控间歇空响应），后端空结果退避重试＋模糊变体，attempts 透明化。
+    const habitResponse = await page.request.get(`${baseURL}/api/v1/models/online/search?source=modelscope&q=nvfp4`)
+    const habitBody = habitResponse.ok() ? await habitResponse.json() : null
+    if (!habitBody || !Array.isArray(habitBody.results) || habitBody.results.length === 0 || !Array.isArray(habitBody.attempts) || habitBody.attempts[0] !== 'nvfp4') throw new Error(`搜索习惯接口异常：${JSON.stringify(habitBody)?.slice(0, 300)}`)
+    check('短关键词搜索命中＋attempts 透明化（nvfp4）')
+
     await page.getByRole('button', { name: '添加模型', exact: true }).click()
     const marketDialog = page.getByRole('dialog')
     await marketDialog.waitFor()
@@ -322,6 +328,13 @@ try {
     await minimaxRepo.getByText(/\d+(\.\d+)? GB/).first().waitFor()
     check('在线源搜索与仓库文件列表（真实大小）')
     await screenshot('03-models-online-search')
+
+    // 仓库直达（0.0.6.3）：粘贴 org/name 跳过搜索接口，直接展开文件列表。
+    await marketDialog.getByPlaceholder(/在 ModelScope 搜索模型仓库/).fill('Comfy-Org/MiniMax-H3')
+    await marketDialog.getByRole('button', { name: '在线搜索' }).click()
+    const directRepo = marketDialog.getByTestId('online-repo-Comfy-Org/MiniMax-H3')
+    await directRepo.getByText('minimax_h3_fl2va_pruned_w6a8.safetensors').waitFor({ timeout: 30000 })
+    check('仓库名直达（跳过搜索直接展开文件列表）')
     await marketDialog.getByTestId('source-tab-curated').click()
 
     await marketDialog.getByPlaceholder('搜索模型名称、文件或描述').fill('Offset')

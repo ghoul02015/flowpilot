@@ -24,7 +24,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/model"
 )
 
-const Version = "0.0.6.2"
+const Version = "0.0.6.3"
 
 type Handler struct {
 	docker       *docker.Client
@@ -316,14 +316,14 @@ func (h *Handler) onlineSearch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "模型目录未启用"})
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
-	repos, err := h.catalog.SearchOnline(ctx, r.URL.Query().Get("source"), r.URL.Query().Get("q"))
+	result, err := h.catalog.SearchOnline(ctx, r.URL.Query().Get("source"), r.URL.Query().Get("q"))
 	if err != nil {
 		writeOnlineError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"results": repos})
+	writeJSON(w, http.StatusOK, result)
 }
 
 // onlineFiles 代理源站仓库文件列表，仅返回权重文件（含大小与推断类别）。

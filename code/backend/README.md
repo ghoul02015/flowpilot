@@ -1,6 +1,6 @@
 # FlowPilot 后端
 
-当前版本：`0.0.6.2`。
+当前版本：`0.0.6.3`。
 
 轻量 Go 服务同时提供前端静态页面和 Docker API。仅使用 Go 标准库，通过 `/var/run/docker.sock` 访问 Docker Engine，不引入第三方 Docker SDK。
 
@@ -58,7 +58,7 @@
 目录在线化：源站搜索与文件列表实时代理，源站更新即所见，无需发版维护。ModelScope 搜索为 `PUT /api/v1/dolphin/models`（抓包实测），文件列表 `Recursive=true` 覆盖 Comfy-Org 子目录布局；HF 走 hf-mirror.com 标准 Hub API。类别按 ComfyUI 目录约定从路径自动推断（含 FL2VA/text_encoder 中间段）。参数错误 400、上游失败 502。
 
 - `GET /api/v1/sources/status`：双源实时可达性 `{sources[]}`（并发探测、5 秒超时、60 秒缓存）。
-- `GET /api/v1/models/online/search?source=modelscope|hf&q=<关键词>`：归一化仓库结果 `{results[]}`（repo／下载量／更新时间）。
+- `GET /api/v1/models/online/search?source=modelscope|hf&q=<关键词>`：归一化仓库结果 `{results[], attempts[]}`（repo／下载量／更新时间；attempts 记录实际尝试过的关键词，空结果自动退避重试 2 次并尝试模糊变体）。输入为 `org/name` 或源站链接时前端直达文件列表（`catalog.ParseRepoRef`）。
 - `GET /api/v1/models/online/files?source=...&repo=<org/name>`：权重文件列表 `{files[]}`（真实大小降序、推断类别、直链地址，上限 100 条）。
 
 ### 镜像预置（后台拉取）

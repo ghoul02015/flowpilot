@@ -47,6 +47,31 @@ function formatDownloads(count: number): string {
   return `${count}`
 }
 
+// 与后端 ParseRepoRef 对齐：识别「org/name」与源站 URL（modelscope.cn／huggingface.co／hf-mirror.com），
+// 命中时跳过搜索直达仓库文件列表——用户从教程／模板页复制链接的习惯。
+const repoPathPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+
+function parseRepoRef(input: string, currentSource: 'modelscope' | 'hf'): { source: 'modelscope' | 'hf'; repo: string } | null {
+  const text = input.trim()
+  if (repoPathPattern.test(text)) return { source: currentSource, repo: text }
+  if (/^https?:\/\//.test(text)) {
+    try {
+      const url = new URL(text)
+      const segments = url.pathname.replace(/^\/+|\/+$/g, '').split('/')
+      const host = url.hostname.toLowerCase()
+      if ((host === 'modelscope.cn' || host === 'www.modelscope.cn') && segments[0] === 'models' && segments.length >= 3) {
+        const candidate = `${segments[1]}/${segments[2]}`
+        if (repoPathPattern.test(candidate)) return { source: 'modelscope', repo: candidate }
+      }
+      if (['huggingface.co', 'www.huggingface.co', 'hf-mirror.com', 'www.hf-mirror.com'].includes(host) && segments.length >= 2) {
+        const candidate = `${segments[0]}/${segments[1]}`
+        if (repoPathPattern.test(candidate)) return { source: 'hf', repo: candidate }
+      }
+    } catch { /* 非法 URL 按普通关键词搜索 */ }
+  }
+  return null
+}
+
 // 源状态点：绿＝可达（显示延迟），红＝不可达，灰＝尚未探测。
 function SourceDot({ status }: { status?: SourceStatus }) {
   if (!status) return <span className="inline-block size-2 rounded-full bg-slate-300" title="正在探测连接状态…" />
@@ -67,6 +92,7 @@ function MarketPanel({ onMarketDownload, onOnlineDownload, existingPaths }: { on
   const [searching, setSearching] = useState(false)
   const [results, setResults] = useState<OnlineRepo[] | null>(null)
   const [searchError, setSearchError] = useState('')
+  const [attempts, setAttempts] = useState<string[]>([])
   const [expandedRepo, setExpandedRepo] = useState<string | null>(null)
   const [filesByRepo, setFilesByRepo] = useState<Record<string, OnlineFile[] | 'loading' | 'error'>>({})
   const occupied = useMemo(() => new Set(existingPaths), [existingPaths])
@@ -106,8 +132,22 @@ function MarketPanel({ onMarketDownload, onOnlineDownload, existingPaths }: { on
     setSearching(true)
     setSearchError('')
     setExpandedRepo(null)
+    setAttempts([])
+    // 仓库直达：org/name 或源站 URL 跳过搜索接口，直接拉文件列表并自动展开
+    const direct = parseRepoRef(keyword, source as 'modelscope' | 'hf')
+    if (direct) {
+      if (direct.source !== source) setSource(direct.source) // URL 指向另一个源时自动切换
+      const repo: OnlineRepo = { source: direct.source, repo: direct.repo, name: direct.repo, downloads: 0 }
+      setResults([repo])
+      setFilesByRepo((previous) => ({ ...previous, [repo.repo]: 'loading' }))
+      getOnlineRepoFiles(repo.source, repo.repo)
+        .then((files) => { setFilesByRepo((previous) => ({ ...previous, [repo.repo]: files })); setExpandedRepo(repo.repo) })
+        .catch(() => { setFilesByRepo((previous) => ({ ...previous, [repo.repo]: 'error' })); setSearchError('仓库不存在或不可访问，请确认仓库名或链接后再试。') })
+        .finally(() => setSearching(false))
+      return
+    }
     searchOnlineModels(source, keyword)
-      .then((repos) => setResults(repos))
+      .then((result) => { setResults(result.results); setAttempts(result.attempts) })
       .catch((error: unknown) => {
         setResults(null)
         setSearchError(error instanceof Error ? error.message : '源站搜索失败')
@@ -201,10 +241,11 @@ function MarketPanel({ onMarketDownload, onOnlineDownload, existingPaths }: { on
 
     {source !== 'curated' && <div>
       {searchError && <div className="flex items-start gap-3 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800"><CircleAlert className="mt-0.5 size-4 shrink-0" />{searchError}</div>}
-      {!results && !searchError && !searching && <p className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">输入模型名（如 MiniMax-H3、Wan2.1、FLUX）回车，实时搜索 {source === 'modelscope' ? 'ModelScope' : 'HF 镜像'} 全站仓库。</p>}
+      {!results && !searchError && !searching && <p className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">输入模型名（如 MiniMax-H3、Wan2.1、FLUX）回车搜索 {source === 'modelscope' ? 'ModelScope' : 'HF 镜像'} 全站；也可直接粘贴仓库名（Comfy-Org/MiniMax-H3）或源站链接直达文件列表。</p>}
       {searching && <div className="flex items-center justify-center gap-2 py-12 text-sm text-slate-500"><LoaderCircle className="size-4 animate-spin" />正在搜索 {source === 'modelscope' ? 'ModelScope' : 'HF 镜像'}…</div>}
       {results && !searching && <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
-        {results.length === 0 && <p className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">未找到相关仓库。源站分词对长词更严格，可尝试更短的关键词（如把「MiniMax-H3」换成「MiniMax」），或切换到另一个源再试。</p>}
+        {attempts.length > 1 && results.length > 0 && <p className="rounded-lg bg-teal-50 px-3 py-2 text-xs text-teal-800">原关键词「{attempts[0]}」未命中，已自动扩展搜索：{attempts.slice(1).join('、')}</p>}
+        {results.length === 0 && <p className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">已尝试 {attempts.length > 1 ? attempts.map((item) => `「${item}」`).join('、') : '搜索'} 仍未找到相关仓库。可切换到另一个源再试，或直接粘贴仓库名（如 Comfy-Org/MiniMax-H3）／源站链接直达。</p>}
         {results.map((repo) => {
           const expanded = expandedRepo === repo.repo
           const files = filesByRepo[repo.repo]
@@ -239,7 +280,7 @@ function MarketPanel({ onMarketDownload, onOnlineDownload, existingPaths }: { on
           </div>
         })}
       </div>}
-      <p className="mt-3 text-[11px] leading-4 text-slate-400">搜索结果与文件大小实时来自源站，源站更新即所见，平台无需等待版本更新；类别按 ComfyUI 目录约定自动推断入库。优先选择 Comfy-Org 等官方打包仓库。</p>
+      <p className="mt-3 text-[11px] leading-4 text-slate-400">搜索结果与文件大小实时来自源站，源站更新即所见，平台无需等待版本更新；空结果会自动重试并尝试模糊变体（去版本号等），实际尝试的关键词会透明展示。优先选择 Comfy-Org 等官方打包仓库。</p>
     </div>}
   </div>
 }

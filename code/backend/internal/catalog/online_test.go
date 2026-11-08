@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 )
@@ -39,15 +40,19 @@ func TestSearchOnlineModelScope(t *testing.T) {
 	}), http.NotFoundHandler())
 
 	manager := NewManager("")
-	repos, err := manager.SearchOnline(context.Background(), SourceModelScope, "MiniMax-H3")
+	result, err := manager.SearchOnline(context.Background(), SourceModelScope, "MiniMax-H3")
 	if err != nil {
 		t.Fatal(err)
 	}
+	repos := result.Results
 	if len(repos) != 1 || repos[0].Repo != "Comfy-Org/MiniMax-H3" || repos[0].Downloads != 4829971 {
 		t.Fatalf("搜索结果异常：%+v", repos)
 	}
 	if repos[0].UpdatedAt == "" {
 		t.Fatal("更新时间未转换")
+	}
+	if len(result.Attempts) != 1 || result.Attempts[0] != "MiniMax-H3" {
+		t.Fatalf("首次命中不应产生模糊变体尝试：%+v", result.Attempts)
 	}
 }
 
@@ -60,10 +65,11 @@ func TestSearchOnlineHF(t *testing.T) {
 	}))
 
 	manager := NewManager("")
-	repos, err := manager.SearchOnline(context.Background(), SourceHF, "flux")
+	result, err := manager.SearchOnline(context.Background(), SourceHF, "flux")
 	if err != nil {
 		t.Fatal(err)
 	}
+	repos := result.Results
 	if len(repos) != 1 || repos[0].Repo != "black-forest-labs/FLUX.1-dev" || repos[0].UpdatedAt != "2026-01-02" {
 		t.Fatalf("HF 搜索结果异常：%+v", repos)
 	}
@@ -206,6 +212,110 @@ func TestSourcesStatusTimeout(t *testing.T) {
 	for _, status := range statuses {
 		if status.Reachable {
 			t.Fatalf("超时源应不可达：%+v", status)
+		}
+	}
+}
+
+// TestSearchOnlineRetryThenVariant 验证：原词空结果先退避重试（模拟风控空响应），仍空则尝试模糊变体。
+func TestSearchOnlineRetryThenVariant(t *testing.T) {
+	var mu sync.Mutex
+	counts := map[string]int{}
+	stubOnlineBases(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		name, _ := payload["Name"].(string)
+		mu.Lock()
+		counts[name]++
+		mu.Unlock()
+		if name == "MiniMax" {
+			fmt.Fprint(w, `{"Code":200,"Data":{"Model":{"Models":[{"Path":"Comfy-Org","Name":"MiniMax-H3","Downloads":4829971}],"TotalCount":1}}}`)
+			return
+		}
+		fmt.Fprint(w, `{"Code":200,"Data":{"Model":{"Models":[],"TotalCount":0}}}`)
+	}), http.NotFoundHandler())
+
+	manager := NewManager("")
+	result, err := manager.SearchOnline(context.Background(), SourceModelScope, "MiniMax-H3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 原词重试 3 次（1＋2 次退避重试），变体 MiniMax 第 1 次即命中。
+	if counts["MiniMax-H3"] != 3 || counts["MiniMax"] != 1 {
+		t.Fatalf("重试／变体次数异常：%+v", counts)
+	}
+	if len(result.Results) != 1 || result.Results[0].Repo != "Comfy-Org/MiniMax-H3" {
+		t.Fatalf("变体搜索结果异常：%+v", result.Results)
+	}
+	if len(result.Attempts) != 2 || result.Attempts[1] != "MiniMax" {
+		t.Fatalf("attempts 应记录原词与命中的变体：%+v", result.Attempts)
+	}
+}
+
+// TestSearchOnlineAllEmpty 全部尝试为空时返回空结果而非错误，attempts 记录全部尝试。
+func TestSearchOnlineAllEmpty(t *testing.T) {
+	stubOnlineBases(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"Code":200,"Data":{"Model":{"Models":[],"TotalCount":0}}}`)
+	}), http.NotFoundHandler())
+
+	manager := NewManager("")
+	result, err := manager.SearchOnline(context.Background(), SourceModelScope, "Wan2.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Results) != 0 {
+		t.Fatalf("空响应应返回空结果：%+v", result.Results)
+	}
+	if len(result.Attempts) < 2 {
+		t.Fatalf("应记录原词与模糊变体尝试：%+v", result.Attempts)
+	}
+}
+
+func TestQueryVariants(t *testing.T) {
+	cases := []struct {
+		query string
+		want  []string
+	}{
+		{"MiniMax-H3", []string{"MiniMax", "MiniMax H3"}},
+		{"Wan2.1", []string{"Wan", "Wan2 1"}},
+		{"flux", nil}, // 小写与原词相同，无有效变体
+		{"GGUF", nil}, // 源站搜索大小写不敏感，小写变体按小写去重后不再尝试
+	}
+	for _, tc := range cases {
+		got := queryVariants(tc.query)
+		if len(got) != len(tc.want) {
+			t.Errorf("queryVariants(%q) = %v，期望 %v", tc.query, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("queryVariants(%q)[%d] = %q，期望 %q", tc.query, i, got[i], tc.want[i])
+			}
+		}
+	}
+}
+
+func TestParseRepoRef(t *testing.T) {
+	cases := []struct {
+		input      string
+		wantSource string
+		wantRepo   string
+		wantOK     bool
+	}{
+		{"Comfy-Org/MiniMax-H3", "", "Comfy-Org/MiniMax-H3", true},
+		{" Comfy-Org/Wan2.1 ", "", "Comfy-Org/Wan2.1", true},
+		{"https://modelscope.cn/models/Comfy-Org/MiniMax-H3", SourceModelScope, "Comfy-Org/MiniMax-H3", true},
+		{"https://modelscope.cn/models/Comfy-Org/MiniMax-H3/files", SourceModelScope, "Comfy-Org/MiniMax-H3", true},
+		{"https://huggingface.co/black-forest-labs/FLUX.1-dev", SourceHF, "black-forest-labs/FLUX.1-dev", true},
+		{"https://hf-mirror.com/black-forest-labs/FLUX.1-dev/tree/main", SourceHF, "black-forest-labs/FLUX.1-dev", true},
+		{"MiniMax-H3", "", "", false},              // 纯关键词不识别为仓库
+		{"https://example.com/a/b", "", "", false}, // 非源站域名
+		{"../etc", "", "", false},
+		{"", "", "", false},
+	}
+	for _, tc := range cases {
+		source, repo, ok := ParseRepoRef(tc.input)
+		if ok != tc.wantOK || source != tc.wantSource || repo != tc.wantRepo {
+			t.Errorf("ParseRepoRef(%q) = (%q, %q, %v)，期望 (%q, %q, %v)", tc.input, source, repo, ok, tc.wantSource, tc.wantRepo, tc.wantOK)
 		}
 	}
 }

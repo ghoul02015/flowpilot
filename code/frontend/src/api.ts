@@ -257,9 +257,14 @@ export async function getSourcesStatus(): Promise<SourceStatus[]> {
   return body.sources
 }
 
-export async function searchOnlineModels(source: string, query: string): Promise<OnlineRepo[]> {
-  const body = await getJSON<{ results: OnlineRepo[] }>(`/api/v1/models/online/search?source=${encodeURIComponent(source)}&q=${encodeURIComponent(query)}`, AbortSignal.timeout(20000))
-  return body.results
+// OnlineSearchResult 是在线搜索的完整响应（attempts 记录实际尝试过的关键词）。
+export interface OnlineSearchResult {
+  results: OnlineRepo[]
+  attempts: string[]
+}
+
+export async function searchOnlineModels(source: string, query: string): Promise<OnlineSearchResult> {
+  return getJSON<OnlineSearchResult>(`/api/v1/models/online/search?source=${encodeURIComponent(source)}&q=${encodeURIComponent(query)}`, AbortSignal.timeout(30000))
 }
 
 export async function getOnlineRepoFiles(source: string, repo: string): Promise<OnlineFile[]> {

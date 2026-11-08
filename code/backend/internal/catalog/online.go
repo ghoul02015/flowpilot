@@ -200,34 +200,129 @@ type msSearchResponse struct {
 	} `json:"Data"`
 }
 
-// SearchOnline 在指定源站搜索模型仓库，返回归一化结果（按下载量排序）。
-func (m *Manager) SearchOnline(ctx context.Context, source, query string) ([]OnlineRepo, error) {
+// OnlineSearchResult 是在线搜索的完整响应：结果＋实际尝试过的关键词（模糊扩展透明化）。
+type OnlineSearchResult struct {
+	Results  []OnlineRepo `json:"results"`
+	Attempts []string     `json:"attempts"`
+}
+
+// SearchOnline 在指定源站搜索模型仓库（按下载量排序）。
+// 用户习惯适配：空结果先重试（源站风控间歇返回空），仍空则自动尝试模糊变体
+// （去版本后缀／分隔符归一／小写化），并记录全部尝试过的关键词。
+func (m *Manager) SearchOnline(ctx context.Context, source, query string) (*OnlineSearchResult, error) {
 	query = strings.TrimSpace(query)
 	if query == "" || len(query) > 100 {
 		return nil, ErrInvalidQuery
 	}
-	switch source {
-	case SourceModelScope:
-		return m.searchModelScope(ctx, query)
-	case SourceHF:
-		return m.searchHF(ctx, query)
-	default:
+	if source != SourceModelScope && source != SourceHF {
 		return nil, ErrInvalidSource
 	}
+	attempts := []string{query}
+	repos, err := m.searchWithRetry(ctx, source, query)
+	if err != nil {
+		return nil, err
+	}
+	for _, variant := range queryVariants(query) {
+		if len(repos) > 0 {
+			break
+		}
+		attempts = append(attempts, variant)
+		repos, err = m.searchOnce(ctx, source, variant)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &OnlineSearchResult{Results: repos, Attempts: attempts}, nil
 }
 
-func (m *Manager) searchModelScope(ctx context.Context, query string) ([]OnlineRepo, error) {
-	// ModelScope 风控偶尔会返回 Code=200 但空列表；空结果自动重试一次再收口。
-	repos, err := m.searchModelScopeOnce(ctx, query)
-	if err == nil && len(repos) == 0 {
+// searchWithRetry 空结果最多重试 2 次（600ms／1500ms 退避），覆盖风控空响应窗口。
+func (m *Manager) searchWithRetry(ctx context.Context, source, query string) ([]OnlineRepo, error) {
+	repos, err := m.searchOnce(ctx, source, query)
+	for _, backoff := range []time.Duration{600 * time.Millisecond, 1500 * time.Millisecond} {
+		if err != nil || len(repos) > 0 {
+			return repos, err
+		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(600 * time.Millisecond):
+		case <-time.After(backoff):
 		}
-		repos, err = m.searchModelScopeOnce(ctx, query)
+		repos, err = m.searchOnce(ctx, source, query)
 	}
 	return repos, err
+}
+
+func (m *Manager) searchOnce(ctx context.Context, source, query string) ([]OnlineRepo, error) {
+	if source == SourceModelScope {
+		return m.searchModelScopeOnce(ctx, query)
+	}
+	return m.searchHF(ctx, query)
+}
+
+// versionSuffixPattern 匹配词尾版本／量化后缀：MiniMax-H3→MiniMax、Wan2.1→Wan、Qwen3.8-27B→Qwen3.8。
+// 字母前缀（如 H3 的 H）仅在前面有分隔符时一起剥掉，避免误伤 Wan2.1 这类词干以字母结尾的名字。
+var versionSuffixPattern = regexp.MustCompile(`(?i)(?:[-_ ][a-z]?|v?)\d[\d.]*[a-z]?$`)
+
+// separatorPattern 把连字符／下划线／点归一为空格（minimax-h3 → minimax h3，扩大源站分词命中）。
+var separatorPattern = regexp.MustCompile(`[-_.]+`)
+
+// queryVariants 生成模糊搜索变体（去重、最多 3 个，不含原词）。
+func queryVariants(query string) []string {
+	seen := map[string]bool{strings.ToLower(query): true}
+	variants := make([]string, 0, 3)
+	add := func(candidate string) {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" || seen[strings.ToLower(candidate)] || len(variants) >= 3 {
+			return
+		}
+		seen[strings.ToLower(candidate)] = true
+		variants = append(variants, candidate)
+	}
+	// 1. 去版本后缀（用户最常见的全词习惯：带版本号搜索）
+	if base := versionSuffixPattern.ReplaceAllString(query, ""); base != query {
+		add(base)
+	}
+	// 2. 分隔符归一为空格
+	add(separatorPattern.ReplaceAllString(query, " "))
+	// 3. 小写化
+	add(strings.ToLower(query))
+	return variants
+}
+
+// ParseRepoRef 识别「org/name」与源站 URL（modelscope.cn/models/...、huggingface.co/...、hf-mirror.com/...），
+// 命中时返回目标源与仓库标识——用户从教程／模板页复制链接即可直达，无需搜索。
+func ParseRepoRef(query string) (source, repo string, ok bool) {
+	query = strings.TrimSpace(query)
+	if repoPathPattern.MatchString(query) {
+		return "", query, true // 源由调用方当前选择决定
+	}
+	if strings.HasPrefix(query, "http://") || strings.HasPrefix(query, "https://") {
+		if parsed, err := url.Parse(query); err == nil {
+			host := strings.ToLower(parsed.Hostname())
+			segments := strings.Split(strings.Trim(parsed.EscapedPath(), "/"), "/")
+			if unescaped, err := url.PathUnescape(strings.Trim(parsed.EscapedPath(), "/")); err == nil {
+				segments = strings.Split(unescaped, "/")
+			}
+			switch host {
+			case "modelscope.cn", "www.modelscope.cn":
+				// /models/<org>/<name>[/...]
+				if len(segments) >= 3 && segments[0] == "models" {
+					candidate := segments[1] + "/" + segments[2]
+					if repoPathPattern.MatchString(candidate) {
+						return SourceModelScope, candidate, true
+					}
+				}
+			case "huggingface.co", "www.huggingface.co", "hf-mirror.com", "www.hf-mirror.com":
+				if len(segments) >= 2 {
+					candidate := segments[0] + "/" + segments[1]
+					if repoPathPattern.MatchString(candidate) {
+						return SourceHF, candidate, true
+					}
+				}
+			}
+		}
+	}
+	return "", "", false
 }
 
 func (m *Manager) searchModelScopeOnce(ctx context.Context, query string) ([]OnlineRepo, error) {
@@ -260,8 +355,6 @@ func (m *Manager) searchModelScopeOnce(ctx context.Context, query string) ([]Onl
 	}
 	return repos, nil
 }
-
-// 前端兜底提示：空结果时提示换短关键词（源站分词对长词更严格）。
 
 func (m *Manager) searchHF(ctx context.Context, query string) ([]OnlineRepo, error) {
 	target := fmt.Sprintf("%s/api/models?search=%s&limit=20", hfAPIBase, url.QueryEscape(query))
