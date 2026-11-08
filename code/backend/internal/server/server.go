@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ghoul02015/flowpilot/internal/catalog"
 	"github.com/ghoul02015/flowpilot/internal/docker"
 	"github.com/ghoul02015/flowpilot/internal/download"
 	"github.com/ghoul02015/flowpilot/internal/hardware"
@@ -22,7 +24,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/model"
 )
 
-const Version = "0.0.5.1"
+const Version = "0.0.6.0"
 
 type Handler struct {
 	docker       *docker.Client
@@ -32,17 +34,18 @@ type Handler struct {
 	models       *model.Manager
 	images       *image.Puller
 	downloads    *download.Manager
+	catalog      *catalog.Manager
 	comfyGateway string
 	comfyClient  *http.Client
 }
 
-func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imagePuller *image.Puller, downloadManager *download.Manager, comfyGateway string) http.Handler {
+func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imagePuller *image.Puller, downloadManager *download.Manager, comfyGateway string, catalogManager *catalog.Manager) http.Handler {
 	if comfyGateway == "" {
 		comfyGateway = "host.docker.internal"
 	}
 	handler := &Handler{
 		docker: dockerClient, staticDir: staticDir, hardware: hardwareCollector, instances: instanceManager,
-		models: modelManager, images: imagePuller, downloads: downloadManager,
+		models: modelManager, images: imagePuller, downloads: downloadManager, catalog: catalogManager,
 		comfyGateway: comfyGateway,
 		// ComfyUI 状态探测是秒级接口，必须有整体超时，避免拖住轮询。
 		comfyClient: &http.Client{Timeout: 4 * time.Second},
@@ -62,6 +65,8 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("GET /api/v1/instances/{name}/comfy/status", handler.comfyStatus)
 	mux.HandleFunc("GET /api/v1/models", handler.listModels)
 	mux.HandleFunc("DELETE /api/v1/models", handler.deleteModel)
+	mux.HandleFunc("GET /api/v1/models/catalog", handler.modelCatalog)
+	mux.HandleFunc("POST /api/v1/models/catalog/refresh", handler.refreshModelCatalog)
 	mux.HandleFunc("GET /api/v1/images/check", handler.checkImage)
 	mux.HandleFunc("GET /api/v1/images/pull", handler.pullStatus)
 	mux.HandleFunc("POST /api/v1/images/pull", handler.startPull)
@@ -265,6 +270,30 @@ func (h *Handler) listModels(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, report)
+}
+
+func (h *Handler) modelCatalog(w http.ResponseWriter, _ *http.Request) {
+	if h.catalog == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "模型目录未启用"})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.catalog.List())
+}
+
+func (h *Handler) refreshModelCatalog(w http.ResponseWriter, r *http.Request) {
+	if h.catalog == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "模型目录未启用"})
+		return
+	}
+	// 刷新需要逐个查询 ModelScope，必须在响应超时前收口。
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	result, err := h.catalog.Refresh(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "刷新模型目录失败", "detail": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) deleteModel(w http.ResponseWriter, r *http.Request) {

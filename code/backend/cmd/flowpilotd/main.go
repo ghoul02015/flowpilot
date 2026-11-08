@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ghoul02015/flowpilot/internal/catalog"
 	"github.com/ghoul02015/flowpilot/internal/docker"
 	"github.com/ghoul02015/flowpilot/internal/download"
 	"github.com/ghoul02015/flowpilot/internal/hardware"
@@ -48,10 +49,11 @@ func main() {
 	imagePuller := image.NewPuller(dockerClient)
 	importDirs := strings.Split(environment("FLOWPILOT_IMPORT_DIRS", "/data/import"), ":")
 	downloadManager := download.NewManager(filepath.Join(dataDir, "models"), importDirs, filepath.Join(dataDir, "tasks.json"))
+	catalogManager := catalog.NewManager(filepath.Join(dataDir, "catalog.json"))
 
 	httpServer := &http.Server{
 		Addr:              address,
-		Handler:           server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imagePuller, downloadManager, environment("FLOWPILOT_HOST_GATEWAY", "host.docker.internal")),
+		Handler:           server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imagePuller, downloadManager, environment("FLOWPILOT_HOST_GATEWAY", "host.docker.internal"), catalogManager),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

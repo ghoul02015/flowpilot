@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghoul02015/flowpilot/internal/catalog"
 	"github.com/ghoul02015/flowpilot/internal/docker"
 	"github.com/ghoul02015/flowpilot/internal/hardware"
 	"github.com/ghoul02015/flowpilot/internal/instance"
@@ -21,7 +22,7 @@ func newTestHandler(t *testing.T, instances *instance.Manager) http.Handler {
 	t.Helper()
 	return New(t.TempDir(), docker.NewClient("/unused/docker.sock"),
 		hardware.NewCollector(hardware.Config{ProcRoot: t.TempDir(), HostRoot: t.TempDir(), DataDir: t.TempDir(), NvidiaSMIBin: ""}),
-		instances, nil, nil, nil, "")
+		instances, nil, nil, nil, "", catalog.NewManager(""))
 }
 
 func TestHealth(t *testing.T) {
@@ -83,7 +84,7 @@ func TestHardwareEndpoint(t *testing.T) {
 }
 
 func TestHardwareEndpointWithoutCollector(t *testing.T) {
-	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, nil, nil, nil, "")
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, nil, nil, nil, "", catalog.NewManager(""))
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/hardware", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -111,7 +112,7 @@ func TestModelsEndpointLifecycle(t *testing.T) {
 	if err := os.WriteFile(target, []byte("weights"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, model.NewManager(root), nil, nil, "")
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, model.NewManager(root), nil, nil, "", catalog.NewManager(""))
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/models", nil)
 	response := httptest.NewRecorder()
@@ -204,7 +205,7 @@ func TestComfyStatusEndpoint(t *testing.T) {
 			}},
 	}}
 	manager := instance.NewManager(fake, func() int { return 1 }, "/host/data", "comfyui:test", 8188, "", "", "")
-	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, manager, nil, nil, nil, "127.0.0.1")
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, manager, nil, nil, nil, "127.0.0.1", catalog.NewManager(""))
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/instances/draw/comfy/status", nil)
 	response := httptest.NewRecorder()
@@ -227,5 +228,45 @@ func TestComfyStatusEndpoint(t *testing.T) {
 	_ = json.NewDecoder(restResponse.Body).Decode(&restStatus)
 	if restStatus.Reachable || restStatus.InstanceStatus != "stopped" {
 		t.Fatalf("stopped instance must not be probed: %+v", restStatus)
+	}
+}
+
+func TestModelCatalogEndpoint(t *testing.T) {
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, nil, nil, nil, "", catalog.NewManager(filepath.Join(t.TempDir(), "catalog.json")))
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/models/catalog", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", response.Code)
+	}
+	var result catalog.Catalog
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Entries) == 0 || result.Source != "builtin" {
+		t.Fatalf("unexpected catalog: source=%s entries=%d", result.Source, len(result.Entries))
+	}
+	found := false
+	for _, entry := range result.Entries {
+		if !strings.HasPrefix(entry.URL, "https://modelscope.cn/models/") {
+			t.Fatalf("条目主地址必须是 ModelScope：%s", entry.URL)
+		}
+		if entry.ID == "sdxl-offset-lora" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("内置目录缺少 sdxl-offset-lora 条目")
+	}
+}
+
+func TestModelCatalogEndpointDisabled(t *testing.T) {
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, nil, nil, nil, "", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/models/catalog", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", response.Code)
 	}
 }

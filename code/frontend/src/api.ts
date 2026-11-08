@@ -189,6 +189,38 @@ export async function getModels(signal?: AbortSignal): Promise<ModelReport> {
   return getJSON<ModelReport>('/api/v1/models', signal ?? AbortSignal.timeout(8000))
 }
 
+// CatalogEntry 是模型市场中的一个可下载条目（ModelScope 优先，HF 镜像备选）。
+export interface CatalogEntry {
+  id: string
+  name: string
+  category: string
+  typeLabel: string
+  fileName: string
+  description: string
+  sizeBytes: number
+  repo: string
+  filePath: string
+  url: string
+  fallbackUrl: string
+  fallbackGated: boolean
+  reachable: boolean
+  refreshMessage: string
+}
+
+export interface ModelCatalog {
+  entries: CatalogEntry[]
+  refreshedAt: string
+  source: 'builtin' | 'cache'
+}
+
+export async function getModelCatalog(signal?: AbortSignal): Promise<ModelCatalog> {
+  return getJSON<ModelCatalog>('/api/v1/models/catalog', signal ?? AbortSignal.timeout(8000))
+}
+
+export async function refreshModelCatalog(): Promise<ModelCatalog> {
+  return sendJSON<ModelCatalog>('POST', '/api/v1/models/catalog/refresh')
+}
+
 export async function deleteModelApi(path: string): Promise<void> {
   await sendJSON<{ status: string }>('DELETE', `/api/v1/models?path=${encodeURIComponent(path)}`)
 }

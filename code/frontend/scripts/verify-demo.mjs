@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.5.1') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.6.0') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
@@ -81,7 +81,7 @@ try {
     await screenshot('01-hardware-unavailable')
   }
 
-  // 全站不得出现演示数据标识（0.0.5.1 起移除全部模拟数据）。
+  // 全站不得出现演示数据标识（0.0.6.0 起移除全部模拟数据）。
   const bodyText = await page.evaluate(() => document.body.innerText)
   for (const marker of ['重置演示数据', '演示机型', '本地模拟数据', 'Demo ·', '模拟打开', '演示数据']) {
     if (bodyText.includes(marker)) throw new Error(`页面仍包含演示数据标识：${marker}`)
@@ -228,7 +228,7 @@ try {
     await page.getByText('暂无 ComfyUI 实例', { exact: true }).waitFor()
     check('实例列表空态展示（无演示数据）')
   } else {
-    throw new Error('实例接口不可用：0.0.5.1 起页面仅支持真实后端，请确认平台服务已启动')
+    throw new Error('实例接口不可用：0.0.6.0 起页面仅支持真实后端，请确认平台服务已启动')
   }
 
   // 模型中心：接口可用时验证真实仓库扫描与删除，否则走 Demo 流程。
@@ -271,11 +271,65 @@ try {
       await screenshot('03-models-real')
     }
 
+    // 模型市场链路（0.0.6.0）：目录接口 → 界面筛选 → 选择 SDXL Offset LoRA（约 50 MB）
+    // 直接 ModelScope 下载 → 写入共享仓库 → 界面删除。
+    const catalogResponse = await page.request.get(`${baseURL}/api/v1/models/catalog`)
+    const catalogBody = catalogResponse.ok() ? await catalogResponse.json() : null
+    if (!catalogBody || !Array.isArray(catalogBody.entries) || catalogBody.entries.length < 10) throw new Error(`模型目录接口异常：${JSON.stringify(catalogBody)?.slice(0, 200)}`)
+    if (!catalogBody.entries.every((entry) => entry.url.startsWith('https://modelscope.cn/models/'))) throw new Error('目录主地址必须全部为 ModelScope')
+    check('模型市场目录接口（内置主流模型）')
+
+    await page.getByRole('button', { name: '添加模型', exact: true }).click()
+    const marketDialog = page.getByRole('dialog')
+    await marketDialog.waitFor()
+    await marketDialog.getByPlaceholder('搜索模型名称、文件或描述').waitFor({ timeout: 10000 })
+    await marketDialog.getByPlaceholder('搜索模型名称、文件或描述').fill('Offset')
+    const loraEntry = marketDialog.getByTestId('market-entry-sdxl-offset-lora')
+    await loraEntry.waitFor()
+    await loraEntry.getByText('SDXL Offset LoRA', { exact: true }).waitFor()
+    check('模型市场搜索与条目展示')
+    await screenshot('03-models-market')
+    await loraEntry.getByRole('button', { name: '下载 SDXL Offset LoRA', exact: true }).click()
+
+    const loraDeadline = Date.now() + 180000
+    let loraDone = false
+    while (Date.now() < loraDeadline && !loraDone) {
+      const tasksBody = await (await page.request.get(`${baseURL}/api/v1/downloads`)).json()
+      const modelsBody = await (await page.request.get(`${baseURL}/api/v1/models`)).json()
+      loraDone = tasksBody.tasks?.some((task) => task.path === 'loras/sd_xl_offset_example-lora_1.0.safetensors' && task.status === 'completed') && modelsBody.files?.some((file) => file.path === 'loras/sd_xl_offset_example-lora_1.0.safetensors')
+      if (!loraDone) await page.waitForTimeout(2000)
+    }
+    if (!loraDone) throw new Error('模型市场 LoRA 下载 180 秒内未完成入库')
+    check('模型市场选择即下载（ModelScope 真实链路）')
+    await marketDialog.getByRole('button', { name: 'Close' }).click().catch(() => page.keyboard.press('Escape'))
+
+    // 界面列表每 3 秒刷新，可能滞后于 API：等待下载任务行消失、仅剩仓库文件行，
+    // 避免误点同名 dl- 任务行的删除（那只会取消任务，不删文件）。
+    await page.waitForFunction(() => {
+      const name = 'sd_xl_offset_example-lora_1.0.safetensors'
+      const deleteButtons = [...document.querySelectorAll(`button[aria-label="删除 ${name}"]`)]
+      const taskButton = document.querySelector(`button[aria-label="暂停 ${name}"], button[aria-label="继续 ${name}"]`)
+      return deleteButtons.length === 1 && !taskButton
+    }, undefined, { timeout: 20000 })
+
+    await page.getByRole('button', { name: '删除 sd_xl_offset_example-lora_1.0.safetensors', exact: true }).click()
+    await page.getByRole('dialog').getByRole('button', { name: '确认删除' }).click()
+    const loraDeleteDeadline = Date.now() + 15000
+    let loraRemoved = false
+    while (Date.now() < loraDeleteDeadline && !loraRemoved) {
+      const modelsBody = await (await page.request.get(`${baseURL}/api/v1/models`)).json()
+      loraRemoved = !modelsBody.files?.some((file) => file.path === 'loras/sd_xl_offset_example-lora_1.0.safetensors')
+      if (!loraRemoved) await page.waitForTimeout(500)
+    }
+    if (!loraRemoved) throw new Error('市场下载的模型删除后仍在仓库中')
+    check('市场下载模型界面删除')
+
     // 真实下载链路：界面创建 URL 下载 → 写入共享仓库 → 界面删除。
     // 下载源为平台自身页面（目标机 localhost），文件小、秒级完成。
     await page.getByRole('button', { name: '添加模型', exact: true }).click()
     const addDialog = page.getByRole('dialog')
     await addDialog.waitFor()
+    await addDialog.getByRole('button', { name: /URL 下载/ }).click()
     await addDialog.getByLabel(/模型名称/).fill('')
     await addDialog.getByLabel(/模型类型/).selectOption('其他')
     await addDialog.getByLabel(/下载地址/).fill('http://localhost:18080/index.html')
@@ -342,7 +396,7 @@ try {
     if (!importRemoved) throw new Error('导入文件删除后仍在仓库中')
     check('导入文件界面删除')
   } else {
-    throw new Error('模型接口不可用：0.0.5.1 起页面仅支持真实后端，请确认平台服务已启动')
+    throw new Error('模型接口不可用：0.0.6.0 起页面仅支持真实后端，请确认平台服务已启动')
   }
 
   if (realModelsAvailable) {

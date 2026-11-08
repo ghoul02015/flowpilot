@@ -2,6 +2,28 @@
 
 所有重要变更均记录于此。详细内容见 `context/changes/`。
 
+## 0.0.6.0 — 2026-11-08（模型市场：ModelScope 目录，选中即下载）
+
+### 新增
+
+- **模型市场**：添加模型对话框改为三标签（模型市场／URL 下载／本地导入），默认展示 14 条内置主流模型目录（SD1.5、SDXL、FLUX.1 dev/schnell 及配套 VAE/CLIP-L/T5-XXL、SD3.5 Large、SD VAE、ControlNet Canny、Wan2.1 文生视频及 VAE、RealESRGAN x4），支持搜索与类型筛选，点击「下载」即按条目类别与文件名直接创建真实下载任务，无需手填地址。
+- **ModelScope 优先、HF 镜像备选**：所有条目主地址为 ModelScope 直链（`modelscope.cn/models/.../resolve/master/...`，已逐条实测 200），国内服务器开箱可用；每条目附 hf-mirror.com 备选地址，FLUX.1 dev 与 SD3.5 Large 等 HF 受限条目标注「需授权」。
+- **目录在线更新**：`GET /api/v1/models/catalog` 返回目录（缓存优先、与内置合并），`POST /api/v1/models/catalog/refresh` 并发查询 ModelScope 文件列表 API，刷新各条目真实文件大小与可达性（`reachable`），结果原子写入 `shared/catalog.json`，重装保留、离线自动回落内置目录。前端「更新目录」按钮一键触发。
+- 已入库条目在市场中自动标注，避免重复下载；新增 Text Encoders／Diffusion Models 类别，分别落入仓库 `text_encoders/`、`diffusion_models/` 子目录。
+
+### 修复（实机回归发现）
+
+- 回归脚本按钮选择器歧义：HF 镜像按钮的 aria-label 包含主下载按钮同名前缀，strict mode 命中两个元素，改为精确匹配。
+- 回归市场下载后的界面删除存在时序竞争：界面列表每 3 秒刷新、滞后于 API 轮询，点击删除时同名 dl- 下载任务行尚未消失，误触「取消任务」（409）而非删除文件；现等待任务行消失、仅剩仓库文件行后再操作。
+
+### 验证
+
+- Go 九包测试（新增 catalog 包 5 用例＋目录接口 2 用例）、前端 lint／build 通过。
+- DGX Spark 实机 42 项远程回归全部通过：含 49.5MB SDXL Offset LoRA 从 ModelScope 真实下载、入库、界面删除全链路；目录接口断言 14 条且主地址全部为 ModelScope。
+- 在线刷新实测：14 条全部 reachable，文件大小更新为 ModelScope API 真实值（如 SD1.5 3.97→4.27GB），缓存落盘 `shared/catalog.json`。
+
+详细记录：[0.0.6.0](context/changes/0.0.6.0.md)
+
 ## 0.0.5.1 — 2026-11-08（去除全部演示数据，真实生产显示）
 
 ### 变更

@@ -1,6 +1,6 @@
 # FlowPilot 后端
 
-当前版本：`0.0.5.1`。
+当前版本：`0.0.6.0`。
 
 轻量 Go 服务同时提供前端静态页面和 Docker API。仅使用 Go 标准库，通过 `/var/run/docker.sock` 访问 Docker Engine，不引入第三方 Docker SDK。
 
@@ -45,6 +45,13 @@
 
 - `GET /api/v1/models`：扫描结果 `{root, files[], totalBytes, scannedAt}`。
 - `DELETE /api/v1/models?path=<相对路径>`：物理删除文件，拒绝路径穿越与目录删除。
+
+### 模型目录（模型市场，0.0.6.0 新增）
+
+内置 14 条主流模型目录（SD1.5／SDXL／FLUX.1 系列／SD3.5／VAE／ControlNet／Wan2.1／RealESRGAN），主地址为 ModelScope 直链（国内可达），备选为 hf-mirror.com（HF 受限条目标注 `fallbackGated`）。缓存优先、与内置合并；在线刷新并发查询 ModelScope 文件列表 API，更新真实文件大小与可达性，原子写入 `<FLOWPILOT_DATA_DIR>/catalog.json`（重装保留，离线回落内置）。
+
+- `GET /api/v1/models/catalog`：目录 `{entries[], refreshedAt, source: builtin|cache}`。
+- `POST /api/v1/models/catalog/refresh`：在线刷新（25 秒超时，刷新中重复提交返回 409）。
 
 ### 镜像预置（后台拉取）
 
