@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ghoul02015/flowpilot/internal/docker"
+	"github.com/ghoul02015/flowpilot/internal/download"
 	"github.com/ghoul02015/flowpilot/internal/hardware"
 	"github.com/ghoul02015/flowpilot/internal/image"
 	"github.com/ghoul02015/flowpilot/internal/instance"
@@ -41,10 +42,11 @@ func main() {
 	)
 	modelManager := model.NewManager(filepath.Join(dataDir, "models"))
 	imagePuller := image.NewPuller(dockerClient)
+	downloadManager := download.NewManager(filepath.Join(dataDir, "models"))
 
 	httpServer := &http.Server{
 		Addr:              address,
-		Handler:           server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imagePuller),
+		Handler:           server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imagePuller, downloadManager),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

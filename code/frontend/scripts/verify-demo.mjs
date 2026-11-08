@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.2.0') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.3.0') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
@@ -190,6 +190,42 @@ try {
       check('真实模型仓库为空（跳过种子文件删除验证）')
       await screenshot('03-models-real')
     }
+
+    // 真实下载链路：界面创建 URL 下载 → 写入共享仓库 → 界面删除。
+    // 下载源为平台自身页面（目标机 localhost），文件小、秒级完成。
+    await page.getByRole('button', { name: '添加模型', exact: true }).click()
+    const addDialog = page.getByRole('dialog')
+    await addDialog.waitFor()
+    await addDialog.getByLabel(/模型名称/).fill('')
+    await addDialog.getByLabel(/模型类型/).selectOption('其他')
+    await addDialog.getByLabel(/下载地址/).fill('http://localhost:18080/index.html')
+    await addDialog.getByRole('button', { name: '开始下载' }).click()
+
+    // 以 API 为准等待任务完成与文件入库，避免界面轮询合并行的时序干扰。
+    const apiDeadline = Date.now() + 30000
+    let downloadDone = false
+    while (Date.now() < apiDeadline && !downloadDone) {
+      const tasksBody = await (await page.request.get(`${baseURL}/api/v1/downloads`)).json()
+      const modelsBody = await (await page.request.get(`${baseURL}/api/v1/models`)).json()
+      downloadDone = tasksBody.tasks?.some((task) => task.path === 'index.html' && task.status === 'completed') && modelsBody.files?.some((file) => file.path === 'index.html')
+      if (!downloadDone) await page.waitForTimeout(1000)
+    }
+    if (!downloadDone) throw new Error('下载任务未完成或文件未写入共享仓库')
+    check('真实 URL 下载写入共享仓库')
+    await page.getByRole('row').filter({ hasText: 'index.html' }).getByText('就绪', { exact: true }).waitFor({ timeout: 15000 })
+    await screenshot('03-models-download-real')
+
+    await page.getByRole('button', { name: '删除 index.html', exact: true }).click()
+    await page.getByRole('dialog').getByRole('button', { name: '确认删除' }).click()
+    const deleteDeadline = Date.now() + 15000
+    let fileRemoved = false
+    while (Date.now() < deleteDeadline && !fileRemoved) {
+      const modelsBody = await (await page.request.get(`${baseURL}/api/v1/models`)).json()
+      fileRemoved = !modelsBody.files?.some((file) => file.path === 'index.html')
+      if (!fileRemoved) await page.waitForTimeout(500)
+    }
+    if (!fileRemoved) throw new Error('下载文件删除后仍在仓库中')
+    check('下载文件界面删除')
   } else {
     await page.getByRole('button', { name: '添加模型', exact: true }).click()
     await page.getByRole('button', { name: '开始下载' }).click()
@@ -228,7 +264,9 @@ try {
     await page.getByText('下载 dreamshaper-xl.safetensors', { exact: true }).waitFor()
     check('任务中心与模型任务同步')
   } else {
-    check('任务中心页面加载')
+    await page.getByText('下载 index.html', { exact: true }).waitFor()
+    await page.getByText('下载完成，已写入共享仓库', { exact: false }).first().waitFor()
+    check('任务中心展示真实下载任务')
   }
   await screenshot('04-tasks')
 

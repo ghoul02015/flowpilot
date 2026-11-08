@@ -11,13 +11,14 @@ import (
 	"strings"
 
 	"github.com/ghoul02015/flowpilot/internal/docker"
+	"github.com/ghoul02015/flowpilot/internal/download"
 	"github.com/ghoul02015/flowpilot/internal/hardware"
 	"github.com/ghoul02015/flowpilot/internal/image"
 	"github.com/ghoul02015/flowpilot/internal/instance"
 	"github.com/ghoul02015/flowpilot/internal/model"
 )
 
-const Version = "0.0.2.0"
+const Version = "0.0.3.0"
 
 type Handler struct {
 	docker    *docker.Client
@@ -26,10 +27,11 @@ type Handler struct {
 	instances *instance.Manager
 	models    *model.Manager
 	images    *image.Puller
+	downloads *download.Manager
 }
 
-func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imagePuller *image.Puller) http.Handler {
-	handler := &Handler{docker: dockerClient, staticDir: staticDir, hardware: hardwareCollector, instances: instanceManager, models: modelManager, images: imagePuller}
+func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imagePuller *image.Puller, downloadManager *download.Manager) http.Handler {
+	handler := &Handler{docker: dockerClient, staticDir: staticDir, hardware: hardwareCollector, instances: instanceManager, models: modelManager, images: imagePuller, downloads: downloadManager}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", handler.health)
 	mux.HandleFunc("GET /api/v1/system/info", handler.systemInfo)
@@ -47,6 +49,10 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("GET /api/v1/images/check", handler.checkImage)
 	mux.HandleFunc("GET /api/v1/images/pull", handler.pullStatus)
 	mux.HandleFunc("POST /api/v1/images/pull", handler.startPull)
+	mux.HandleFunc("GET /api/v1/downloads", handler.listDownloads)
+	mux.HandleFunc("POST /api/v1/downloads", handler.createDownload)
+	mux.HandleFunc("POST /api/v1/downloads/{id}/{action}", handler.downloadAction)
+	mux.HandleFunc("DELETE /api/v1/downloads/{id}", handler.deleteDownload)
 	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "API endpoint not found"})
 	})
@@ -254,6 +260,75 @@ func (h *Handler) startPull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, h.images.Status())
+}
+
+func (h *Handler) listDownloads(w http.ResponseWriter, _ *http.Request) {
+	if h.downloads == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "下载任务未启用"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": h.downloads.List()})
+}
+
+func (h *Handler) createDownload(w http.ResponseWriter, r *http.Request) {
+	if h.downloads == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "下载任务未启用"})
+		return
+	}
+	var spec download.Spec
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&spec); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误", "detail": err.Error()})
+		return
+	}
+	task, err := h.downloads.Create(spec)
+	if err != nil {
+		h.writeDownloadError(w, err, "创建下载任务失败")
+		return
+	}
+	writeJSON(w, http.StatusCreated, task)
+}
+
+func (h *Handler) downloadAction(w http.ResponseWriter, r *http.Request) {
+	if h.downloads == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "下载任务未启用"})
+		return
+	}
+	task, err := h.downloads.Action(r.PathValue("id"), r.PathValue("action"))
+	if err != nil {
+		h.writeDownloadError(w, err, "下载任务操作失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
+}
+
+func (h *Handler) deleteDownload(w http.ResponseWriter, r *http.Request) {
+	if h.downloads == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "下载任务未启用"})
+		return
+	}
+	if err := h.downloads.Delete(r.PathValue("id")); err != nil {
+		h.writeDownloadError(w, err, "删除下载任务失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// writeDownloadError 将下载层错误映射为合适的 HTTP 状态码。
+func (h *Handler) writeDownloadError(w http.ResponseWriter, err error, prefix string) {
+	var validationError *download.ValidationError
+	var notFoundError *download.NotFoundError
+	var conflictError *download.ConflictError
+	switch {
+	case errors.As(err, &validationError):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationError.Message})
+	case errors.As(err, &notFoundError):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": notFoundError.Error()})
+	case errors.As(err, &conflictError):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": conflictError.Error()})
+	default:
+		slog.Warn(prefix, "error", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": prefix, "detail": err.Error()})
+	}
 }
 
 // writeInstanceError 将实例层错误映射为合适的 HTTP 状态码。

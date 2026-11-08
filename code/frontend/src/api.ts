@@ -205,6 +205,58 @@ export async function getImagePullStatus(): Promise<ImagePullStatus> {
   return getJSON<ImagePullStatus>('/api/v1/images/pull', AbortSignal.timeout(5000))
 }
 
+export interface DownloadTask {
+  id: string
+  url: string
+  category: string
+  fileName: string
+  path: string
+  status: 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'
+  totalBytes: number
+  downloadedBytes: number
+  sha256?: string
+  message: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface DownloadSpec {
+  url: string
+  category: string
+  name?: string
+  sha256?: string
+}
+
+export async function getDownloads(signal?: AbortSignal): Promise<DownloadTask[]> {
+  const body = await getJSON<{ tasks: DownloadTask[] }>('/api/v1/downloads', signal ?? AbortSignal.timeout(5000))
+  return body.tasks
+}
+
+export async function createDownloadApi(spec: DownloadSpec): Promise<DownloadTask> {
+  return sendJSON<DownloadTask>('POST', '/api/v1/downloads', spec)
+}
+
+export async function downloadActionApi(id: string, action: 'pause' | 'resume' | 'cancel' | 'retry'): Promise<DownloadTask> {
+  return sendJSON<DownloadTask>('POST', `/api/v1/downloads/${encodeURIComponent(id)}/${action}`)
+}
+
+export async function deleteDownloadApi(id: string): Promise<void> {
+  await sendJSON<{ status: string }>('DELETE', `/api/v1/downloads/${encodeURIComponent(id)}`)
+}
+
+// modelTypeToCategory 将界面模型类型映射为 ComfyUI 仓库子目录。
+export function modelTypeToCategory(type: string): string {
+  const mapping: Record<string, string> = {
+    Checkpoints: 'checkpoints',
+    LoRA: 'loras',
+    VAE: 'vae',
+    ControlNet: 'controlnet',
+    Embeddings: 'embeddings',
+    'Upscale Models': 'upscale_models',
+  }
+  return mapping[type] ?? 'other'
+}
+
 export async function getInstances(signal?: AbortSignal): Promise<InstanceListResponse> {
   return getJSON<InstanceListResponse>('/api/v1/instances', signal ?? AbortSignal.timeout(5000))
 }

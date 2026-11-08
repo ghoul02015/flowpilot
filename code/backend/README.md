@@ -1,6 +1,6 @@
 # FlowPilot 后端
 
-当前版本：`0.0.2.0`。
+当前版本：`0.0.3.0`。
 
 轻量 Go 服务同时提供前端静态页面和 Docker API。仅使用 Go 标准库，通过 `/var/run/docker.sock` 访问 Docker Engine，不引入第三方 Docker SDK。
 
@@ -45,6 +45,15 @@
 - `GET /api/v1/images/check?image=<镜像>`：本地是否存在。
 - `POST /api/v1/images/pull` `{image}`：后台流式拉取，同一时刻仅一个任务（重复提交返回 409）。
 - `GET /api/v1/images/pull`：拉取状态 `{image, state: idle|pulling|done|error, message, updatedAt}`。
+
+### 下载任务（真实下载引擎）
+
+URL 下载任务保存在内存中（重启后记录清空，仓库文件不受影响）；分片写入 `<仓库>/.downloading/`，支持 Range 断点续传与可选 SHA256 校验，完成后归档入共享仓库。
+
+- `GET /api/v1/downloads`：任务列表 `{tasks[]}`。
+- `POST /api/v1/downloads` `{url, category, name?, sha256?}`：创建下载；`name` 留空从 URL 推导；`category` 即仓库子目录（`other` 落根目录）。
+- `POST /api/v1/downloads/{id}/pause|resume|cancel|retry`：暂停（保留分片）、继续（断点续传）、取消（清理分片）、重试。
+- `DELETE /api/v1/downloads/{id}`：删除终态任务记录。
 
 ## 本机无 Go 环境时验证
 

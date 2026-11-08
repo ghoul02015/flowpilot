@@ -18,7 +18,7 @@ func newTestHandler(t *testing.T, instances *instance.Manager) http.Handler {
 	t.Helper()
 	return New(t.TempDir(), docker.NewClient("/unused/docker.sock"),
 		hardware.NewCollector(hardware.Config{ProcRoot: t.TempDir(), HostRoot: t.TempDir(), DataDir: t.TempDir(), NvidiaSMIBin: ""}),
-		instances, nil, nil)
+		instances, nil, nil, nil)
 }
 
 func TestHealth(t *testing.T) {
@@ -80,7 +80,7 @@ func TestHardwareEndpoint(t *testing.T) {
 }
 
 func TestHardwareEndpointWithoutCollector(t *testing.T) {
-	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, nil, nil)
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, nil, nil, nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/hardware", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -108,7 +108,7 @@ func TestModelsEndpointLifecycle(t *testing.T) {
 	if err := os.WriteFile(target, []byte("weights"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, model.NewManager(root), nil)
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, model.NewManager(root), nil, nil)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/models", nil)
 	response := httptest.NewRecorder()
