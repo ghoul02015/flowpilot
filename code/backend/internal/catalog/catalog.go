@@ -54,6 +54,8 @@ type Manager struct {
 	refreshed  time.Time
 	loaded     bool
 	refreshing bool
+	status     []SourceStatus // 源站可达性探测缓存（60 秒）
+	statusAt   time.Time
 }
 
 func NewManager(cachePath string) *Manager {
@@ -68,7 +70,8 @@ func msURL(repo, path string) string {
 }
 
 // msRequestBase 是 ModelScope 文件列表 API 的地址模板（测试中可替换为本地服务）。
-var msRequestBase = "https://modelscope.cn/api/v1/models/%s/repo/files?Revision=master"
+// Recursive=true 以覆盖 Comfy-Org 等按子目录组织的仓库。
+var msRequestBase = "https://modelscope.cn/api/v1/models/%s/repo/files?Revision=master&Recursive=true"
 
 func hfURL(repo, path string) string {
 	return fmt.Sprintf("https://hf-mirror.com/%s/resolve/main/%s", repo, path)
@@ -96,6 +99,11 @@ func builtin() []Entry {
 		{"controlnet-canny-sd15", "ControlNet Canny（SD1.5）", "controlnet", "ControlNet", "control_v11p_sd15_canny.pth", "边缘线稿控制构图，SD1.5 最常用 ControlNet", "AI-ModelScope/ControlNet-v1-1", "control_v11p_sd15_canny.pth", "lllyasviel/ControlNet-v1-1", "control_v11p_sd15_canny.pth", 1.35, false},
 		{"wan21-t2v-1.3b", "Wan2.1 文生视频 1.3B", "diffusion_models", "Diffusion Models", "diffusion_pytorch_model.safetensors", "阿里万相视频生成，1.3B 版本 8GB 显存可跑", "Wan-AI/Wan2.1-T2V-1.3B", "diffusion_pytorch_model.safetensors", "Wan-AI/Wan2.1-T2V-1.3B", "diffusion_pytorch_model.safetensors", 5.29, false},
 		{"wan21-vae", "Wan2.1 视频 VAE", "vae", "VAE", "Wan2.1_VAE.pth", "Wan2.1 视频模型配套 VAE", "Wan-AI/Wan2.1-T2V-1.3B", "Wan2.1_VAE.pth", "Wan-AI/Wan2.1-T2V-1.3B", "Wan2.1_VAE.pth", 0.47, false},
+		{"minimax-h3-fl2va-fp8", "MiniMax H3 文生视频（FL2VA · FP8）", "diffusion_models", "Diffusion Models", "minimax_h3_fl2va_pruned_fp8_scaled.safetensors", "MiniMax 海螺 H3 音视频同出旗舰视频模型，ComfyUI 官方模板同款，需配套 Qwen3VL 编码器与视频 VAE", "Comfy-Org/MiniMax-H3", "diffusion_models/minimax_h3_fl2va_pruned_fp8_scaled.safetensors", "Comfy-Org/MiniMax-H3", "diffusion_models/minimax_h3_fl2va_pruned_fp8_scaled.safetensors", 20.96, false},
+		{"minimax-h3-fl2va-w6a8", "MiniMax H3 文生视频（FL2VA · W6A8 16G 优化）", "diffusion_models", "Diffusion Models", "minimax_h3_fl2va_pruned_w6a8.safetensors", "H3 的 16GB 显存优化量化版，单卡 5090／Spark 统一内存均可流畅运行", "Comfy-Org/MiniMax-H3", "diffusion_models/minimax_h3_fl2va_pruned_w6a8.safetensors", "Comfy-Org/MiniMax-H3", "diffusion_models/minimax_h3_fl2va_pruned_w6a8.safetensors", 15.98, false},
+		{"minimax-h3-qwen3vl-nvfp4", "MiniMax H3 文本编码器（Qwen3VL 32B · NVFP4）", "text_encoders", "Text Encoders", "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", "H3 必需的 Qwen3VL 32B 多模态文本编码器，NVFP4 量化省显存", "Comfy-Org/MiniMax-H3", "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", "Comfy-Org/MiniMax-H3", "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", 15.69, false},
+		{"minimax-h3-video-vae", "MiniMax H3 视频 VAE", "vae", "VAE", "minimax_h3_video_vae_fp16.safetensors", "H3 必需的视频 VAE 解码器", "Comfy-Org/MiniMax-H3", "vae/minimax_h3_video_vae_fp16.safetensors", "Comfy-Org/MiniMax-H3", "vae/minimax_h3_video_vae_fp16.safetensors", 5.21, false},
+		{"minimax-h3-turbo-lora", "MiniMax H3 Turbo 4 步加速 LoRA", "loras", "LoRA", "minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors", "H3 文生视频 4 步出片加速 LoRA（768p），官方模板推荐", "Comfy-Org/MiniMax-H3", "loras/minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors", "Comfy-Org/MiniMax-H3", "loras/minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors", 1.96, false},
 		{"realesrgan-x4", "Real-ESRGAN x4 放大", "upscale_models", "Upscale Models", "RealESRGAN_x4.pth", "通用 4 倍高清放大，出图后处理必备", "AI-ModelScope/Real-ESRGAN", "RealESRGAN_x4.pth", "", "", 0.06, false},
 	}
 	entries := make([]Entry, 0, len(specs))

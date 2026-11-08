@@ -24,7 +24,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/model"
 )
 
-const Version = "0.0.6.0"
+const Version = "0.0.6.1"
 
 type Handler struct {
 	docker       *docker.Client
@@ -67,6 +67,9 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("DELETE /api/v1/models", handler.deleteModel)
 	mux.HandleFunc("GET /api/v1/models/catalog", handler.modelCatalog)
 	mux.HandleFunc("POST /api/v1/models/catalog/refresh", handler.refreshModelCatalog)
+	mux.HandleFunc("GET /api/v1/sources/status", handler.sourcesStatus)
+	mux.HandleFunc("GET /api/v1/models/online/search", handler.onlineSearch)
+	mux.HandleFunc("GET /api/v1/models/online/files", handler.onlineFiles)
 	mux.HandleFunc("GET /api/v1/images/check", handler.checkImage)
 	mux.HandleFunc("GET /api/v1/images/pull", handler.pullStatus)
 	mux.HandleFunc("POST /api/v1/images/pull", handler.startPull)
@@ -294,6 +297,58 @@ func (h *Handler) refreshModelCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// sourcesStatus 返回 ModelScope 与 HF 镜像的实时可达性（60 秒缓存）。
+func (h *Handler) sourcesStatus(w http.ResponseWriter, r *http.Request) {
+	if h.catalog == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "模型目录未启用"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	writeJSON(w, http.StatusOK, map[string]any{"sources": h.catalog.SourcesStatus(ctx)})
+}
+
+// onlineSearch 代理源站模型搜索，返回归一化仓库列表。
+func (h *Handler) onlineSearch(w http.ResponseWriter, r *http.Request) {
+	if h.catalog == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "模型目录未启用"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	repos, err := h.catalog.SearchOnline(ctx, r.URL.Query().Get("source"), r.URL.Query().Get("q"))
+	if err != nil {
+		writeOnlineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"results": repos})
+}
+
+// onlineFiles 代理源站仓库文件列表，仅返回权重文件（含大小与推断类别）。
+func (h *Handler) onlineFiles(w http.ResponseWriter, r *http.Request) {
+	if h.catalog == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "模型目录未启用"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	files, err := h.catalog.OnlineFiles(ctx, r.URL.Query().Get("source"), r.URL.Query().Get("repo"))
+	if err != nil {
+		writeOnlineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"files": files})
+}
+
+// writeOnlineError 区分参数错误（400）与源站上游错误（502）。
+func writeOnlineError(w http.ResponseWriter, err error) {
+	if errors.Is(err, catalog.ErrInvalidSource) || errors.Is(err, catalog.ErrInvalidQuery) || errors.Is(err, catalog.ErrInvalidRepo) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusBadGateway, map[string]string{"error": "源站请求失败", "detail": err.Error()})
 }
 
 func (h *Handler) deleteModel(w http.ResponseWriter, r *http.Request) {

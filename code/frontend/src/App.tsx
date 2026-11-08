@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Activity, Box, ChevronRight, Database, LayoutDashboard, Menu, Server, Settings, Waves, X } from 'lucide-react'
 import { Toaster, toast } from 'sonner'
-import { createDownloadApi, createImportApi, createInstanceApi, deleteDownloadApi, deleteInstanceApi, deleteModelApi, downloadActionApi, formatBytes, getComfyStatus, getDownloads, getHardware, getInstances, getModels, modelTypeToCategory, postInstanceAction, type CatalogEntry, type ComfyStatus, type DownloadTask, type InstanceDefaults, type ModelReport, type RealInstance } from '@/api'
+import { createDownloadApi, createImportApi, createInstanceApi, deleteDownloadApi, deleteInstanceApi, deleteModelApi, downloadActionApi, formatBytes, getComfyStatus, getDownloads, getHardware, getInstances, getModels, modelTypeToCategory, postInstanceAction, type CatalogEntry, type ComfyStatus, type DownloadTask, type InstanceDefaults, type ModelReport, type OnlineFile, type RealInstance } from '@/api'
 import { CreateInstanceDialog } from '@/components/CreateInstanceDialog'
 import { AddModelDialog } from '@/components/AddModelDialog'
 import { Dashboard } from '@/pages/Dashboard'
@@ -360,6 +360,19 @@ export default function App() {
       })
   }
 
+  // 在线源：选中仓库权重文件直接下载（地址与类别由后端按 ComfyUI 约定推断）。
+  function onlineDownload(file: OnlineFile) {
+    if (!requireBackend('创建下载任务')) return
+    createDownloadApi({ url: file.url, category: file.category, name: file.name })
+      .then((task) => {
+        toast.success(`已开始下载 ${file.name}`, { description: `${task.fileName} → ${task.path}` })
+        void refreshDownloads()
+      })
+      .catch((error: unknown) => {
+        toast.error('创建下载任务失败', { description: error instanceof Error ? error.message : '请求失败' })
+      })
+  }
+
   // 已入库或进行中任务占用的仓库路径，用于模型市场标注。
   const existingModelPaths = [
     ...(realModels?.files.map((file) => file.path) ?? []),
@@ -388,7 +401,7 @@ export default function App() {
       <div className="flex h-20 items-center gap-3 border-b border-white/8 px-5"><div className="flex size-10 items-center justify-center rounded-lg bg-teal-500 text-slate-950"><Waves className="size-6" /></div><div><div className="font-bold tracking-wide text-white">慧浪智算</div><div className="mt-0.5 text-xs font-medium tracking-[0.16em] text-teal-300">FLOWPILOT</div></div><button type="button" className="ml-auto cursor-pointer rounded-md p-2 text-slate-300 hover:bg-white/10 md:hidden" aria-label="关闭菜单" onClick={() => setMobileOpen(false)}><X className="size-5" /></button></div>
       <nav className="flex-1 space-y-1 px-3 py-5" aria-label="主导航">{navigation.map(({ key, label, icon: Icon }) => <button type="button" key={key} onClick={() => navigate(key)} className={`flex min-h-12 w-full cursor-pointer items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:outline-teal-300 ${page === key ? 'bg-white/10 text-white' : 'text-slate-400 hover:bg-white/5 hover:text-white'}`}><Icon className={`size-5 ${page === key ? 'text-teal-300' : ''}`} /><span className="flex-1 text-left">{label}</span>{key === 'tasks' && activeTasks > 0 && <span className="rounded-full bg-teal-400/15 px-2 py-0.5 text-xs text-teal-300">{activeTasks}</span>}</button>)}</nav>
       <div className="mx-3 mb-3 rounded-lg border border-white/8 p-4"><div className="flex items-center gap-2 text-sm font-medium text-white"><span className={`size-2 rounded-full ${backendOnline ? 'bg-emerald-400' : 'bg-rose-400'}`} />{hostInfo.name}</div><div className="mt-2 text-xs leading-5 text-slate-400">{hostInfo.gpuSummary}<br />{backendOnline ? '管理端运行正常' : '等待后端连接'}</div></div>
-      <div className="border-t border-white/8 px-5 py-4 text-xs text-slate-500">FlowPilot · v0.0.6.0</div>
+      <div className="border-t border-white/8 px-5 py-4 text-xs text-slate-500">FlowPilot · v0.0.6.1</div>
     </aside>
 
     <div className="min-h-dvh md:pl-[248px]">
@@ -402,6 +415,6 @@ export default function App() {
       </main>
     </div>
     <CreateInstanceDialog key={createOpen ? 'create-open' : 'create-closed'} open={createOpen} onOpenChange={setCreateOpen} onSubmit={createInstance} models={displayModels} instances={displayInstances} gpuNames={gpuNames} defaultImage={instanceDefaults?.image} defaultContainerPort={instanceDefaults?.containerPort} />
-    <AddModelDialog key={addModelOpen ? 'model-open' : 'model-closed'} open={addModelOpen} onOpenChange={setAddModelOpen} onSubmit={addModel} onMarketDownload={marketDownload} existingPaths={existingModelPaths} />
+    <AddModelDialog key={addModelOpen ? 'model-open' : 'model-closed'} open={addModelOpen} onOpenChange={setAddModelOpen} onSubmit={addModel} onMarketDownload={marketDownload} onOnlineDownload={onlineDownload} existingPaths={existingModelPaths} />
   </div>
 }

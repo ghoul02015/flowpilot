@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.6.0') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.6.1') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
@@ -81,7 +81,7 @@ try {
     await screenshot('01-hardware-unavailable')
   }
 
-  // 全站不得出现演示数据标识（0.0.6.0 起移除全部模拟数据）。
+  // 全站不得出现演示数据标识（0.0.6.1 起移除全部模拟数据）。
   const bodyText = await page.evaluate(() => document.body.innerText)
   for (const marker of ['重置演示数据', '演示机型', '本地模拟数据', 'Demo ·', '模拟打开', '演示数据']) {
     if (bodyText.includes(marker)) throw new Error(`页面仍包含演示数据标识：${marker}`)
@@ -228,7 +228,7 @@ try {
     await page.getByText('暂无 ComfyUI 实例', { exact: true }).waitFor()
     check('实例列表空态展示（无演示数据）')
   } else {
-    throw new Error('实例接口不可用：0.0.6.0 起页面仅支持真实后端，请确认平台服务已启动')
+    throw new Error('实例接口不可用：0.0.6.1 起页面仅支持真实后端，请确认平台服务已启动')
   }
 
   // 模型中心：接口可用时验证真实仓库扫描与删除，否则走 Demo 流程。
@@ -271,7 +271,7 @@ try {
       await screenshot('03-models-real')
     }
 
-    // 模型市场链路（0.0.6.0）：目录接口 → 界面筛选 → 选择 SDXL Offset LoRA（约 50 MB）
+    // 模型市场链路（0.0.6.1）：目录接口 → 界面筛选 → 选择 SDXL Offset LoRA（约 50 MB）
     // 直接 ModelScope 下载 → 写入共享仓库 → 界面删除。
     const catalogResponse = await page.request.get(`${baseURL}/api/v1/models/catalog`)
     const catalogBody = catalogResponse.ok() ? await catalogResponse.json() : null
@@ -279,10 +279,40 @@ try {
     if (!catalogBody.entries.every((entry) => entry.url.startsWith('https://modelscope.cn/models/'))) throw new Error('目录主地址必须全部为 ModelScope')
     check('模型市场目录接口（内置主流模型）')
 
+    // 在线源（0.0.6.1）：源状态接口 → ModelScope 在线搜索接口（MiniMax-H3 必须命中 Comfy-Org）。
+    const sourcesResponse = await page.request.get(`${baseURL}/api/v1/sources/status`)
+    const sourcesBody = sourcesResponse.ok() ? await sourcesResponse.json() : null
+    const msStatus = sourcesBody?.sources?.find((item) => item.id === 'modelscope')
+    if (!msStatus || typeof msStatus.reachable !== 'boolean' || !sourcesBody.sources.some((item) => item.id === 'hf')) throw new Error(`源状态接口异常：${JSON.stringify(sourcesBody)?.slice(0, 200)}`)
+    check('模型源连接状态接口（ModelScope＋HF 镜像）')
+    const onlineResponse = await page.request.get(`${baseURL}/api/v1/models/online/search?source=modelscope&q=MiniMax-H3`)
+    const onlineBody = onlineResponse.ok() ? await onlineResponse.json() : null
+    if (!onlineBody?.results?.some((repo) => repo.repo === 'Comfy-Org/MiniMax-H3')) throw new Error(`在线搜索未命中 Comfy-Org/MiniMax-H3：${JSON.stringify(onlineBody)?.slice(0, 300)}`)
+    check('ModelScope 在线搜索接口（MiniMax-H3）')
+
     await page.getByRole('button', { name: '添加模型', exact: true }).click()
     const marketDialog = page.getByRole('dialog')
     await marketDialog.waitFor()
     await marketDialog.getByPlaceholder('搜索模型名称、文件或描述').waitFor({ timeout: 10000 })
+
+    // 推荐目录内置 MiniMax H3 条目（ComfyUI 官方模板命名）。
+    await marketDialog.getByPlaceholder('搜索模型名称、文件或描述').fill('MiniMax')
+    await marketDialog.getByTestId('market-entry-minimax-h3-fl2va-w6a8').waitFor()
+    check('推荐目录 MiniMax H3 条目（模板命名）')
+
+    // 界面在线搜索：切到 ModelScope 源 → 搜索 → 展开 Comfy-Org/MiniMax-H3 → 权重文件带大小与类别。
+    await marketDialog.getByTestId('source-tab-modelscope').click()
+    await marketDialog.getByPlaceholder(/在 ModelScope 搜索模型仓库/).fill('MiniMax-H3')
+    await marketDialog.getByRole('button', { name: '在线搜索' }).click()
+    const minimaxRepo = marketDialog.getByTestId('online-repo-Comfy-Org/MiniMax-H3')
+    await minimaxRepo.waitFor({ timeout: 30000 })
+    await minimaxRepo.getByRole('button').first().click()
+    await minimaxRepo.getByText('minimax_h3_fl2va_pruned_w6a8.safetensors').waitFor({ timeout: 30000 })
+    await minimaxRepo.getByText(/\d+(\.\d+)? GB/).first().waitFor()
+    check('在线源搜索与仓库文件列表（真实大小）')
+    await screenshot('03-models-online-search')
+    await marketDialog.getByTestId('source-tab-curated').click()
+
     await marketDialog.getByPlaceholder('搜索模型名称、文件或描述').fill('Offset')
     const loraEntry = marketDialog.getByTestId('market-entry-sdxl-offset-lora')
     await loraEntry.waitFor()
@@ -396,7 +426,7 @@ try {
     if (!importRemoved) throw new Error('导入文件删除后仍在仓库中')
     check('导入文件界面删除')
   } else {
-    throw new Error('模型接口不可用：0.0.6.0 起页面仅支持真实后端，请确认平台服务已启动')
+    throw new Error('模型接口不可用：0.0.6.1 起页面仅支持真实后端，请确认平台服务已启动')
   }
 
   if (realModelsAvailable) {

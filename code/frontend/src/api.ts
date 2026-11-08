@@ -221,6 +221,52 @@ export async function refreshModelCatalog(): Promise<ModelCatalog> {
   return sendJSON<ModelCatalog>('POST', '/api/v1/models/catalog/refresh')
 }
 
+// ---- 在线模型源（0.0.6.1）：实时状态、源站搜索与仓库文件列表 ----
+
+// SourceStatus 是一个模型源（modelscope / hf）的实时可达性。
+export interface SourceStatus {
+  id: string
+  name: string
+  home: string
+  reachable: boolean
+  latencyMs: number
+  checkedAt: string
+}
+
+// OnlineRepo 是在线搜索命中的模型仓库。
+export interface OnlineRepo {
+  source: string
+  repo: string
+  name: string
+  chineseName?: string
+  downloads: number
+  updatedAt?: string
+}
+
+// OnlineFile 是仓库内一个可下载的权重文件（category 为推断的入库类别）。
+export interface OnlineFile {
+  path: string
+  name: string
+  sizeBytes: number
+  category: string
+  url: string
+}
+
+export async function getSourcesStatus(): Promise<SourceStatus[]> {
+  const body = await getJSON<{ sources: SourceStatus[] }>('/api/v1/sources/status', AbortSignal.timeout(12000))
+  return body.sources
+}
+
+export async function searchOnlineModels(source: string, query: string): Promise<OnlineRepo[]> {
+  const body = await getJSON<{ results: OnlineRepo[] }>(`/api/v1/models/online/search?source=${encodeURIComponent(source)}&q=${encodeURIComponent(query)}`, AbortSignal.timeout(20000))
+  return body.results
+}
+
+export async function getOnlineRepoFiles(source: string, repo: string): Promise<OnlineFile[]> {
+  const body = await getJSON<{ files: OnlineFile[] }>(`/api/v1/models/online/files?source=${encodeURIComponent(source)}&repo=${encodeURIComponent(repo)}`, AbortSignal.timeout(25000))
+  return body.files
+}
+
 export async function deleteModelApi(path: string): Promise<void> {
   await sendJSON<{ status: string }>('DELETE', `/api/v1/models?path=${encodeURIComponent(path)}`)
 }

@@ -2,6 +2,22 @@
 
 所有重要变更均记录于此。详细内容见 `context/changes/`。
 
+## 0.0.6.1 — 2026-11-08（模型市场在线源：双源切换＋全站搜索）
+
+### 新增
+
+- **源切换与连接状态**：模型市场新增「推荐目录／ModelScope／HF 镜像」三个源选项，在线源实时显示连接状态点（绿＝可达＋延迟，红＝不可达）；`GET /api/v1/sources/status` 并发探测双源，60 秒缓存。
+- **在线搜索（免维护目录）**：`GET /api/v1/models/online/search` 代理 ModelScope（PUT dolphin/models）与 HF 镜像（api/models）全站搜索，`GET /api/v1/models/online/files` 递归列出仓库权重文件（.safetensors/.pth/.gguf 等，真实大小按降序）。源站模型更新即所见，平台无需发版维护目录。
+- **界面在线链路**：搜索仓库 → 展开文件列表 → 按类型筛选 → 单文件一键下载；文件名（ComfyUI 模板引用名）突出显示；类别按 ComfyUI 目录约定自动推断（覆盖 Comfy-Org 布局与 HF 的 FL2VA/text_encoder 中间段）。
+- **推荐目录扩充至 19 条**：新增 MiniMax H3 全套（FL2VA FP8／W6A8 16G 优化、Qwen3VL 32B NVFP4 编码器、视频 VAE、Turbo 4 步 LoRA，Comfy-Org 官方打包仓库，与 ComfyUI 官方模板命名一致）；目录刷新改递归文件列表以覆盖子目录仓库。
+
+### 验证
+
+- Go 九包测试新增在线源 8 用例（双源搜索解析、文件列表与类别推断、状态探测与缓存、超时收口、参数校验），全部通过。
+- DGX Spark 实机 46 项远程回归全部通过：双源状态（ModelScope 317ms／HF 860ms）、MiniMax-H3 搜索命中 Comfy-Org 首位、仓库文件列表真实大小展示，及既有 42 项链路。
+
+详细记录：[0.0.6.1](context/changes/0.0.6.1.md)
+
 ## 0.0.6.0 — 2026-11-08（模型市场：ModelScope 目录，选中即下载）
 
 ### 新增
