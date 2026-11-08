@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Activity, Box, ChevronRight, Database, LayoutDashboard, Menu, RotateCcw, Server, Settings, Waves, X } from 'lucide-react'
 import { Toaster, toast } from 'sonner'
-import { createInstanceApi, deleteInstanceApi, getHardware, getInstances, postInstanceAction, type InstanceDefaults, type RealInstance } from '@/api'
+import { createInstanceApi, deleteInstanceApi, deleteModelApi, formatBytes, getHardware, getInstances, getModels, postInstanceAction, type InstanceDefaults, type ModelReport, type RealInstance } from '@/api'
 import { CreateInstanceDialog } from '@/components/CreateInstanceDialog'
 import { AddModelDialog } from '@/components/AddModelDialog'
 import { Dashboard } from '@/pages/Dashboard'
@@ -52,6 +52,9 @@ export default function App() {
   const [realInstances, setRealInstances] = useState<RealInstance[] | null>(null)
   const [instanceDefaults, setInstanceDefaults] = useState<InstanceDefaults | null>(null)
   const realMode = realInstances !== null
+  // 模型中心：接口可用时切换到真实共享仓库扫描结果。
+  const [realModels, setRealModels] = useState<ModelReport | null>(null)
+  const realModelMode = realModels !== null
 
   useEffect(() => {
     getHardware()
@@ -77,6 +80,12 @@ export default function App() {
       } catch {
         if (!cancelled) setRealInstances(null)
       }
+      try {
+        const report = await getModels()
+        if (!cancelled) setRealModels(report)
+      } catch {
+        if (!cancelled) setRealModels(null)
+      }
     }
     void poll()
     const timer = window.setInterval(() => void poll(), 3000)
@@ -96,6 +105,14 @@ export default function App() {
     }
   }
 
+  async function refreshModels() {
+    try {
+      setRealModels(await getModels())
+    } catch {
+      setRealModels(null)
+    }
+  }
+
   // 真实实例映射为界面模型；id 使用实例名称（全局唯一）。
   const displayInstances: Instance[] = realInstances !== null
     ? realInstances.map((item) => ({
@@ -112,6 +129,20 @@ export default function App() {
       uptime: item.status === 'running' ? '真实容器运行中' : item.status === 'stopped' ? '真实容器已停止' : '容器状态异常',
     }))
     : instances
+
+  // 真实仓库文件映射为界面模型；id 使用相对路径（全局唯一）。
+  const displayModels: ModelItem[] = realModels !== null
+    ? realModels.files.map((file) => ({
+      id: file.path,
+      name: file.name,
+      type: file.type,
+      size: formatBytes(file.sizeBytes),
+      source: '共享仓库',
+      status: 'ready',
+      progress: 100,
+      createdAt: new Date(file.modifiedAt).toLocaleString('zh-CN', { hour12: false }),
+    }))
+    : models
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -206,6 +237,10 @@ export default function App() {
   }
 
   function addModel(input: AddModelInput) {
+    if (realModelMode) {
+      toast.info('URL 下载将在后续版本接入', { description: `请先将模型文件放入共享仓库目录 ${realModels?.root ?? ''}，界面会自动识别。` })
+      return
+    }
     const id = `mod-${Date.now()}`
     const createdAt = new Date().toLocaleString('zh-CN', { hour12: false })
     setModels((current) => [{ id, name: input.name, type: input.type, size: '等待计算', source: input.sourceType, status: 'downloading', progress: 4, createdAt }, ...current])
@@ -223,6 +258,18 @@ export default function App() {
   }
 
   function deleteModel(id: string) {
+    if (realModelMode) {
+      deleteModelApi(id)
+        .then(() => {
+          toast.success('模型文件已删除', { description: id })
+          void refreshModels()
+        })
+        .catch((error: unknown) => {
+          toast.error('删除模型失败', { description: error instanceof Error ? error.message : '请求失败' })
+          void refreshModels()
+        })
+      return
+    }
     setModels((current) => current.filter((model) => model.id !== id))
     toast.success('模型记录已删除', { description: 'Demo 不会删除真实文件。' })
   }
@@ -265,23 +312,23 @@ export default function App() {
       <div className="flex h-20 items-center gap-3 border-b border-white/8 px-5"><div className="flex size-10 items-center justify-center rounded-lg bg-teal-500 text-slate-950"><Waves className="size-6" /></div><div><div className="font-bold tracking-wide text-white">慧浪智算</div><div className="mt-0.5 text-xs font-medium tracking-[0.16em] text-teal-300">FLOWPILOT</div></div><button type="button" className="ml-auto cursor-pointer rounded-md p-2 text-slate-300 hover:bg-white/10 md:hidden" aria-label="关闭菜单" onClick={() => setMobileOpen(false)}><X className="size-5" /></button></div>
       <nav className="flex-1 space-y-1 px-3 py-5" aria-label="主导航">{navigation.map(({ key, label, icon: Icon }) => <button type="button" key={key} onClick={() => navigate(key)} className={`flex min-h-12 w-full cursor-pointer items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:outline-teal-300 ${page === key ? 'bg-white/10 text-white' : 'text-slate-400 hover:bg-white/5 hover:text-white'}`}><Icon className={`size-5 ${page === key ? 'text-teal-300' : ''}`} /><span className="flex-1 text-left">{label}</span>{key === 'tasks' && activeTasks > 0 && <span className="rounded-full bg-teal-400/15 px-2 py-0.5 text-xs text-teal-300">{activeTasks}</span>}</button>)}</nav>
       <div className="mx-3 mb-3 rounded-lg border border-white/8 p-4"><div className="flex items-center gap-2 text-sm font-medium text-white"><span className="size-2 rounded-full bg-emerald-400" />{hostInfo.name}</div><div className="mt-2 text-xs leading-5 text-slate-400">{hostInfo.gpuSummary}<br />管理端运行正常</div><button type="button" className="mt-3 flex min-h-10 cursor-pointer items-center gap-2 text-xs text-slate-400 transition-colors hover:text-white" onClick={resetDemo}><RotateCcw className="size-3.5" />重置演示数据</button></div>
-      <div className="border-t border-white/8 px-5 py-4 text-xs text-slate-500">MVP Demo · v0.0.1.0</div>
+      <div className="border-t border-white/8 px-5 py-4 text-xs text-slate-500">MVP Demo · v0.0.2.0</div>
     </aside>
 
     <div className="min-h-dvh md:pl-[248px]">
       <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-slate-200 bg-[oklch(0.995_0.003_220)]/95 px-4 backdrop-blur md:px-8"><button type="button" className="icon-button md:hidden" aria-label="打开菜单" onClick={() => setMobileOpen(true)}><Menu className="size-5" /></button><div className="hidden items-center gap-2 text-sm text-slate-500 sm:flex"><Server className="size-4" /><span>{hostInfo.name}</span><ChevronRight className="size-3.5" /><span className="text-slate-800">{pageNames[page]}</span></div><div className="ml-auto flex items-center gap-2"><span className="hidden rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 sm:inline">Demo · 本地模拟数据</span><button type="button" className="btn-quiet" onClick={() => navigate('tasks')}><Activity className="size-4" /><span className="hidden sm:inline">任务</span>{activeTasks > 0 && <span className="rounded-full bg-teal-100 px-1.5 text-xs text-teal-800">{activeTasks}</span>}</button><div className="flex size-9 items-center justify-center rounded-full bg-slate-900 text-xs font-semibold text-white" title="Demo 管理员">AD</div></div></header>
       <main className="mx-auto max-w-[1600px] p-4 md:p-8">
-        {page === 'dashboard' && <Dashboard instances={displayInstances} models={models} tasks={tasks} onNavigate={navigate} onCreate={() => setCreateOpen(true)} onAddModel={() => setAddModelOpen(true)} />}
+        {page === 'dashboard' && <Dashboard instances={displayInstances} models={displayModels} tasks={tasks} onNavigate={navigate} onCreate={() => setCreateOpen(true)} onAddModel={() => setAddModelOpen(true)} />}
         {page === 'instances' && <Instances instances={displayInstances} gpuNames={gpuNames} realMode={realMode} onCreate={() => setCreateOpen(true)} onAction={instanceAction} onDelete={deleteInstance} onToggleAutoStart={(id) => {
           if (realMode) return
           setInstances((current) => current.map((item) => item.id === id ? { ...item, autoStart: !item.autoStart } : item))
         }} />}
-        {page === 'models' && <Models models={models} hasRunningInstances={instances.some((item) => item.status === 'running')} onAdd={() => setAddModelOpen(true)} onPause={pauseModel} onDelete={deleteModel} />}
+        {page === 'models' && <Models models={displayModels} realMode={realModelMode} modelsRoot={realModels?.root} totalBytes={realModels?.totalBytes} hasRunningInstances={displayInstances.some((item) => item.status === 'running')} onAdd={() => setAddModelOpen(true)} onPause={pauseModel} onDelete={deleteModel} />}
         {page === 'tasks' && <Tasks tasks={tasks} onAction={taskAction} />}
-        {page === 'system' && <System instances={instances} models={models} tasks={tasks} />}
+        {page === 'system' && <System instances={instances} models={displayModels} tasks={tasks} />}
       </main>
     </div>
-    <CreateInstanceDialog key={createOpen ? 'create-open' : 'create-closed'} open={createOpen} onOpenChange={setCreateOpen} onSubmit={createInstance} models={models} instances={displayInstances} gpuNames={gpuNames} realMode={realMode} defaultImage={instanceDefaults?.image} defaultContainerPort={instanceDefaults?.containerPort} />
+    <CreateInstanceDialog key={createOpen ? 'create-open' : 'create-closed'} open={createOpen} onOpenChange={setCreateOpen} onSubmit={createInstance} models={displayModels} instances={displayInstances} gpuNames={gpuNames} realMode={realMode} defaultImage={instanceDefaults?.image} defaultContainerPort={instanceDefaults?.containerPort} />
     <AddModelDialog key={addModelOpen ? 'model-open' : 'model-closed'} open={addModelOpen} onOpenChange={setAddModelOpen} onSubmit={addModel} />
   </div>
 }

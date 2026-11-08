@@ -12,20 +12,24 @@ import (
 
 	"github.com/ghoul02015/flowpilot/internal/docker"
 	"github.com/ghoul02015/flowpilot/internal/hardware"
+	"github.com/ghoul02015/flowpilot/internal/image"
 	"github.com/ghoul02015/flowpilot/internal/instance"
+	"github.com/ghoul02015/flowpilot/internal/model"
 )
 
-const Version = "0.0.1.0"
+const Version = "0.0.2.0"
 
 type Handler struct {
 	docker    *docker.Client
 	staticDir string
 	hardware  *hardware.Collector
 	instances *instance.Manager
+	models    *model.Manager
+	images    *image.Puller
 }
 
-func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager) http.Handler {
-	handler := &Handler{docker: dockerClient, staticDir: staticDir, hardware: hardwareCollector, instances: instanceManager}
+func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imagePuller *image.Puller) http.Handler {
+	handler := &Handler{docker: dockerClient, staticDir: staticDir, hardware: hardwareCollector, instances: instanceManager, models: modelManager, images: imagePuller}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", handler.health)
 	mux.HandleFunc("GET /api/v1/system/info", handler.systemInfo)
@@ -38,6 +42,11 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("POST /api/v1/instances/{name}/stop", handler.instanceAction("stop"))
 	mux.HandleFunc("POST /api/v1/instances/{name}/restart", handler.instanceAction("restart"))
 	mux.HandleFunc("DELETE /api/v1/instances/{name}", handler.deleteInstance)
+	mux.HandleFunc("GET /api/v1/models", handler.listModels)
+	mux.HandleFunc("DELETE /api/v1/models", handler.deleteModel)
+	mux.HandleFunc("GET /api/v1/images/check", handler.checkImage)
+	mux.HandleFunc("GET /api/v1/images/pull", handler.pullStatus)
+	mux.HandleFunc("POST /api/v1/images/pull", handler.startPull)
 	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "API endpoint not found"})
 	})
@@ -152,6 +161,99 @@ func (h *Handler) deleteInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (h *Handler) listModels(w http.ResponseWriter, _ *http.Request) {
+	if h.models == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "模型仓库未启用"})
+		return
+	}
+	report, err := h.models.Scan()
+	if err != nil {
+		slog.Warn("scan models failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "扫描模型仓库失败", "detail": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
+func (h *Handler) deleteModel(w http.ResponseWriter, r *http.Request) {
+	if h.models == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "模型仓库未启用"})
+		return
+	}
+	if err := h.models.Delete(r.URL.Query().Get("path")); err != nil {
+		var validationError *model.ValidationError
+		var notFoundError *model.NotFoundError
+		switch {
+		case errors.As(err, &validationError):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationError.Message})
+		case errors.As(err, &notFoundError):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": notFoundError.Error()})
+		default:
+			slog.Warn("delete model failed", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "删除模型文件失败", "detail": err.Error()})
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (h *Handler) checkImage(w http.ResponseWriter, r *http.Request) {
+	if h.images == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "镜像管理未启用"})
+		return
+	}
+	name := r.URL.Query().Get("image")
+	exists, err := h.images.Exists(r.Context(), name)
+	if err != nil {
+		var validationError *image.ValidationError
+		if errors.As(err, &validationError) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationError.Message})
+			return
+		}
+		slog.Warn("check image failed", "error", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "检查镜像失败", "detail": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"image": name, "exists": exists})
+}
+
+func (h *Handler) pullStatus(w http.ResponseWriter, _ *http.Request) {
+	if h.images == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "镜像管理未启用"})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.images.Status())
+}
+
+func (h *Handler) startPull(w http.ResponseWriter, r *http.Request) {
+	if h.images == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "镜像管理未启用"})
+		return
+	}
+	var request struct {
+		Image string `json:"image"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&request); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误", "detail": err.Error()})
+		return
+	}
+	if err := h.images.Start(request.Image); err != nil {
+		var validationError *image.ValidationError
+		var conflictError *image.ConflictError
+		switch {
+		case errors.As(err, &validationError):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationError.Message})
+		case errors.As(err, &conflictError):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": conflictError.Error()})
+		default:
+			slog.Warn("start image pull failed", "error", err)
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "启动镜像拉取失败", "detail": err.Error()})
+		}
+		return
+	}
+	writeJSON(w, http.StatusAccepted, h.images.Status())
 }
 
 // writeInstanceError 将实例层错误映射为合适的 HTTP 状态码。

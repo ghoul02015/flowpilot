@@ -4,18 +4,21 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ghoul02015/flowpilot/internal/docker"
 	"github.com/ghoul02015/flowpilot/internal/hardware"
 	"github.com/ghoul02015/flowpilot/internal/instance"
+	"github.com/ghoul02015/flowpilot/internal/model"
 )
 
 func newTestHandler(t *testing.T, instances *instance.Manager) http.Handler {
 	t.Helper()
 	return New(t.TempDir(), docker.NewClient("/unused/docker.sock"),
 		hardware.NewCollector(hardware.Config{ProcRoot: t.TempDir(), HostRoot: t.TempDir(), DataDir: t.TempDir(), NvidiaSMIBin: ""}),
-		instances)
+		instances, nil, nil)
 }
 
 func TestHealth(t *testing.T) {
@@ -77,7 +80,7 @@ func TestHardwareEndpoint(t *testing.T) {
 }
 
 func TestHardwareEndpointWithoutCollector(t *testing.T) {
-	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil)
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, nil, nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/hardware", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -89,6 +92,59 @@ func TestHardwareEndpointWithoutCollector(t *testing.T) {
 func TestInstancesEndpointWithoutManager(t *testing.T) {
 	handler := newTestHandler(t, nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/instances", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", response.Code)
+	}
+}
+
+func TestModelsEndpointLifecycle(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "checkpoints", "unit-test.safetensors")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("weights"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, model.NewManager(root), nil)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/models", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", response.Code)
+	}
+	var report model.Report
+	if err := json.NewDecoder(response.Body).Decode(&report); err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Files) != 1 || report.Files[0].Type != "Checkpoints" || report.TotalBytes != 7 {
+		t.Fatalf("unexpected models report: %+v", report)
+	}
+
+	deleteRequest := httptest.NewRequest(http.MethodDelete, "/api/v1/models?path=checkpoints/unit-test.safetensors", nil)
+	deleteResponse := httptest.NewRecorder()
+	handler.ServeHTTP(deleteResponse, deleteRequest)
+	if deleteResponse.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", deleteResponse.Code)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatal("文件应已被删除")
+	}
+
+	traversalRequest := httptest.NewRequest(http.MethodDelete, "/api/v1/models?path=../escape", nil)
+	traversalResponse := httptest.NewRecorder()
+	handler.ServeHTTP(traversalResponse, traversalRequest)
+	if traversalResponse.Code != http.StatusBadRequest {
+		t.Fatalf("路径穿越应返回 400，实际 %d", traversalResponse.Code)
+	}
+}
+
+func TestModelsEndpointWithoutManager(t *testing.T) {
+	handler := newTestHandler(t, nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/models", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable {

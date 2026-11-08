@@ -1,6 +1,6 @@
 # FlowPilot 后端
 
-当前版本：`0.0.1.0`。
+当前版本：`0.0.2.0`。
 
 轻量 Go 服务同时提供前端静态页面和 Docker API。仅使用 Go 标准库，通过 `/var/run/docker.sock` 访问 Docker Engine，不引入第三方 Docker SDK。
 
@@ -32,6 +32,19 @@
 - `POST /api/v1/instances`：创建实例。请求体 `{name, image?, gpu, port, containerPort?, autoStart?}`；校验名称正则、端口 1024–65535、GPU 越界、名称/端口/GPU 冲突、镜像本地存在；`gpu=-1` 表示仅 CPU；自动挂载 `<hostDataDir>/{models,workflows,outputs}`；启动失败自动删除容器回滚。
 - `POST /api/v1/instances/{name}/start|stop|restart`：启停与重启。
 - `DELETE /api/v1/instances/{name}?force=1`：删除（运行中需 `force=1`）。
+
+### 模型仓库（真实目录扫描）
+
+模型列表即共享仓库目录（容器内 `<FLOWPILOT_DATA_DIR>/models`，宿主机 `~/.local/share/flowpilot/shared/models`）的实时扫描结果，文件即真相、无数据库；第一层子目录映射 ComfyUI 类别约定（checkpoints／loras／vae／controlnet／embeddings／upscale_models）。
+
+- `GET /api/v1/models`：扫描结果 `{root, files[], totalBytes, scannedAt}`。
+- `DELETE /api/v1/models?path=<相对路径>`：物理删除文件，拒绝路径穿越与目录删除。
+
+### 镜像预置（后台拉取）
+
+- `GET /api/v1/images/check?image=<镜像>`：本地是否存在。
+- `POST /api/v1/images/pull` `{image}`：后台流式拉取，同一时刻仅一个任务（重复提交返回 409）。
+- `GET /api/v1/images/pull`：拉取状态 `{image, state: idle|pulling|done|error, message, updatedAt}`。
 
 ## 本机无 Go 环境时验证
 

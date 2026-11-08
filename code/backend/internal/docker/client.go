@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,7 +22,9 @@ const (
 // Client provides read-only access to a Docker Engine through its Unix socket.
 type Client struct {
 	httpClient *http.Client
-	baseURL    string
+	// streamClient 不设置超时，用于镜像拉取等长时间流式响应。
+	streamClient *http.Client
+	baseURL      string
 }
 
 func NewClient(socketPath string) *Client {
@@ -32,8 +35,9 @@ func NewClient(socketPath string) *Client {
 		},
 	}
 	return &Client{
-		httpClient: &http.Client{Transport: transport, Timeout: 10 * time.Second},
-		baseURL:    "http://docker",
+		httpClient:   &http.Client{Transport: transport, Timeout: 10 * time.Second},
+		streamClient: &http.Client{Transport: transport},
+		baseURL:      "http://docker",
 	}
 }
 
@@ -132,6 +136,68 @@ func (c *Client) ImageExists(ctx context.Context, image string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// PullEvent 是镜像拉取过程中的一条进度事件。
+type PullEvent struct {
+	Status   string `json:"status"`
+	Progress string `json:"progress"`
+}
+
+// PullImage 拉取镜像并逐条回调进度事件；镜像名可带 tag，缺省为 latest。
+// 响应为逐行 JSON 流，任何一行包含 error 即视为失败。
+func (c *Client) PullImage(ctx context.Context, image string, onEvent func(PullEvent)) error {
+	fromImage, tag := splitImageTag(image)
+	path := "/images/create?fromImage=" + url.QueryEscape(fromImage) + "&tag=" + url.QueryEscape(tag)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Accept", "application/json")
+
+	response, err := c.streamClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBody))
+		return &StatusError{StatusCode: response.StatusCode, Message: strings.TrimSpace(string(body))}
+	}
+
+	scanner := bufio.NewScanner(response.Body)
+	scanner.Buffer(make([]byte, 64<<10), 1<<20)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var event struct {
+			Status   string `json:"status"`
+			Progress string `json:"progress"`
+			Error    string `json:"error"`
+		}
+		if err := json.Unmarshal(line, &event); err != nil {
+			continue
+		}
+		if event.Error != "" {
+			return errors.New(event.Error)
+		}
+		if onEvent != nil {
+			onEvent(PullEvent{Status: event.Status, Progress: event.Progress})
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("读取拉取进度失败：%w", err)
+	}
+	return nil
+}
+
+// splitImageTag 拆分镜像名与 tag；未显式指定时返回 latest。
+func splitImageTag(image string) (string, string) {
+	lastSlash := strings.LastIndex(image, "/")
+	lastColon := strings.LastIndex(image, ":")
+	if lastColon > lastSlash {
+		return image[:lastColon], image[lastColon+1:]
+	}
+	return image, "latest"
 }
 
 // CreateContainer 创建容器并返回容器 ID。

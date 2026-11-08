@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.1.0') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.2.0') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
@@ -110,6 +110,8 @@ try {
     const instanceName = 'regress-01'
     await createDialog.getByLabel('实例名称').fill(instanceName)
     await createDialog.getByLabel('容器镜像').fill(`flowpilot-web:${health.version}`)
+    await createDialog.getByText('已在本机，可直接创建', { exact: false }).waitFor({ timeout: 8000 })
+    check('镜像本地存在性检查（创建向导）')
     await createDialog.getByLabel('分配 GPU').selectOption('0')
     await createDialog.getByLabel('访问端口').fill('18188')
     await createDialog.getByLabel('容器端口').fill('18080')
@@ -156,20 +158,78 @@ try {
     await screenshot('02-instances')
   }
 
+  // 模型中心：接口可用时验证真实仓库扫描与删除，否则走 Demo 流程。
+  const modelsApiResponse = await page.request.get(`${baseURL}/api/v1/models`)
+  const realModelsAvailable = modelsApiResponse.ok()
+
   await page.getByRole('button', { name: '模型中心', exact: true }).click()
   await page.getByRole('heading', { name: '模型中心' }).waitFor()
-  await page.getByRole('button', { name: '添加模型', exact: true }).click()
-  await page.getByRole('button', { name: '开始下载' }).click()
-  await page.getByRole('button', { name: '暂停 dreamshaper-xl.safetensors', exact: true }).waitFor()
-  await page.getByRole('button', { name: '暂停 dreamshaper-xl.safetensors', exact: true }).click()
-  await page.getByRole('button', { name: '继续 dreamshaper-xl.safetensors', exact: true }).waitFor()
-  check('模型添加、下载与暂停')
-  await screenshot('03-models')
+
+  const modelsReport = realModelsAvailable ? await modelsApiResponse.json() : null
+  const seedFile = modelsReport?.files?.find((file) => file.path === 'checkpoints/regress-test.safetensors')
+
+  if (realModelsAvailable) {
+    check('真实模型仓库扫描接口')
+    await page.getByText('真实共享仓库扫描', { exact: true }).waitFor()
+    if (seedFile) {
+      // 预置的回归文件（部署时在目标机 seed）：checkpoints/regress-test.safetensors
+      const seedRow = page.getByRole('row').filter({ hasText: 'regress-test.safetensors' })
+      await seedRow.waitFor()
+      await seedRow.getByText('Checkpoints', { exact: true }).waitFor()
+      check('真实模型文件在界面展示')
+      await screenshot('03-models-real')
+
+      await page.getByRole('button', { name: '删除 regress-test.safetensors', exact: true }).click()
+      const modelDeleteDialog = page.getByRole('dialog')
+      await modelDeleteDialog.getByRole('button', { name: '确认删除' }).click()
+      await seedRow.waitFor({ state: 'detached', timeout: 10000 })
+      const afterDelete = await (await page.request.get(`${baseURL}/api/v1/models`)).json()
+      if (afterDelete.files?.some((file) => file.path === 'checkpoints/regress-test.safetensors')) throw new Error('模型文件删除后仍在仓库中')
+      check('真实模型文件界面删除')
+    } else {
+      check('真实模型仓库为空（跳过种子文件删除验证）')
+      await screenshot('03-models-real')
+    }
+  } else {
+    await page.getByRole('button', { name: '添加模型', exact: true }).click()
+    await page.getByRole('button', { name: '开始下载' }).click()
+    await page.getByRole('button', { name: '暂停 dreamshaper-xl.safetensors', exact: true }).waitFor()
+    await page.getByRole('button', { name: '暂停 dreamshaper-xl.safetensors', exact: true }).click()
+    await page.getByRole('button', { name: '继续 dreamshaper-xl.safetensors', exact: true }).waitFor()
+    check('模型添加、下载与暂停')
+    await screenshot('03-models')
+  }
+
+  if (realModelsAvailable) {
+    // 镜像预置流程：检查接口＋完整拉取链路（层已存在时秒级完成）。
+    const pullImageName = 'quay.io/gpustack/runtime:pause'
+    const checkResponse = await page.request.get(`${baseURL}/api/v1/images/check?image=${encodeURIComponent(pullImageName)}`)
+    const checkBody = await checkResponse.json()
+    if (!checkResponse.ok() || checkBody.exists !== true) throw new Error(`镜像检查接口异常：${JSON.stringify(checkBody)}`)
+    check('镜像本地存在性检查接口')
+
+    const pullResponse = await page.request.post(`${baseURL}/api/v1/images/pull`, { data: { image: pullImageName } })
+    if (!pullResponse.ok()) throw new Error(`启动镜像拉取失败：HTTP ${pullResponse.status()}`)
+    const pullDeadline = Date.now() + 120000
+    let pullState = 'pulling'
+    while (Date.now() < pullDeadline) {
+      const statusBody = await (await page.request.get(`${baseURL}/api/v1/images/pull`)).json()
+      pullState = statusBody.state
+      if (pullState === 'done' || pullState === 'error') break
+      await page.waitForTimeout(2000)
+    }
+    if (pullState !== 'done') throw new Error(`镜像拉取未完成：${pullState}`)
+    check('镜像后台拉取链路（Docker API）')
+  }
 
   await page.getByRole('button', { name: /^任务中心/ }).first().click()
   await page.getByRole('heading', { name: '任务中心' }).waitFor()
-  await page.getByText('下载 dreamshaper-xl.safetensors', { exact: true }).waitFor()
-  check('任务中心与模型任务同步')
+  if (!realModelsAvailable) {
+    await page.getByText('下载 dreamshaper-xl.safetensors', { exact: true }).waitFor()
+    check('任务中心与模型任务同步')
+  } else {
+    check('任务中心页面加载')
+  }
   await screenshot('04-tasks')
 
   await page.getByRole('button', { name: '系统管理', exact: true }).click()

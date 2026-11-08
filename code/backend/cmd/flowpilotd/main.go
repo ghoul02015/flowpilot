@@ -7,13 +7,16 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/ghoul02015/flowpilot/internal/docker"
 	"github.com/ghoul02015/flowpilot/internal/hardware"
+	"github.com/ghoul02015/flowpilot/internal/image"
 	"github.com/ghoul02015/flowpilot/internal/instance"
+	"github.com/ghoul02015/flowpilot/internal/model"
 	"github.com/ghoul02015/flowpilot/internal/server"
 )
 
@@ -21,6 +24,7 @@ func main() {
 	address := environment("FLOWPILOT_ADDR", ":18080")
 	staticDir := environment("FLOWPILOT_STATIC_DIR", "./web")
 	socketPath := environment("FLOWPILOT_DOCKER_SOCKET", "/var/run/docker.sock")
+	dataDir := environment("FLOWPILOT_DATA_DIR", "/data/flowpilot")
 	hardwareCollector := hardware.NewCollector(hardware.Config{
 		ProcRoot:     os.Getenv("FLOWPILOT_PROC_ROOT"),
 		HostRoot:     os.Getenv("FLOWPILOT_HOST_ROOT"),
@@ -31,14 +35,16 @@ func main() {
 	instanceManager := instance.NewManager(
 		dockerClient,
 		func() int { return len(hardwareCollector.Collect(context.Background()).GPUs) },
-		environment("FLOWPILOT_HOST_DATA_DIR", environment("FLOWPILOT_DATA_DIR", "/data/flowpilot")),
+		environment("FLOWPILOT_HOST_DATA_DIR", dataDir),
 		environment("FLOWPILOT_COMFYUI_IMAGE", "comfyui:latest"),
 		envInt("FLOWPILOT_COMFYUI_CONTAINER_PORT", 8188),
 	)
+	modelManager := model.NewManager(filepath.Join(dataDir, "models"))
+	imagePuller := image.NewPuller(dockerClient)
 
 	httpServer := &http.Server{
 		Addr:              address,
-		Handler:           server.New(staticDir, dockerClient, hardwareCollector, instanceManager),
+		Handler:           server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imagePuller),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

@@ -4,6 +4,21 @@ export interface HealthResponse {
   version: string
 }
 
+// formatBytes 将字节数格式化为易读单位。
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '—'
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let value = bytes
+  let unit = 'B'
+  for (const next of units) {
+    if (value < 1024) break
+    value /= 1024
+    unit = next
+  }
+  return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)} ${unit}`
+}
+
 export interface DockerEngine {
   info: {
     Name: string
@@ -140,6 +155,54 @@ async function sendJSON<T>(method: string, path: string, payload?: unknown): Pro
     throw new Error(body?.detail ?? body?.error ?? `请求失败：HTTP ${response.status}`)
   }
   return response.json() as Promise<T>
+}
+
+export interface ModelFile {
+  name: string
+  category: string
+  type: string
+  path: string
+  sizeBytes: number
+  modifiedAt: string
+}
+
+export interface ModelReport {
+  root: string
+  files: ModelFile[]
+  totalBytes: number
+  scannedAt: string
+}
+
+export interface ImageCheckResponse {
+  image: string
+  exists: boolean
+}
+
+export interface ImagePullStatus {
+  image: string
+  state: 'idle' | 'pulling' | 'done' | 'error'
+  message: string
+  updatedAt: string
+}
+
+export async function getModels(signal?: AbortSignal): Promise<ModelReport> {
+  return getJSON<ModelReport>('/api/v1/models', signal ?? AbortSignal.timeout(8000))
+}
+
+export async function deleteModelApi(path: string): Promise<void> {
+  await sendJSON<{ status: string }>('DELETE', `/api/v1/models?path=${encodeURIComponent(path)}`)
+}
+
+export async function checkImage(image: string): Promise<ImageCheckResponse> {
+  return getJSON<ImageCheckResponse>(`/api/v1/images/check?image=${encodeURIComponent(image)}`, AbortSignal.timeout(8000))
+}
+
+export async function startImagePull(image: string): Promise<ImagePullStatus> {
+  return sendJSON<ImagePullStatus>('POST', '/api/v1/images/pull', { image })
+}
+
+export async function getImagePullStatus(): Promise<ImagePullStatus> {
+  return getJSON<ImagePullStatus>('/api/v1/images/pull', AbortSignal.timeout(5000))
 }
 
 export async function getInstances(signal?: AbortSignal): Promise<InstanceListResponse> {

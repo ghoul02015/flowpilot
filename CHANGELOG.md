@@ -2,6 +2,21 @@
 
 所有重要变更均记录于此。详细内容见 `context/changes/`。
 
+## 0.0.2.0 — 2026-11-08
+
+### 新增
+
+- 模型中心接入真实共享仓库：`GET /api/v1/models` 扫描宿主机模型目录（第一层子目录映射 ComfyUI 类别：checkpoints／loras／vae／controlnet／embeddings／upscale_models），`DELETE /api/v1/models?path=` 物理删除文件并拒绝路径穿越；前端真实模式 3 秒轮询，展示文件数、仓库占用与根目录，界面可直接删除真实文件。
+- 镜像预置流程：`GET /api/v1/images/check` 检查本地镜像，`POST /api/v1/images/pull` 后台流式拉取（同一时刻仅一个任务），`GET /api/v1/images/pull` 查询进度；创建实例向导实时检查镜像存在性，缺失时可一键在线拉取并显示进度。
+- Docker 客户端新增无超时的流式通道与 `PullImage`，逐行解析拉取进度事件。
+
+### 验证
+
+- Go 六包测试全过（新增 model 扫描／删除／穿越防护 4 用例、image 拉取生命周期 3 用例、server 模型接口用例）；前端 lint／build 通过。
+- DGX Spark 实测：预置 `checkpoints/regress-test.safetensors` 种子文件，界面展示（Checkpoints · 4.0 MB）并通过界面真实删除；以 `quay.io/gpustack/runtime:pause` 完成后台拉取全链路；26 项远程回归全部通过；`comfyui-h3` 不受影响，测试产物全部清理。
+
+详细记录：[0.0.2.0](context/changes/0.0.2.0.md)
+
 ## 0.0.1.0 — 2026-11-08
 
 ### 新增

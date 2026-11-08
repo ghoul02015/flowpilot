@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, LoaderCircle, Server } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { ArrowLeft, ArrowRight, Check, CloudDownload, LoaderCircle, Server } from 'lucide-react'
+import { checkImage, getImagePullStatus, startImagePull, type ImagePullStatus } from '@/api'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { CreateInstanceInput, Instance, ModelItem } from '@/types'
 
@@ -30,9 +31,47 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
   const [selectedModels, setSelectedModels] = useState<string[]>([])
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  // 真实模式下的镜像本地存在性检查与后台拉取状态。
+  const [imageState, setImageState] = useState<'unknown' | 'checking' | 'exists' | 'missing'>('unknown')
+  const [pull, setPull] = useState<ImagePullStatus | null>(null)
 
   const readyModels = models.filter((model) => model.status === 'ready')
   const version = template === 'ComfyUI 视频版' ? 'v0.3.76-video' : 'v0.3.76'
+
+  // 镜像名输入后延迟检查本地是否存在。
+  useEffect(() => {
+    if (!realMode || !image.trim()) {
+      setImageState('unknown')
+      return
+    }
+    setImageState('checking')
+    const timer = window.setTimeout(() => {
+      checkImage(image.trim())
+        .then((result) => setImageState(result.exists ? 'exists' : 'missing'))
+        .catch(() => setImageState('unknown'))
+    }, 500)
+    return () => window.clearTimeout(timer)
+  }, [image, realMode])
+
+  // 拉取进行中每 2 秒轮询进度。
+  useEffect(() => {
+    if (pull?.state !== 'pulling') return
+    const timer = window.setInterval(() => {
+      getImagePullStatus()
+        .then((status) => {
+          setPull(status)
+          if (status.state === 'done') setImageState('exists')
+        })
+        .catch(() => {})
+    }, 2000)
+    return () => window.clearInterval(timer)
+  }, [pull])
+
+  function pullImage() {
+    startImagePull(image.trim())
+      .then(setPull)
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : '启动拉取失败'))
+  }
 
   function next() {
     if (!name.trim()) {
@@ -92,7 +131,15 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
               <label className="field-label">容器镜像
                 <input className="field-input font-mono text-sm" value={image} onChange={(event) => setImage(event.target.value)} placeholder="comfyui:latest" autoComplete="off" />
               </label>
-              <div className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm leading-6 text-teal-950">将创建真实 Docker 容器；镜像必须已存在于本机，离线环境请先导入。</div>
+              <div className={`rounded-lg border p-3 text-sm leading-6 ${imageState === 'exists' ? 'border-teal-200 bg-teal-50 text-teal-950' : imageState === 'missing' ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-slate-200 bg-slate-50 text-slate-600'}`} aria-live="polite">
+                {imageState === 'checking' && '正在检查本机镜像…'}
+                {imageState === 'exists' && <>镜像 <span className="font-mono">{image.trim()}</span> 已在本机，可直接创建。</>}
+                {imageState === 'missing' && <>镜像 <span className="font-mono">{image.trim()}</span> 不在本机，可在线拉取或离线导入。</>}
+                {imageState === 'unknown' && '将创建真实 Docker 容器；镜像必须已存在于本机，离线环境请先导入。'}
+                {imageState === 'missing' && pull?.state !== 'pulling' && <button type="button" className="btn-secondary mt-2 w-full" onClick={pullImage}><CloudDownload className="size-4" />在线拉取镜像</button>}
+                {pull?.state === 'pulling' && <span className="mt-1 flex items-center gap-2 text-xs"><LoaderCircle className="size-3.5 animate-spin" />{pull.message || '正在拉取镜像…'}</span>}
+                {pull?.state === 'error' && <span className="mt-1 block text-xs text-rose-700">拉取失败：{pull.message}</span>}
+              </div>
             </>
             : <>
               <label className="field-label">镜像模板
@@ -124,7 +171,7 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
         </div>}
 
         {step === 2 && <div className="py-2">
-          {realMode && <p className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-600">模型仓库预置将在后续版本接入真实挂载；当前创建的空实例已挂载共享模型目录。</p>}
+          {realMode && <p className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-600">以下为共享仓库实时扫描结果；实例容器已挂载共享模型目录，模型对所有实例可见，无需复制。</p>}
           <p className="mb-3 text-sm leading-6 text-slate-600">选择需要预置的全局模型，也可以跳过，先创建空实例。</p>
           <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
             {readyModels.map((model) => <label key={model.id} className="flex min-h-14 cursor-pointer items-center gap-3 rounded-lg border border-slate-200 px-3 py-2 transition-colors hover:border-teal-400">
