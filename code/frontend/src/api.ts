@@ -274,6 +274,19 @@ export async function getInstances(signal?: AbortSignal): Promise<InstanceListRe
   return getJSON<InstanceListResponse>('/api/v1/instances', signal ?? AbortSignal.timeout(5000))
 }
 
+// ComfyStatus 是实例 ComfyUI 制图队列的摘要（不可达时 reachable=false）。
+export interface ComfyStatus {
+  reachable: boolean
+  instanceStatus: string
+  queueRunning: number
+  queuePending: number
+  comfyuiVersion?: string
+}
+
+export async function getComfyStatus(name: string): Promise<ComfyStatus> {
+  return getJSON<ComfyStatus>(`/api/v1/instances/${encodeURIComponent(name)}/comfy/status`, AbortSignal.timeout(6000))
+}
+
 export async function createInstanceApi(spec: CreateInstanceSpec): Promise<RealInstance> {
   return sendJSON<RealInstance>('POST', '/api/v1/instances', spec)
 }

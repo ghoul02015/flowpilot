@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.0.4.1"
+VERSION="0.0.5.0"
 IMAGE="flowpilot-web:${VERSION}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -112,6 +112,7 @@ docker run -d \
   --restart unless-stopped \
   --label flowpilot.managed=true \
   --label flowpilot.version="${VERSION}" \
+  --add-host host.docker.internal:host-gateway \
   -p "${PORT}:18080" \
   -v "${DOCKER_SOCKET}:/var/run/docker.sock" \
   -v "${INSTALL_HOME}/shared:/data/flowpilot" \

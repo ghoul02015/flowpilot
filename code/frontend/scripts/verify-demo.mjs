@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.4.1') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.5.0') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
@@ -181,6 +181,37 @@ try {
     if (!comfyReady) throw new Error('ComfyUI 实例 180 秒内未就绪')
     check('ComfyUI 服务就绪（/system_stats）')
     await screenshot('02-instances-comfyui')
+
+    // ComfyUI 状态代理与「打开应用」跳转（0.0.5.0）：经平台后端探测实例制图状态。
+    const comfyStatusDeadline = Date.now() + 60000
+    let comfyStatus = null
+    while (Date.now() < comfyStatusDeadline && !comfyStatus) {
+      try {
+        const statusResponse = await page.request.get(`${baseURL}/api/v1/instances/${comfyName}/comfy/status`)
+        if (statusResponse.ok()) {
+          const statusBody = await statusResponse.json()
+          if (statusBody.reachable) comfyStatus = statusBody
+        }
+      } catch { /* 代理尚未就绪，继续等待 */ }
+      if (!comfyStatus) await page.waitForTimeout(3000)
+    }
+    if (!comfyStatus) throw new Error('comfy/status 代理 60 秒内未返回 reachable')
+    if (!comfyStatus.comfyuiVersion) throw new Error('comfy/status 响应缺少 ComfyUI 版本')
+    check('ComfyUI 状态代理接口（reachable 与版本）')
+
+    await page.getByTestId(`comfy-queue-${comfyName}`).waitFor({ timeout: 15000 })
+    check('实例列表制图任务徽标')
+
+    const openButton = page.getByRole('button', { name: `打开 ${comfyName} ComfyUI` })
+    await openButton.waitFor()
+    const [comfyPopup] = await Promise.all([
+      page.context().waitForEvent('page', { timeout: 15000 }),
+      openButton.click(),
+    ])
+    await comfyPopup.waitForLoadState('domcontentloaded')
+    if (!new URL(comfyPopup.url()).port || new URL(comfyPopup.url()).port !== '18189') throw new Error(`打开应用跳转端口异常：${comfyPopup.url()}`)
+    await comfyPopup.close()
+    check('打开 ComfyUI 应用链接（新窗口跳转正确端口）')
 
     await page.getByRole('button', { name: `停止 ${comfyName}`, exact: true }).click()
     await page.getByRole('button', { name: `启动 ${comfyName}`, exact: true }).waitFor({ timeout: 30000 })

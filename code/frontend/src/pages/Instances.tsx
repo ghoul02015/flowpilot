@@ -37,12 +37,20 @@ export function Instances({ instances, gpuNames, realMode, onCreate, onAction, o
         <label className="relative flex-1"><span className="sr-only">搜索实例</span><Search className="absolute top-3.5 left-3 size-4 text-slate-400" /><input className="field-input pl-9" placeholder="搜索实例名称" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
         <select className="field-input sm:w-44" aria-label="按状态筛选" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">全部状态</option><option value="running">运行中</option><option value="stopped">已停止</option><option value="error">异常</option></select>
       </div>
-      <div className="overflow-x-auto"><table className="data-table min-w-[980px]"><thead><tr><th>实例名称</th><th>状态</th><th>资源</th><th>访问端口</th><th>模型</th><th>操作</th></tr></thead><tbody>
+      <div className="overflow-x-auto"><table className="data-table min-w-[1120px]"><thead><tr><th>实例名称</th><th>状态</th><th>资源</th><th>访问端口</th><th>制图任务</th><th>操作</th></tr></thead><tbody>
         {filtered.map((item) => { const busy = ['creating', 'starting', 'stopping', 'restarting'].includes(item.status); return <tr key={item.id}>
           <td><button type="button" className="cursor-pointer text-left font-medium text-slate-900 hover:text-teal-700" onClick={() => setDetailId(item.id)}>{item.name}</button><div className="mt-1 text-xs text-slate-500">{item.template} · {item.version}</div></td>
-          <td><StatusBadge status={item.status} /></td><td>{item.gpu >= 0 ? `GPU ${item.gpu}` : '不分配'}<div className="mt-1 text-xs text-slate-500">{item.gpu >= 0 ? gpuNames[item.gpu] ?? 'GPU' : '仅 CPU 运行'}</div></td><td className="font-mono text-xs">{item.port}</td><td>{item.models} 个</td>
+          <td><StatusBadge status={item.status} /></td><td>{item.gpu >= 0 ? `GPU ${item.gpu}` : '不分配'}<div className="mt-1 text-xs text-slate-500">{item.gpu >= 0 ? gpuNames[item.gpu] ?? 'GPU' : '仅 CPU 运行'}</div></td><td className="font-mono text-xs">{item.port}</td>
+          <td>{item.status === 'running'
+            ? item.comfy
+              ? item.comfy.reachable
+                ? <span data-testid={`comfy-queue-${item.name}`} className="text-sm text-slate-800">{item.comfy.queueRunning > 0 || item.comfy.queuePending > 0 ? <>运行 <strong className="text-teal-700">{item.comfy.queueRunning}</strong> · 排队 <strong>{item.comfy.queuePending}</strong></> : <span className="text-slate-500">空闲</span>}</span>
+                : <span className="text-xs text-slate-400">服务启动中…</span>
+              : <span className="text-xs text-slate-400">探测中…</span>
+            : <span className="text-xs text-slate-400">—</span>}</td>
           <td><div className="flex items-center gap-1">
             {item.status === 'running' ? <><button type="button" className="icon-button" aria-label={`停止 ${item.name}`} title="停止" disabled={busy} onClick={() => onAction(item.id, 'stop')}><Square className="size-4" /></button><button type="button" className="icon-button" aria-label={`重启 ${item.name}`} title="重启" disabled={busy} onClick={() => onAction(item.id, 'restart')}><RefreshCw className="size-4" /></button></> : <button type="button" className="icon-button" aria-label={`启动 ${item.name}`} title="启动" disabled={busy} onClick={() => onAction(item.id, 'start')}><Play className="size-4" /></button>}
+            {realMode && item.status === 'running' && <button type="button" className="icon-button text-teal-700 hover:bg-teal-50" aria-label={`打开 ${item.name} ComfyUI`} title="打开 ComfyUI 应用" onClick={() => window.open(`http://${window.location.hostname}:${item.port}`, '_blank', 'noopener')}><ExternalLink className="size-4" /></button>}
             <button type="button" className="icon-button" aria-label={`查看 ${item.name} 详情`} title="实例详情" onClick={() => setDetailId(item.id)}><Settings2 className="size-4" /></button>
             <button type="button" className="icon-button text-rose-600 hover:bg-rose-50" aria-label={`删除 ${item.name}`} title="删除" disabled={busy} onClick={() => setDeleteId(item.id)}><Trash2 className="size-4" /></button>
           </div></td>
@@ -58,7 +66,7 @@ export function Instances({ instances, gpuNames, realMode, onCreate, onAction, o
         <dl className="grid grid-cols-2 gap-4 text-sm">{[
           ['GPU', detail.gpu >= 0 ? `GPU ${detail.gpu} · ${gpuNames[detail.gpu] ?? 'GPU'}` : '不分配 GPU'],
           ['访问端口', String(detail.port)],
-          ['模型数量', `${detail.models} 个`],
+          ['制图任务', detail.status !== 'running' ? '实例未运行' : detail.comfy ? (detail.comfy.reachable ? `运行 ${detail.comfy.queueRunning} · 排队 ${detail.comfy.queuePending}${detail.comfy.comfyuiVersion ? ` · ComfyUI ${detail.comfy.comfyuiVersion}` : ''}` : '服务启动中…') : '探测中…'],
           ['创建时间', detail.createdAt],
           ['数据目录', realMode ? '/data/flowpilot/shared（共享仓库）' : `/data/flowpilot/instances/${detail.id}`],
           ['容器名称', realMode ? `flowpilot-comfyui-${detail.name}` : `flowpilot-${detail.id}`],

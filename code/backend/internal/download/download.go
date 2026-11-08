@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -94,6 +95,7 @@ type taskState struct {
 type Manager struct {
 	root       string
 	importDirs []string
+	storePath  string // 任务持久化文件；空表示不持久化
 	client     *http.Client
 	mu         sync.Mutex
 	tasks      map[string]*taskState
@@ -102,11 +104,15 @@ type Manager struct {
 }
 
 // NewManager 创建下载任务管理器，root 为模型仓库根目录，
-// importDirs 为允许本地导入的目录前缀（容器内路径）。
-func NewManager(root string, importDirs []string) *Manager {
-	return &Manager{
+// importDirs 为允许本地导入的目录前缀（容器内路径），
+// storePath 为任务持久化文件路径（空则仅保存在内存）。
+// 持久化文件存在时自动恢复任务：重启前进行中的任务转为已暂停，
+// 分片文件仍在 .downloading/ 中，可继续或重试。
+func NewManager(root string, importDirs []string, storePath string) *Manager {
+	manager := &Manager{
 		root:       root,
 		importDirs: importDirs,
+		storePath:  storePath,
 		// 不设整体超时（下载可能持续很久，由 ctx 控制），但对连接建立、
 		// TLS 握手与响应头设置超时，避免对端挂起时任务永远卡在建连阶段。
 		client: &http.Client{Transport: &http.Transport{
@@ -119,6 +125,65 @@ func NewManager(root string, importDirs []string) *Manager {
 		tasks: make(map[string]*taskState),
 		now:   time.Now,
 	}
+	manager.load()
+	return manager
+}
+
+// persistedTasks 是任务持久化文件的顶层结构。
+type persistedTasks struct {
+	Tasks []Task `json:"tasks"`
+	IDSeq int64  `json:"idSeq"`
+}
+
+// load 从持久化文件恢复任务；文件缺失或损坏时静默忽略（任务记录非关键数据）。
+// 重启前处于 running 的任务协程已不存在，转为 paused 等待用户继续。
+func (m *Manager) load() {
+	if m.storePath == "" {
+		return
+	}
+	data, err := os.ReadFile(m.storePath)
+	if err != nil {
+		return
+	}
+	var persisted persistedTasks
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		return
+	}
+	for _, task := range persisted.Tasks {
+		if task.ID == "" {
+			continue
+		}
+		if task.Status == "running" {
+			task.Status = "paused"
+			if task.Kind == "import" {
+				task.Message = "平台重启，导入已暂停，可继续"
+			} else {
+				task.Message = "平台重启，下载已暂停，可断点续传"
+			}
+		}
+		m.tasks[task.ID] = &taskState{task: task}
+	}
+	m.idSeq = persisted.IDSeq
+}
+
+// persist 将任务快照原子写入持久化文件；调用方须持有 m.mu。
+func (m *Manager) persist() {
+	if m.storePath == "" {
+		return
+	}
+	snapshot := persistedTasks{Tasks: make([]Task, 0, len(m.tasks)), IDSeq: m.idSeq}
+	for _, state := range m.tasks {
+		snapshot.Tasks = append(snapshot.Tasks, state.task)
+	}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		return
+	}
+	temp := m.storePath + ".tmp"
+	if err := os.WriteFile(temp, data, 0o600); err != nil {
+		return
+	}
+	_ = os.Rename(temp, m.storePath)
 }
 
 // List 返回全部任务，按创建时间倒序。
@@ -218,6 +283,7 @@ func (m *Manager) register(task Task) (Task, error) {
 	m.idSeq++
 	task.ID = fmt.Sprintf("dl-%d-%d", task.CreatedAt.Unix(), m.idSeq)
 	m.tasks[task.ID] = &taskState{task: task}
+	m.persist()
 	m.mu.Unlock()
 
 	m.start(task.ID)
@@ -324,6 +390,7 @@ func (m *Manager) Action(id, action string) (Task, error) {
 		m.mu.Lock()
 		state.stopReason = "paused"
 		state.cancel()
+		m.persist()
 		m.mu.Unlock()
 	case "resume":
 		if status != "paused" {
@@ -345,6 +412,7 @@ func (m *Manager) Action(id, action string) (Task, error) {
 			state.task.UpdatedAt = m.now()
 			_ = os.Remove(m.partPath(id))
 		}
+		m.persist()
 		m.mu.Unlock()
 	case "retry":
 		if status != "failed" && status != "cancelled" && status != "paused" {
@@ -370,6 +438,7 @@ func (m *Manager) Delete(id string) error {
 		return &ConflictError{Message: "任务仍在进行，请先取消"}
 	}
 	delete(m.tasks, id)
+	m.persist()
 	return nil
 }
 
@@ -380,6 +449,7 @@ func (m *Manager) transition(id, status, message string) {
 		state.task.Status = status
 		state.task.Message = message
 		state.task.UpdatedAt = m.now()
+		m.persist()
 	}
 }
 
@@ -633,6 +703,7 @@ func (m *Manager) finish(id string, partPath string) {
 			state.task.DownloadedBytes = downloaded
 		}
 		state.task.UpdatedAt = m.now()
+		m.persist()
 	}
 }
 
@@ -661,6 +732,7 @@ func (m *Manager) stopOrFail(ctx context.Context, id string, err error) {
 				_ = os.Remove(m.partPath(id))
 				state.task.DownloadedBytes = 0
 			}
+			m.persist()
 		}
 		return
 	}
@@ -674,6 +746,7 @@ func (m *Manager) fail(id string, err error) {
 		state.task.Status = "failed"
 		state.task.Message = err.Error()
 		state.task.UpdatedAt = m.now()
+		m.persist()
 	}
 }
 

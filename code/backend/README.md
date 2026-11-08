@@ -1,6 +1,6 @@
 # FlowPilot 后端
 
-当前版本：`0.0.4.1`。
+当前版本：`0.0.5.0`。
 
 轻量 Go 服务同时提供前端静态页面和 Docker API。仅使用 Go 标准库，通过 `/var/run/docker.sock` 访问 Docker Engine，不引入第三方 Docker SDK。
 
@@ -19,6 +19,7 @@
 | `FLOWPILOT_COMFYUI_OUTPUTS_TARGET` | `/data/outputs` | 实例内输出目录挂载目标 |
 | `FLOWPILOT_COMFYUI_WORKFLOWS_TARGET` | `/data/workflows` | 实例内工作流目录挂载目标 |
 | `FLOWPILOT_IMPORT_DIRS` | `/data/import` | 本地导入白名单目录（冒号分隔多个） |
+| `FLOWPILOT_HOST_GATEWAY` | `host.docker.internal` | 制图状态代理访问宿主机映射端口的网关主机名（容器需 `--add-host host.docker.internal:host-gateway`，安装脚本已内置） |
 
 ## API
 
@@ -36,6 +37,7 @@
 - `POST /api/v1/instances`：创建实例。请求体 `{name, image?, gpu, port, containerPort?, autoStart?, modelsTarget?, outputsTarget?, workflowsTarget?}`；校验名称正则、端口 1024–65535、GPU 越界、名称/端口/GPU 冲突、镜像本地存在；`gpu=-1` 表示仅 CPU；自动挂载 `<hostDataDir>/{models,workflows,outputs}` 到实例内目标路径（默认 `/data/*`，install.sh 按镜像 WorkingDir 自适应为如 `/app/ComfyUI/*`；models 只读挂载，workflows/outputs 可写）；启动失败自动删除容器回滚。
 - `POST /api/v1/instances/{name}/start|stop|restart`：启停与重启；启动/重启前校验 GPU 未被其他运行中实例占用；停止请求不套用默认客户端超时，失败时回查容器真实状态（已退出视为成功，幂等）。
 - `DELETE /api/v1/instances/{name}?force=1`：删除（运行中需 `force=1`）。
+- `GET /api/v1/instances/{name}/comfy/status`：ComfyUI 制图状态代理——运行中实例经 `http://<FLOWPILOT_HOST_GATEWAY>:<端口>` 探测 `/queue` 与 `/system_stats`，返回 `{reachable, instanceStatus, queueRunning, queuePending, comfyuiVersion}`；未运行实例直接返回 `reachable=false`；整体 4 秒超时、单次响应限 1MB。
 
 ### 模型仓库（真实目录扫描）
 
@@ -52,7 +54,7 @@
 
 ### 下载任务（真实下载引擎）
 
-URL 下载任务保存在内存中（重启后记录清空，仓库文件不受影响）；分片写入 `<仓库>/.downloading/`，支持 Range 断点续传与可选 SHA256 校验，完成后归档入共享仓库。
+下载与导入任务持久化到 `<FLOWPILOT_DATA_DIR>/tasks.json`（宿主机 `~/.local/share/flowpilot/shared/tasks.json`，原子写入、0600）：注册／状态迁移／暂停／取消／删除时落盘，进度推进不落盘（恢复进度以 `.part` 分片文件偏移为准）；平台重启后终态任务原样恢复，进行中的任务统一转为暂停并提示"平台重启……可断点续传／可继续"，任务 ID 序号随文件延续。分片写入 `<仓库>/.downloading/`，支持 Range 断点续传与可选 SHA256 校验，完成后归档入共享仓库。
 
 - `GET /api/v1/downloads`：任务列表 `{tasks[]}`（含下载与导入，`kind` 区分）。
 - `POST /api/v1/downloads` `{url, category, name?, sha256?}`：创建下载；`name` 留空从 URL 推导；`category` 即仓库子目录（`other` 落根目录）。

@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-IMAGE="flowpilot-web:0.0.4.1"
+IMAGE="flowpilot-web:0.0.5.0"
 CONTAINER="flowpilot-web-demo"
 PORT="${FLOWPILOT_DEMO_PORT:-18080}"
 DOCKER_SOCKET="${FLOWPILOT_DOCKER_SOCKET:-/var/run/docker.sock}"
@@ -25,6 +25,7 @@ start_container() {
   IMPORT_DIR="$(cd "${CODE_DIR}/.." && pwd)/.tmp/flowpilot-import"
   mkdir -p "${DATA_DIR}" "${IMPORT_DIR}"
   docker run -d --name "${CONTAINER}" --restart unless-stopped \
+    --add-host host.docker.internal:host-gateway \
     -p "${PORT}:18080" \
     -v "${DOCKER_SOCKET}:/var/run/docker.sock" \
     -v "${DATA_DIR}:/data/flowpilot" \

@@ -17,6 +17,13 @@ export interface Instance {
   models: number
   createdAt: string
   uptime: string
+  // 真实模式下由后端代理探测的 ComfyUI 制图队列摘要。
+  comfy?: {
+    reachable: boolean
+    queueRunning: number
+    queuePending: number
+    comfyuiVersion?: string
+  }
 }
 
 export interface ModelItem {

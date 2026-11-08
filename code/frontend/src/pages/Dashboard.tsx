@@ -39,7 +39,13 @@ export function Dashboard({ instances, models, tasks, onNavigate, onCreate, onAd
     <div className="mt-5 grid gap-5 xl:grid-cols-[1.45fr_1fr]">
       <Panel>
         <PanelHeader title="实例概览" description="最近创建的 ComfyUI 实例" action={<TextButton onClick={() => onNavigate('instances')}>全部实例</TextButton>} />
-        <div className="overflow-x-auto"><table className="data-table min-w-[620px]"><thead><tr><th>实例</th><th>状态</th><th>GPU</th><th>端口</th></tr></thead><tbody>{instances.slice(0, 3).map((item) => <tr key={item.id}><td><div className="font-medium text-slate-800">{item.name}</div><div className="mt-1 text-xs text-slate-500">{item.version}</div></td><td><StatusBadge status={item.status} /></td><td>GPU {item.gpu}</td><td className="font-mono text-xs">{item.port}</td></tr>)}</tbody></table></div>
+        <div className="overflow-x-auto"><table className="data-table min-w-[720px]"><thead><tr><th>实例</th><th>状态</th><th>GPU</th><th>端口</th><th>制图任务</th></tr></thead><tbody>{instances.slice(0, 3).map((item) => <tr key={item.id}><td><div className="font-medium text-slate-800">{item.name}</div><div className="mt-1 text-xs text-slate-500">{item.version}</div></td><td><StatusBadge status={item.status} /></td><td>GPU {item.gpu}</td><td className="font-mono text-xs">{item.port}</td><td>{item.status === 'running'
+          ? item.comfy
+            ? item.comfy.reachable
+              ? <span className="text-sm text-slate-800">{item.comfy.queueRunning > 0 || item.comfy.queuePending > 0 ? <>运行 <strong className="text-teal-700">{item.comfy.queueRunning}</strong> · 排队 <strong>{item.comfy.queuePending}</strong></> : <span className="text-slate-500">空闲</span>}</span>
+              : <span className="text-xs text-slate-400">服务启动中…</span>
+            : <span className="text-xs text-slate-400">探测中…</span>
+          : <span className="text-xs text-slate-400">—</span>}</td></tr>)}</tbody></table></div>
       </Panel>
       <Panel>
         <PanelHeader title="最近任务" description="部署和模型任务动态" action={<TextButton onClick={() => onNavigate('tasks')}>任务中心</TextButton>} />

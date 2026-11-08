@@ -1,11 +1,14 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/ghoul02015/flowpilot/internal/docker"
@@ -18,7 +21,7 @@ func newTestHandler(t *testing.T, instances *instance.Manager) http.Handler {
 	t.Helper()
 	return New(t.TempDir(), docker.NewClient("/unused/docker.sock"),
 		hardware.NewCollector(hardware.Config{ProcRoot: t.TempDir(), HostRoot: t.TempDir(), DataDir: t.TempDir(), NvidiaSMIBin: ""}),
-		instances, nil, nil, nil)
+		instances, nil, nil, nil, "")
 }
 
 func TestHealth(t *testing.T) {
@@ -80,7 +83,7 @@ func TestHardwareEndpoint(t *testing.T) {
 }
 
 func TestHardwareEndpointWithoutCollector(t *testing.T) {
-	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, nil, nil, nil)
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, nil, nil, nil, "")
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/hardware", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -108,7 +111,7 @@ func TestModelsEndpointLifecycle(t *testing.T) {
 	if err := os.WriteFile(target, []byte("weights"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, model.NewManager(root), nil, nil)
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, model.NewManager(root), nil, nil, "")
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/models", nil)
 	response := httptest.NewRecorder()
@@ -149,5 +152,80 @@ func TestModelsEndpointWithoutManager(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected status 503, got %d", response.Code)
+	}
+}
+
+// 实例 ComfyUI 状态代理：运行中的实例返回队列摘要与版本，
+// 未运行实例不发起探测、reachable=false。
+type fakeInstanceDocker struct {
+	containers []docker.Container
+}
+
+func (f *fakeInstanceDocker) Containers(context.Context) ([]docker.Container, error) {
+	return f.containers, nil
+}
+func (f *fakeInstanceDocker) ImageExists(context.Context, string) (bool, error) { return true, nil }
+func (f *fakeInstanceDocker) CreateContainer(context.Context, string, any) (string, error) {
+	return "", nil
+}
+func (f *fakeInstanceDocker) StartContainer(context.Context, string) error        { return nil }
+func (f *fakeInstanceDocker) StopContainer(context.Context, string, int) error    { return nil }
+func (f *fakeInstanceDocker) RemoveContainer(context.Context, string, bool) error { return nil }
+
+func TestComfyStatusEndpoint(t *testing.T) {
+	comfy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/queue":
+			_, _ = w.Write([]byte(`{"queue_running":[["0","p1"],["1","p2"]],"queue_pending":[["2","p3"]]}`))
+		case "/system_stats":
+			_, _ = w.Write([]byte(`{"system":{"comfyui_version":"0.44.0"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer comfy.Close()
+	comfyPort, _ := strconv.Atoi(strings.TrimPrefix(comfy.URL, "http://127.0.0.1:"))
+
+	fake := &fakeInstanceDocker{containers: []docker.Container{
+		{ID: "abc", Names: []string{"/flowpilot-comfyui-draw"}, State: "running",
+			Labels: map[string]string{
+				"flowpilot.instance":      "true",
+				"flowpilot.instance.name": "draw",
+				"flowpilot.instance.gpu":  "0",
+				"flowpilot.instance.port": strconv.Itoa(comfyPort),
+			}},
+		{ID: "def", Names: []string{"/flowpilot-comfyui-rest"}, State: "exited",
+			Labels: map[string]string{
+				"flowpilot.instance":      "true",
+				"flowpilot.instance.name": "rest",
+				"flowpilot.instance.gpu":  "0",
+				"flowpilot.instance.port": "19999",
+			}},
+	}}
+	manager := instance.NewManager(fake, func() int { return 1 }, "/host/data", "comfyui:test", 8188, "", "", "")
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, manager, nil, nil, nil, "127.0.0.1")
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/instances/draw/comfy/status", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", response.Code)
+	}
+	var status comfyStatusResponse
+	if err := json.NewDecoder(response.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	if !status.Reachable || status.QueueRunning != 2 || status.QueuePending != 1 || status.ComfyVersion != "0.44.0" {
+		t.Fatalf("unexpected comfy status: %+v", status)
+	}
+
+	restRequest := httptest.NewRequest(http.MethodGet, "/api/v1/instances/rest/comfy/status", nil)
+	restResponse := httptest.NewRecorder()
+	handler.ServeHTTP(restResponse, restRequest)
+	var restStatus comfyStatusResponse
+	_ = json.NewDecoder(restResponse.Body).Decode(&restStatus)
+	if restStatus.Reachable || restStatus.InstanceStatus != "stopped" {
+		t.Fatalf("stopped instance must not be probed: %+v", restStatus)
 	}
 }

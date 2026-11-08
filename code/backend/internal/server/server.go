@@ -3,12 +3,16 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ghoul02015/flowpilot/internal/docker"
 	"github.com/ghoul02015/flowpilot/internal/download"
@@ -18,20 +22,31 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/model"
 )
 
-const Version = "0.0.4.1"
+const Version = "0.0.5.0"
 
 type Handler struct {
-	docker    *docker.Client
-	staticDir string
-	hardware  *hardware.Collector
-	instances *instance.Manager
-	models    *model.Manager
-	images    *image.Puller
-	downloads *download.Manager
+	docker       *docker.Client
+	staticDir    string
+	hardware     *hardware.Collector
+	instances    *instance.Manager
+	models       *model.Manager
+	images       *image.Puller
+	downloads    *download.Manager
+	comfyGateway string
+	comfyClient  *http.Client
 }
 
-func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imagePuller *image.Puller, downloadManager *download.Manager) http.Handler {
-	handler := &Handler{docker: dockerClient, staticDir: staticDir, hardware: hardwareCollector, instances: instanceManager, models: modelManager, images: imagePuller, downloads: downloadManager}
+func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imagePuller *image.Puller, downloadManager *download.Manager, comfyGateway string) http.Handler {
+	if comfyGateway == "" {
+		comfyGateway = "host.docker.internal"
+	}
+	handler := &Handler{
+		docker: dockerClient, staticDir: staticDir, hardware: hardwareCollector, instances: instanceManager,
+		models: modelManager, images: imagePuller, downloads: downloadManager,
+		comfyGateway: comfyGateway,
+		// ComfyUI 状态探测是秒级接口，必须有整体超时，避免拖住轮询。
+		comfyClient: &http.Client{Timeout: 4 * time.Second},
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", handler.health)
 	mux.HandleFunc("GET /api/v1/system/info", handler.systemInfo)
@@ -44,6 +59,7 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("POST /api/v1/instances/{name}/stop", handler.instanceAction("stop"))
 	mux.HandleFunc("POST /api/v1/instances/{name}/restart", handler.instanceAction("restart"))
 	mux.HandleFunc("DELETE /api/v1/instances/{name}", handler.deleteInstance)
+	mux.HandleFunc("GET /api/v1/instances/{name}/comfy/status", handler.comfyStatus)
 	mux.HandleFunc("GET /api/v1/models", handler.listModels)
 	mux.HandleFunc("DELETE /api/v1/models", handler.deleteModel)
 	mux.HandleFunc("GET /api/v1/images/check", handler.checkImage)
@@ -155,6 +171,73 @@ func (h *Handler) instanceAction(action string) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, updated)
 	}
+}
+
+// comfyStatusResponse 是实例 ComfyUI 制图队列的摘要视图。
+type comfyStatusResponse struct {
+	Reachable      bool   `json:"reachable"`
+	InstanceStatus string `json:"instanceStatus"`
+	QueueRunning   int    `json:"queueRunning"`
+	QueuePending   int    `json:"queuePending"`
+	ComfyVersion   string `json:"comfyuiVersion,omitempty"`
+}
+
+// comfyStatus 通过实例映射的宿主机端口探测其 ComfyUI 服务，
+// 返回制图队列摘要（运行中／排队数）与版本；实例未运行或
+// 服务未就绪时 reachable=false，界面据此刻意降级展示。
+func (h *Handler) comfyStatus(w http.ResponseWriter, r *http.Request) {
+	if h.instances == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "实例管理未启用"})
+		return
+	}
+	target, err := h.instances.Get(r.Context(), r.PathValue("name"))
+	if err != nil {
+		h.writeInstanceError(w, err, "读取实例失败")
+		return
+	}
+	result := comfyStatusResponse{InstanceStatus: target.Status}
+	if target.Status != "running" {
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+	base := "http://" + h.comfyGateway + ":" + strconv.Itoa(target.Port)
+	if body, err := h.comfyGet(base + "/queue"); err == nil {
+		var queue struct {
+			QueueRunning []json.RawMessage `json:"queue_running"`
+			QueuePending []json.RawMessage `json:"queue_pending"`
+		}
+		if json.Unmarshal(body, &queue) == nil {
+			result.Reachable = true
+			result.QueueRunning = len(queue.QueueRunning)
+			result.QueuePending = len(queue.QueuePending)
+		}
+	}
+	if result.Reachable {
+		if body, err := h.comfyGet(base + "/system_stats"); err == nil {
+			var stats struct {
+				System struct {
+					ComfyuiVersion string `json:"comfyui_version"`
+				} `json:"system"`
+			}
+			if json.Unmarshal(body, &stats) == nil {
+				result.ComfyVersion = stats.System.ComfyuiVersion
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// comfyGet 发起一次带长度上限的 GET，返回响应体。
+func (h *Handler) comfyGet(rawURL string) ([]byte, error) {
+	response, err := h.comfyClient.Get(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ComfyUI 返回 HTTP %d", response.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(response.Body, 1<<20))
 }
 
 func (h *Handler) deleteInstance(w http.ResponseWriter, r *http.Request) {
