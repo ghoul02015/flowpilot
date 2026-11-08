@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.6.1') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.6.2') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
@@ -81,7 +81,7 @@ try {
     await screenshot('01-hardware-unavailable')
   }
 
-  // 全站不得出现演示数据标识（0.0.6.1 起移除全部模拟数据）。
+  // 全站不得出现演示数据标识（0.0.5.1 起移除全部模拟数据）。
   const bodyText = await page.evaluate(() => document.body.innerText)
   for (const marker of ['重置演示数据', '演示机型', '本地模拟数据', 'Demo ·', '模拟打开', '演示数据']) {
     if (bodyText.includes(marker)) throw new Error(`页面仍包含演示数据标识：${marker}`)
@@ -228,7 +228,7 @@ try {
     await page.getByText('暂无 ComfyUI 实例', { exact: true }).waitFor()
     check('实例列表空态展示（无演示数据）')
   } else {
-    throw new Error('实例接口不可用：0.0.6.1 起页面仅支持真实后端，请确认平台服务已启动')
+    throw new Error('实例接口不可用：0.0.5.1 起页面仅支持真实后端，请确认平台服务已启动')
   }
 
   // 模型中心：接口可用时验证真实仓库扫描与删除，否则走 Demo 流程。
@@ -271,7 +271,7 @@ try {
       await screenshot('03-models-real')
     }
 
-    // 模型市场链路（0.0.6.1）：目录接口 → 界面筛选 → 选择 SDXL Offset LoRA（约 50 MB）
+    // 模型市场链路（0.0.6.0）：目录接口 → 界面筛选 → 选择 SDXL Offset LoRA（约 50 MB）
     // 直接 ModelScope 下载 → 写入共享仓库 → 界面删除。
     const catalogResponse = await page.request.get(`${baseURL}/api/v1/models/catalog`)
     const catalogBody = catalogResponse.ok() ? await catalogResponse.json() : null
@@ -302,6 +302,17 @@ try {
 
     // 界面在线搜索：切到 ModelScope 源 → 搜索 → 展开 Comfy-Org/MiniMax-H3 → 权重文件带大小与类别。
     await marketDialog.getByTestId('source-tab-modelscope').click()
+    // 全词搜索回归（0.0.6.2 修复：周董实测搜 Minimax 空结果，疑似源站风控间歇返回空，后端自动重试一次）
+    await marketDialog.getByPlaceholder(/在 ModelScope 搜索模型仓库/).fill('Minimax')
+    await marketDialog.getByRole('button', { name: '在线搜索' }).click()
+    await marketDialog.getByTestId('online-repo-Comfy-Org/MiniMax-H3').waitFor({ timeout: 30000 })
+    check('全词搜索 Minimax 命中（大小写不敏感）')
+    // 弹窗横向溢出回归（0.0.6.2 修复：grid 子项 min-width:auto 被长文件名撑破）
+    await marketDialog.getByTestId('online-repo-Comfy-Org/MiniMax-H3').getByRole('button').first().click()
+    await marketDialog.getByText('minimax_h3_fl2va_pruned_w6a8.safetensors').waitFor({ timeout: 30000 })
+    const dialogMetrics = await marketDialog.evaluate((el) => ({ clientWidth: el.clientWidth, scrollWidth: el.scrollWidth }))
+    if (dialogMetrics.scrollWidth > dialogMetrics.clientWidth + 1) throw new Error(`弹窗横向溢出：scrollWidth=${dialogMetrics.scrollWidth} > clientWidth=${dialogMetrics.clientWidth}`)
+    check('弹窗无横向溢出')
     await marketDialog.getByPlaceholder(/在 ModelScope 搜索模型仓库/).fill('MiniMax-H3')
     await marketDialog.getByRole('button', { name: '在线搜索' }).click()
     const minimaxRepo = marketDialog.getByTestId('online-repo-Comfy-Org/MiniMax-H3')
@@ -426,7 +437,7 @@ try {
     if (!importRemoved) throw new Error('导入文件删除后仍在仓库中')
     check('导入文件界面删除')
   } else {
-    throw new Error('模型接口不可用：0.0.6.1 起页面仅支持真实后端，请确认平台服务已启动')
+    throw new Error('模型接口不可用：0.0.5.1 起页面仅支持真实后端，请确认平台服务已启动')
   }
 
   if (realModelsAvailable) {

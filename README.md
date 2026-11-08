@@ -2,7 +2,7 @@
 
 面向 GPU 服务器的轻量化 ComfyUI 一体化部署与管理平台。
 
-- 当前版本：`0.0.6.1`
+- 当前版本：`0.0.6.2`
 - 当前阶段：实例管理（真实 Docker 生命周期＋GPU 分配）、模型中心（真实仓库扫描／删除）、镜像预置（检查＋一键拉取＋默认镜像自动探测与挂载自适应）、下载引擎（URL 下载＋本地导入＋断点续传＋SHA256 校验）已落地，任务持久化（重启恢复＋续传）与 ComfyUI 制图状态代理（队列进度＋一键跳转真实应用）上线；界面无演示数据、完全由真实后端驱动；0.0.6.x 上线模型市场（19 条主流模型推荐目录＋ModelScope／HF 双源在线搜索，源站更新即所见，选中即下载）；DGX Spark 实测完成"安装→建实例→下模型→出图"全闭环，真实硬件采集、离线安装包与一键卸载可用
 - 核心目标：一次安装、Web 管理、Docker 部署、模型共享、数据持久化。
 
@@ -13,7 +13,7 @@ cd code
 ./scripts/demo-docker.sh up
 ```
 
-访问 `http://localhost:18080`。容器名为 `flowpilot-web-demo`，镜像为 `flowpilot-web:0.0.6.1`。
+访问 `http://localhost:18080`。容器名为 `flowpilot-web-demo`，镜像为 `flowpilot-web:0.0.6.2`。
 
 ## 离线安装与一键卸载（生产交付）
 
@@ -22,7 +22,7 @@ cd code
 code/scripts/package-release.sh
 
 # 目标服务器上安装（用户目录、无需 sudo、不修改系统包）
-tar -xzf flowpilot-0.0.6.1-arm64.tar.gz -C /tmp/flowpilot-install --strip-components=1
+tar -xzf flowpilot-0.0.6.2-arm64.tar.gz -C /tmp/flowpilot-install --strip-components=1
 /tmp/flowpilot-install/scripts/install.sh
 
 # 一键卸载（只删除 FlowPilot 容器、镜像和用户目录，不碰其他业务容器）
@@ -58,7 +58,7 @@ Go 服务统一提供前端页面和 `/api/v1/` 接口。系统管理页读取�
 - [MVP 产品需求文档](docs/mvp/FlowPilot_MVP_PRD.md)
 - [项目协作与版本管理规则](PROJECT_RULES.md)
 - [版本变更日志](CHANGELOG.md)
-- [最新对话上下文](context/conversations/2026-11-08-016-模型市场在线源.md)
+- [最新对话上下文](context/conversations/2026-11-08-017-模型市场bug修复.md)
 
 ## 修改要求
 

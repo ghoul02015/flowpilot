@@ -1,7 +1,7 @@
 # 慧浪智算·FlowPilot MVP 产品需求文档
 
 > 文档性质：立项评审稿
-> 项目版本：0.0.6.1
+> 项目版本：0.0.6.2
 > 产品阶段：MVP
 > 编写日期：2026-11-04
 > 产品品牌：慧浪智算
@@ -593,7 +593,7 @@ URL 下载表单：
 - 已入库条目自动标注避免重复下载；新增 Text Encoders／Diffusion Models 类别目录。
 - DGX Spark 实机 42 项远程回归全部通过，含 49.5MB 模型 ModelScope 真实下载→入库→界面删除全链路；修复回归选择器歧义与界面删除时序竞争两项问题。
 
-### 9.14 模型市场在线源（0.0.6.1 已落地）
+### 9.14 模型市场在线源（0.0.6.2 已落地）
 
 - 源选项与连接状态：推荐目录／ModelScope／HF 镜像三源切换，在线源实时状态点（可达性＋延迟），`GET /api/v1/sources/status` 并发探测 60 秒缓存。
 - 目录在线化（免维护）：`GET /api/v1/models/online/search` 代理 ModelScope（PUT dolphin/models，抓包实测）与 HF 镜像全站搜索，`GET /api/v1/models/online/files` 递归列出仓库权重文件（真实大小降序）；源站更新即所见，平台无需发版。

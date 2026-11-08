@@ -217,6 +217,20 @@ func (m *Manager) SearchOnline(ctx context.Context, source, query string) ([]Onl
 }
 
 func (m *Manager) searchModelScope(ctx context.Context, query string) ([]OnlineRepo, error) {
+	// ModelScope 风控偶尔会返回 Code=200 但空列表；空结果自动重试一次再收口。
+	repos, err := m.searchModelScopeOnce(ctx, query)
+	if err == nil && len(repos) == 0 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(600 * time.Millisecond):
+		}
+		repos, err = m.searchModelScopeOnce(ctx, query)
+	}
+	return repos, err
+}
+
+func (m *Manager) searchModelScopeOnce(ctx context.Context, query string) ([]OnlineRepo, error) {
 	payload := fmt.Sprintf(`{"PageSize":20,"PageNumber":1,"SortBy":"Default","Target":"","SingleCriterion":[],"Name":%s,"Criterion":[]}`, mustJSON(query))
 	request, err := http.NewRequestWithContext(ctx, http.MethodPut, msAPIBase+"/api/v1/dolphin/models", strings.NewReader(payload))
 	if err != nil {
@@ -246,6 +260,8 @@ func (m *Manager) searchModelScope(ctx context.Context, query string) ([]OnlineR
 	}
 	return repos, nil
 }
+
+// 前端兜底提示：空结果时提示换短关键词（源站分词对长词更严格）。
 
 func (m *Manager) searchHF(ctx context.Context, query string) ([]OnlineRepo, error) {
 	target := fmt.Sprintf("%s/api/models?search=%s&limit=20", hfAPIBase, url.QueryEscape(query))

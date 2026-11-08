@@ -141,7 +141,7 @@ function MarketPanel({ onMarketDownload, onOnlineDownload, existingPaths }: { on
     { key: 'hf', label: 'HF 镜像', statusId: 'hf' },
   ]
 
-  return <div>
+  return <div className="min-w-0">
     {/* 源选择：推荐目录（内置＋在线刷新）／ModelScope／HF 镜像，后两者实时显示连接状态 */}
     <div className="mb-3 grid grid-cols-3 gap-2 rounded-lg bg-slate-100 p-1">
       {sources.map(({ key, label, statusId }) => <button
@@ -204,7 +204,7 @@ function MarketPanel({ onMarketDownload, onOnlineDownload, existingPaths }: { on
       {!results && !searchError && !searching && <p className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">输入模型名（如 MiniMax-H3、Wan2.1、FLUX）回车，实时搜索 {source === 'modelscope' ? 'ModelScope' : 'HF 镜像'} 全站仓库。</p>}
       {searching && <div className="flex items-center justify-center gap-2 py-12 text-sm text-slate-500"><LoaderCircle className="size-4 animate-spin" />正在搜索 {source === 'modelscope' ? 'ModelScope' : 'HF 镜像'}…</div>}
       {results && !searching && <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
-        {results.length === 0 && <p className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">未找到相关仓库，换个关键词试试。</p>}
+        {results.length === 0 && <p className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">未找到相关仓库。源站分词对长词更严格，可尝试更短的关键词（如把「MiniMax-H3」换成「MiniMax」），或切换到另一个源再试。</p>}
         {results.map((repo) => {
           const expanded = expandedRepo === repo.repo
           const files = filesByRepo[repo.repo]
