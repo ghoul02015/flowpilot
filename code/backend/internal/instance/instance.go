@@ -26,6 +26,8 @@ const (
 	labelPort         = "flowpilot.instance.port"
 	labelAutoStart    = "flowpilot.instance.autostart"
 	labelModelsTarget = "flowpilot.instance.models-target"
+	labelOutputsTarget = "flowpilot.instance.outputs-target"
+	labelWorkflowsTarget = "flowpilot.instance.workflows-target"
 	containerPrefix   = "flowpilot-comfyui-"
 	stopTimeoutSecond = 10
 )
@@ -60,15 +62,19 @@ type Instance struct {
 	Port          int       `json:"port"`
 	AutoStart     bool      `json:"autoStart"`
 	ModelsTarget  string    `json:"modelsTarget"`
+	OutputsTarget string    `json:"outputsTarget"`
+	WorkflowsTarget string `json:"workflowsTarget"`
 	CreatedAt     time.Time `json:"createdAt"`
 }
 
 // Defaults 是创建实例时的推荐默认值，随列表接口返回。
 type Defaults struct {
-	Image         string `json:"image"`
-	ContainerPort int    `json:"containerPort"`
-	DataDir       string `json:"dataDir"`
-	ModelsTarget  string `json:"modelsTarget"`
+	Image           string `json:"image"`
+	ContainerPort   int    `json:"containerPort"`
+	DataDir         string `json:"dataDir"`
+	ModelsTarget    string `json:"modelsTarget"`
+	OutputsTarget   string `json:"outputsTarget"`
+	WorkflowsTarget string `json:"workflowsTarget"`
 }
 
 // DockerAPI 是实例管理依赖的 Docker 操作子集，便于测试替换。
@@ -125,7 +131,7 @@ func NewManager(dockerClient DockerAPI, gpuCount GPUCounter, hostDataDir, defaul
 
 // Defaults 返回创建表单的推荐默认值。
 func (m *Manager) Defaults() Defaults {
-	return Defaults{Image: m.defaultImage, ContainerPort: m.containerPort, DataDir: m.hostDataDir, ModelsTarget: m.modelsTarget}
+	return Defaults{Image: m.defaultImage, ContainerPort: m.containerPort, DataDir: m.hostDataDir, ModelsTarget: m.modelsTarget, OutputsTarget: m.outputsTarget, WorkflowsTarget: m.workflowsTarget}
 }
 
 // List 返回全部实例，按创建时间倒序。
@@ -195,6 +201,8 @@ func (m *Manager) Create(ctx context.Context, spec Spec) (Instance, error) {
 		labelPort:         strconv.Itoa(spec.Port),
 		labelAutoStart:    strconv.FormatBool(spec.AutoStart),
 		labelModelsTarget: spec.ModelsTarget,
+		labelOutputsTarget: spec.OutputsTarget,
+		labelWorkflowsTarget: spec.WorkflowsTarget,
 	}
 	portKey := fmt.Sprintf("%d/tcp", spec.ContainerPort)
 	hostConfig := map[string]any{
@@ -360,6 +368,8 @@ func fromContainer(container docker.Container) Instance {
 		Port:          port,
 		AutoStart:     container.Labels[labelAutoStart] == "true",
 		ModelsTarget:  container.Labels[labelModelsTarget],
+		OutputsTarget: container.Labels[labelOutputsTarget],
+		WorkflowsTarget: container.Labels[labelWorkflowsTarget],
 		CreatedAt:     time.Unix(container.Created, 0),
 	}
 }

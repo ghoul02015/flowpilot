@@ -24,7 +24,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/model"
 )
 
-const Version = "0.0.6.3"
+const Version = "0.0.7.0"
 
 type Handler struct {
 	docker       *docker.Client
@@ -71,6 +71,9 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("GET /api/v1/models/online/search", handler.onlineSearch)
 	mux.HandleFunc("GET /api/v1/models/online/files", handler.onlineFiles)
 	mux.HandleFunc("GET /api/v1/images/check", handler.checkImage)
+	mux.HandleFunc("GET /api/v1/images/local", handler.localImages)
+	mux.HandleFunc("GET /api/v1/images/catalog", handler.imageCatalog)
+	mux.HandleFunc("GET /api/v1/images/install-script", handler.installScript)
 	mux.HandleFunc("GET /api/v1/images/pull", handler.pullStatus)
 	mux.HandleFunc("POST /api/v1/images/pull", handler.startPull)
 	mux.HandleFunc("GET /api/v1/downloads", handler.listDownloads)
@@ -391,6 +394,46 @@ func (h *Handler) checkImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"image": name, "exists": exists})
+}
+
+// localImages 返回本机 Docker 镜像列表（仓库标签、大小、创建时间）。
+func (h *Handler) localImages(w http.ResponseWriter, r *http.Request) {
+	images, err := h.docker.Images(r.Context())
+	if err != nil {
+		slog.Warn("list local images failed", "error", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "无法读取本机镜像列表", "detail": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"images": images})
+}
+
+// imageCatalog 返回预置镜像构建配方（按显卡类型区分）。
+func (h *Handler) imageCatalog(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"recipes": image.Recipes()})
+}
+
+// installScript 按向导参数渲染一键安装脚本并以下载形式返回。
+// 查询参数：variant（auto 或配方 ID）、image、ref、pip、manager。
+func (h *Handler) installScript(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	params := image.InstallParams{
+		Variant:     query.Get("variant"),
+		ImageName:   query.Get("image"),
+		ComfyUIRef:  query.Get("ref"),
+		PipIndexURL: query.Get("pip"),
+		WithManager: query.Get("manager"),
+	}
+	script, err := image.InstallScript(params)
+	if err != nil {
+		slog.Warn("render install script failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "生成安装脚本失败", "detail": err.Error()})
+		return
+	}
+	params.Validate()
+	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename=install-comfyui-image.sh")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, script)
 }
 
 func (h *Handler) pullStatus(w http.ResponseWriter, _ *http.Request) {

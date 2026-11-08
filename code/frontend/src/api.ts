@@ -98,6 +98,8 @@ export interface RealInstance {
   gpu: number
   port: number
   autoStart: boolean
+  modelsTarget?: string
+  outputsTarget?: string
   createdAt: string
 }
 
@@ -105,6 +107,9 @@ export interface InstanceDefaults {
   image: string
   containerPort: number
   dataDir: string
+  modelsTarget?: string
+  outputsTarget?: string
+  workflowsTarget?: string
 }
 
 export interface InstanceListResponse {
@@ -119,6 +124,9 @@ export interface CreateInstanceSpec {
   port: number
   containerPort: number
   autoStart: boolean
+  modelsTarget?: string
+  outputsTarget?: string
+  workflowsTarget?: string
 }
 
 async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
@@ -183,6 +191,47 @@ export interface ImagePullStatus {
   state: 'idle' | 'pulling' | 'done' | 'error'
   message: string
   updatedAt: string
+}
+
+// LocalImage 是本机 Docker 镜像摘要（创建实例向导的镜像候选）。
+export interface LocalImage {
+  Id: string
+  RepoTags: string[]
+  Size: number
+  Created: number
+}
+
+export async function getLocalImages(): Promise<LocalImage[]> {
+  const body = await getJSON<{ images: LocalImage[] }>('/api/v1/images/local', AbortSignal.timeout(8000))
+  return body.images
+}
+
+// ImageRecipe 是一套 ComfyUI 镜像构建配方（按显卡类型区分，本机构建）。
+export interface ImageRecipe {
+  id: string
+  label: string
+  image: string
+  gpu: 'nvidia' | 'amd' | 'cpu'
+  cuda: string
+  arch: string
+  minSM: string
+  description: string
+}
+
+export async function getImageCatalog(): Promise<ImageRecipe[]> {
+  const body = await getJSON<{ recipes: ImageRecipe[] }>('/api/v1/images/catalog', AbortSignal.timeout(8000))
+  return body.recipes
+}
+
+// installScriptURL 生成一键安装脚本的下载地址（参数同向导可选安装项）。
+export function installScriptURL(params: { variant?: string; image?: string; ref?: string; pip?: string; manager?: string }): string {
+  const query = new URLSearchParams()
+  if (params.variant) query.set('variant', params.variant)
+  if (params.image) query.set('image', params.image)
+  if (params.ref) query.set('ref', params.ref)
+  if (params.pip) query.set('pip', params.pip)
+  if (params.manager) query.set('manager', params.manager)
+  return `/api/v1/images/install-script?${query.toString()}`
 }
 
 export async function getModels(signal?: AbortSignal): Promise<ModelReport> {

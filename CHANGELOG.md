@@ -2,6 +2,30 @@
 
 所有重要变更均记录于此。详细内容见 `context/changes/`。
 
+## 0.0.7.0 — 2026-11-08（实例镜像可选＋多显卡一键安装脚本＋挂载路径向导化）
+
+### 背景与评估（周董要求：优化 ComfyUI 实例模块）
+
+- 评估确认四个缺口：新建实例无法选择镜像版本；纯净机器缺少一键安装路径且未区分显卡；模型仓库／导出资产挂载路径未在界面暴露；安装参数无法通过 UI 向导选择。参考 DGX Spark 实战脚本（多通道克隆、先装 CUDA 版 torch、pip 缓存挂载、国内加速源）固化为平台能力；模型下载明确不进入安装脚本，由模型中心统一负责。
+
+### 新增
+
+- **本机镜像列表接口**：`GET /api/v1/images/local`（Docker `/images/json`），向导「本机已有镜像」下拉展示标签与体积。
+- **镜像构建配方目录**：`GET /api/v1/images/catalog`，六套配方——NVIDIA cu130（GB10/sm_121，DGX Spark）、cu128（sm_100/120）、cu126（sm_80–90）、cu121（旧卡兼容）、AMD ROCm 6.2、纯 CPU。
+- **一键安装脚本生成**：`GET /api/v1/images/install-script`，按向导参数（显卡配方／镜像名／ComfyUI 版本／pip 源／是否内置 Manager）渲染脚本并附件下载；脚本自动检测显卡与架构、安装 Docker 与 NVIDIA Container Toolkit、配置国内镜像加速、多通道克隆 ComfyUI 源码、生成 Dockerfile 并构建，全程不下载模型；参数白名单校验防脚本注入。独立分发版同步落地 `code/scripts/install-comfyui-image.sh`。
+- **创建向导升级**：镜像来源三选一（本机镜像／预置配方／手动输入）；镜像缺失时可在线拉取或展开「一键安装脚本参数」直接下载定制脚本；新增「高级设置」折叠区——模型仓库（只读）／输出（导出资产）／工作流挂载目标与容器端口均可手动设置；确认页完整展示宿主机共享目录 → 容器挂载映射与导出资产路径。
+- **实例详情真实挂载回显**：输出／工作流挂载目标写入容器标签并在实例详情中展示。
+
+### 修改
+
+- `instance.Defaults` 增加 `outputsTarget`／`workflowsTarget`；实例标签新增 `flowpilot.instance.outputs-target`／`flowpilot.instance.workflows-target`（旧实例无标签时界面回退默认文案，兼容）。
+
+### 验证
+
+- Go 九包测试通过（新增 `catalog_test.go`：配方覆盖、脚本渲染、注入参数清理断言）；渲染脚本 `bash -n` 语法校验通过；前端 `tsc + vite build` 通过。
+
+详细记录：[0.0.7.0](context/changes/0.0.7.0.md)
+
 ## 0.0.6.3 — 2026-11-08（搜索习惯优化：重试加固＋模糊变体＋仓库直达）
 
 ### 背景与评估（周董要求：从用户搜索习惯出发评估是否需要模糊搜索）

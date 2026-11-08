@@ -66,7 +66,8 @@ export function Instances({ instances, gpuNames, realMode, onCreate, onAction, o
           ['访问端口', String(detail.port)],
           ['制图任务', detail.status !== 'running' ? '实例未运行' : detail.comfy ? (detail.comfy.reachable ? `运行 ${detail.comfy.queueRunning} · 排队 ${detail.comfy.queuePending}${detail.comfy.comfyuiVersion ? ` · ComfyUI ${detail.comfy.comfyuiVersion}` : ''}` : '服务启动中…') : '探测中…'],
           ['创建时间', detail.createdAt],
-          ['数据目录', '/data/flowpilot/shared（共享仓库）'],
+          ['模型仓库挂载', detail.modelsTarget ? `共享仓库 → ${detail.modelsTarget}（只读）` : '共享仓库（默认挂载）'],
+          ['导出资产路径', detail.outputsTarget ? `共享 outputs → ${detail.outputsTarget}` : '共享 outputs 目录'],
           ['容器名称', `flowpilot-comfyui-${detail.name}`],
         ].map(([term, value]) => <div key={term} className={term.includes('目录') || term.includes('容器') ? 'col-span-2' : ''}><dt className="text-xs text-slate-500">{term}</dt><dd className="mt-1 break-all font-medium text-slate-800">{value}</dd></div>)}</dl>
         <label className="flex min-h-12 items-center justify-between rounded-lg border border-slate-200 px-4"><span className="text-sm font-medium text-slate-700">开机自动启动（创建时指定，由容器重启策略执行）</span><input type="checkbox" className="size-4 accent-teal-700" checked={detail.autoStart} disabled readOnly /></label>

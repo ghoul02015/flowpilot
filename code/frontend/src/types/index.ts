@@ -16,6 +16,8 @@ export interface Instance {
   autoStart: boolean
   createdAt: string
   uptime: string
+  modelsTarget?: string
+  outputsTarget?: string
   // 由后端代理探测的 ComfyUI 制图队列摘要。
   comfy?: {
     reachable: boolean
@@ -54,6 +56,9 @@ export interface CreateInstanceInput {
   autoStart: boolean
   image?: string
   containerPort?: number
+  modelsTarget?: string
+  outputsTarget?: string
+  workflowsTarget?: string
 }
 
 export interface AddModelInput {

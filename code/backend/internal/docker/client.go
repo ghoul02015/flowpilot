@@ -126,6 +126,23 @@ type ContainerInspectResult struct {
 	} `json:"Config"`
 }
 
+// Image 是本机一个镜像的摘要视图（对应 /images/json 条目）。
+type Image struct {
+	ID       string   `json:"Id"`
+	RepoTags []string `json:"RepoTags"`
+	Size     int64    `json:"Size"`
+	Created  int64    `json:"Created"`
+}
+
+// Images 返回本机全部镜像摘要。
+func (c *Client) Images(ctx context.Context) ([]Image, error) {
+	images := make([]Image, 0)
+	if err := c.getJSON(ctx, "/images/json", &images); err != nil {
+		return nil, fmt.Errorf("list Docker images: %w", err)
+	}
+	return images, nil
+}
+
 // ImageExists 判断镜像是否在本地存在。
 func (c *Client) ImageExists(ctx context.Context, image string) (bool, error) {
 	_, err := c.do(ctx, http.MethodGet, "/images/"+image+"/json", nil)

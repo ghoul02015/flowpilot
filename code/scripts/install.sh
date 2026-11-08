@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.0.6.3"
+VERSION="0.0.7.0"
 IMAGE="flowpilot-web:${VERSION}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
