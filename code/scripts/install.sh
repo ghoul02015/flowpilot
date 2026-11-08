@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.0.3.0"
+VERSION="0.0.4.0"
 IMAGE="flowpilot-web:${VERSION}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -34,7 +34,7 @@ printf '管理端口：%s\n' "${PORT}"
 gzip -t "${IMAGE_TAR}"
 gzip -dc "${IMAGE_TAR}" | docker load
 
-mkdir -p "${INSTALL_HOME}/bin" "${INSTALL_HOME}/releases/${VERSION}" "${INSTALL_HOME}/shared/models" "${INSTALL_HOME}/shared/workflows" "${INSTALL_HOME}/shared/outputs"
+mkdir -p "${INSTALL_HOME}/bin" "${INSTALL_HOME}/releases/${VERSION}" "${INSTALL_HOME}/shared/models" "${INSTALL_HOME}/shared/workflows" "${INSTALL_HOME}/shared/outputs" "${INSTALL_HOME}/import"
 cp "${BUNDLE_DIR}/scripts/uninstall.sh" "${INSTALL_HOME}/bin/flowpilot-uninstall"
 cp "${BUNDLE_DIR}/VERSION" "${INSTALL_HOME}/releases/${VERSION}/VERSION"
 chmod +x "${INSTALL_HOME}/bin/flowpilot-uninstall"
@@ -77,6 +77,36 @@ if [ -f /sys/devices/virtual/dmi/id/product_name ]; then
   HOST_MOUNTS+=(-v /sys/devices/virtual/dmi/id/product_name:/host/dmi/product_name:ro)
 fi
 
+# 默认 ComfyUI 镜像预置策略：优先使用环境变量指定的镜像，
+# 其次探测宿主机已有的 comfyui-h3:spark（慧浪智算 GPU 服务器预装）、
+# comfyui:latest；选中的镜像写入环境变量，作为实例创建的默认镜像。
+COMFYUI_IMAGE="${FLOWPILOT_COMFYUI_IMAGE:-}"
+if [ -z "${COMFYUI_IMAGE}" ]; then
+  for candidate in comfyui-h3:spark comfyui:latest; do
+    if docker image inspect "${candidate}" >/dev/null 2>&1; then
+      COMFYUI_IMAGE="${candidate}"
+      break
+    fi
+  done
+fi
+COMFYUI_ENVS=()
+if [ -n "${COMFYUI_IMAGE}" ] && docker image inspect "${COMFYUI_IMAGE}" >/dev/null 2>&1; then
+  printf 'ComfyUI 默认镜像：%s\n' "${COMFYUI_IMAGE}"
+  COMFYUI_ENVS+=(-e "FLOWPILOT_COMFYUI_IMAGE=${COMFYUI_IMAGE}")
+  # 挂载目标自适应：读取镜像 WorkingDir，非空时将模型/输出/工作流
+  # 共享目录挂到 ComfyUI 标准路径（如 /app/ComfyUI/models），
+  # 使新实例开箱即可看到平台模型库；为空则保留 /data/* 约定。
+  COMFYUI_WORKDIR="$(docker image inspect "${COMFYUI_IMAGE}" --format '{{.Config.WorkingDir}}' 2>/dev/null || true)"
+  if [ -n "${COMFYUI_WORKDIR}" ] && [ "${COMFYUI_WORKDIR}" != "/" ]; then
+    COMFYUI_ENVS+=(-e "FLOWPILOT_COMFYUI_MODELS_TARGET=${COMFYUI_WORKDIR}/models")
+    COMFYUI_ENVS+=(-e "FLOWPILOT_COMFYUI_OUTPUTS_TARGET=${COMFYUI_WORKDIR}/output")
+    COMFYUI_ENVS+=(-e "FLOWPILOT_COMFYUI_WORKFLOWS_TARGET=${COMFYUI_WORKDIR}/user/workflows")
+    printf 'ComfyUI 挂载目标：%s/{models,output,user/workflows}\n' "${COMFYUI_WORKDIR}"
+  fi
+else
+  printf 'ComfyUI 默认镜像：未检测到本地镜像，实例创建时需在界面手动拉取\n'
+fi
+
 docker run -d \
   --name "${CONTAINER_NAME}" \
   --restart unless-stopped \
@@ -85,7 +115,9 @@ docker run -d \
   -p "${PORT}:18080" \
   -v "${DOCKER_SOCKET}:/var/run/docker.sock" \
   -v "${INSTALL_HOME}/shared:/data/flowpilot" \
+  -v "${INSTALL_HOME}/import:/data/import:ro" \
   -e FLOWPILOT_HOST_DATA_DIR="${INSTALL_HOME}/shared" \
+  "${COMFYUI_ENVS[@]}" \
   "${HOST_MOUNTS[@]}" \
   "${GPU_ARGS[@]}" \
   "${IMAGE}" >/dev/null
@@ -95,6 +127,7 @@ FLOWPILOT_VERSION=${VERSION}
 FLOWPILOT_IMAGE=${IMAGE}
 FLOWPILOT_CONTAINER=${CONTAINER_NAME}
 FLOWPILOT_PORT=${PORT}
+FLOWPILOT_COMFYUI_IMAGE=${COMFYUI_IMAGE:-}
 FLOWPILOT_GPU_ARGS=${GPU_ARGS[*]:-}
 EOF
 

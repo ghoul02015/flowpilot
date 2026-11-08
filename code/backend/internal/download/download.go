@@ -36,7 +36,9 @@ var (
 // Task 是下载任务的对外视图。
 type Task struct {
 	ID              string    `json:"id"`
-	URL             string    `json:"url"`
+	Kind            string    `json:"kind"` // download | import
+	URL             string    `json:"url,omitempty"`
+	Source          string    `json:"source,omitempty"` // import 的源文件路径
 	Category        string    `json:"category"`
 	FileName        string    `json:"fileName"`
 	Path            string    `json:"path"`       // 目标相对路径（仓库内）
@@ -52,6 +54,14 @@ type Task struct {
 // Spec 是创建下载任务的请求参数。
 type Spec struct {
 	URL      string `json:"url"`
+	Category string `json:"category"`
+	Name     string `json:"name"`
+	SHA256   string `json:"sha256"`
+}
+
+// ImportSpec 是本地导入任务的请求参数。
+type ImportSpec struct {
+	Path     string `json:"path"` // 服务器文件绝对路径，必须位于允许的导入目录内
 	Category string `json:"category"`
 	Name     string `json:"name"`
 	SHA256   string `json:"sha256"`
@@ -81,21 +91,24 @@ type taskState struct {
 
 // Manager 管理下载任务生命周期。
 type Manager struct {
-	root   string
-	client *http.Client
-	mu     sync.Mutex
-	tasks  map[string]*taskState
-	now    func() time.Time
-	idSeq  int64
+	root       string
+	importDirs []string
+	client     *http.Client
+	mu         sync.Mutex
+	tasks      map[string]*taskState
+	now        func() time.Time
+	idSeq      int64
 }
 
-// NewManager 创建下载任务管理器，root 为模型仓库根目录。
-func NewManager(root string) *Manager {
+// NewManager 创建下载任务管理器，root 为模型仓库根目录，
+// importDirs 为允许本地导入的目录前缀（容器内路径）。
+func NewManager(root string, importDirs []string) *Manager {
 	return &Manager{
-		root:   root,
-		client: &http.Client{}, // 下载可能持续很久，不设整体超时，由 ctx 控制
-		tasks:  make(map[string]*taskState),
-		now:    time.Now,
+		root:       root,
+		importDirs: importDirs,
+		client:     &http.Client{}, // 下载可能持续很久，不设整体超时，由 ctx 控制
+		tasks:      make(map[string]*taskState),
+		now:        time.Now,
 	}
 }
 
@@ -128,13 +141,69 @@ func (m *Manager) Create(spec Spec) (Task, error) {
 	if err != nil {
 		return Task{}, err
 	}
+	return m.register(task)
+}
+
+// CreateImport 校验参数并启动本地导入任务。
+func (m *Manager) CreateImport(spec ImportSpec) (Task, error) {
+	source := filepath.Clean(strings.TrimSpace(spec.Path))
+	if !filepath.IsAbs(source) {
+		return Task{}, &ValidationError{Message: "导入路径必须是绝对路径"}
+	}
+	allowed := false
+	for _, dir := range m.importDirs {
+		cleanDir := filepath.Clean(dir)
+		if source == cleanDir || strings.HasPrefix(source, cleanDir+string(filepath.Separator)) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return Task{}, &ValidationError{Message: fmt.Sprintf("仅允许从以下目录导入：%s", strings.Join(m.importDirs, "、"))}
+	}
+	info, err := os.Stat(source)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Task{}, &NotFoundError{ID: source}
+		}
+		return Task{}, fmt.Errorf("读取导入文件失败：%w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return Task{}, &ValidationError{Message: "导入源必须是普通文件"}
+	}
+
+	name := strings.TrimSpace(spec.Name)
+	if name == "" {
+		name = filepath.Base(source)
+	}
+	relPath, fileName, sum, err := m.buildTarget(spec.Category, name, spec.SHA256)
+	if err != nil {
+		return Task{}, err
+	}
+	return m.register(Task{
+		Kind:       "import",
+		Source:     source,
+		Category:   categoryOf(relPath),
+		FileName:   fileName,
+		Path:       relPath,
+		Status:     "running",
+		TotalBytes: info.Size(),
+		SHA256:     sum,
+		Message:    "正在复制文件",
+		CreatedAt:  m.now(),
+		UpdatedAt:  m.now(),
+	})
+}
+
+// register 登记任务并启动协程。
+func (m *Manager) register(task Task) (Task, error) {
 	m.mu.Lock()
 	for _, state := range m.tasks {
 		// 只有进行中的任务占用目标路径；已完成／失败／取消的历史记录不阻塞重新下载
-		//（仓库中已存在同名文件的情况由 buildTask 单独拦截）。
+		//（仓库中已存在同名文件的情况由 buildTarget 单独拦截）。
 		if state.task.Path == task.Path && (state.task.Status == "running" || state.task.Status == "paused") {
 			m.mu.Unlock()
-			return Task{}, &ConflictError{Message: fmt.Sprintf("已有目标为 %s 的下载任务在进行中", task.Path)}
+			return Task{}, &ConflictError{Message: fmt.Sprintf("已有目标为 %s 的任务在进行中", task.Path)}
 		}
 	}
 	m.idSeq++
@@ -146,41 +215,25 @@ func (m *Manager) Create(spec Spec) (Task, error) {
 	return m.Get(task.ID)
 }
 
-// buildTask 校验请求并生成任务雏形。
+// buildTask 校验下载请求并生成任务雏形。
 func (m *Manager) buildTask(spec Spec) (Task, error) {
 	parsed, err := url.Parse(strings.TrimSpace(spec.URL))
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return Task{}, &ValidationError{Message: "下载地址必须是合法的 http/https URL"}
 	}
-	category := strings.ToLower(strings.TrimSpace(spec.Category))
-	if category == "" {
-		category = "other"
-	}
-	if !categoryPattern.MatchString(category) {
-		return Task{}, &ValidationError{Message: "模型类别仅允许小写字母、数字、下划线和连字符"}
-	}
 	fileName := strings.TrimSpace(spec.Name)
 	if fileName == "" {
 		fileName = path.Base(parsed.Path)
 	}
-	if fileName == "" || fileName == "." || fileName == "/" || strings.ContainsAny(fileName, `/\`) || fileName == ".." || strings.HasPrefix(fileName, ".") {
-		return Task{}, &ValidationError{Message: "模型文件名不合法"}
-	}
-	sum := strings.ToLower(strings.TrimSpace(spec.SHA256))
-	if sum != "" && !sha256Pattern.MatchString(sum) {
-		return Task{}, &ValidationError{Message: "SHA256 校验值必须是 64 位十六进制字符"}
-	}
-	relPath := fileName
-	if category != "other" {
-		relPath = category + "/" + fileName
-	}
-	if _, err := os.Stat(filepath.Join(m.root, filepath.FromSlash(relPath))); err == nil {
-		return Task{}, &ConflictError{Message: fmt.Sprintf("仓库中已存在文件 %s", relPath)}
+	relPath, resolvedName, sum, err := m.buildTarget(spec.Category, fileName, spec.SHA256)
+	if err != nil {
+		return Task{}, err
 	}
 	return Task{
+		Kind:       "download",
 		URL:        parsed.String(),
-		Category:   category,
-		FileName:   fileName,
+		Category:   categoryOf(relPath),
+		FileName:   resolvedName,
 		Path:       relPath,
 		Status:     "running",
 		TotalBytes: -1,
@@ -191,7 +244,42 @@ func (m *Manager) buildTask(spec Spec) (Task, error) {
 	}, nil
 }
 
-// start 启动或恢复下载协程。
+// buildTarget 校验类别、文件名与校验值，返回仓库相对路径。
+func (m *Manager) buildTarget(category, fileName, sum string) (string, string, string, error) {
+	category = strings.ToLower(strings.TrimSpace(category))
+	if category == "" {
+		category = "other"
+	}
+	if !categoryPattern.MatchString(category) {
+		return "", "", "", &ValidationError{Message: "模型类别仅允许小写字母、数字、下划线和连字符"}
+	}
+	if fileName == "" || fileName == "." || fileName == "/" || strings.ContainsAny(fileName, `/\`) || fileName == ".." || strings.HasPrefix(fileName, ".") {
+		return "", "", "", &ValidationError{Message: "模型文件名不合法"}
+	}
+	sum = strings.ToLower(strings.TrimSpace(sum))
+	if sum != "" && !sha256Pattern.MatchString(sum) {
+		return "", "", "", &ValidationError{Message: "SHA256 校验值必须是 64 位十六进制字符"}
+	}
+	relPath := fileName
+	if category != "other" {
+		relPath = category + "/" + fileName
+	}
+	if _, err := os.Stat(filepath.Join(m.root, filepath.FromSlash(relPath))); err == nil {
+		return "", "", "", &ConflictError{Message: fmt.Sprintf("仓库中已存在文件 %s", relPath)}
+	}
+	return relPath, fileName, sum, nil
+}
+
+// categoryOf 从仓库相对路径推导类别名。
+func categoryOf(relPath string) string {
+	parts := strings.SplitN(relPath, "/", 2)
+	if len(parts) == 2 {
+		return parts[0]
+	}
+	return "other"
+}
+
+// start 启动或恢复任务协程。
 func (m *Manager) start(id string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.mu.Lock()
@@ -199,7 +287,12 @@ func (m *Manager) start(id string) {
 	state.cancel = cancel
 	state.running = true
 	state.stopReason = ""
+	kind := state.task.Kind
 	m.mu.Unlock()
+	if kind == "import" {
+		go m.runImport(ctx, id)
+		return
+	}
 	go m.run(ctx, id)
 }
 
@@ -380,6 +473,80 @@ func (m *Manager) run(ctx context.Context, id string) {
 			m.mu.Lock()
 			if state, ok := m.tasks[id]; ok {
 				state.task.DownloadedBytes = downloaded
+				state.task.UpdatedAt = m.now()
+			}
+			m.mu.Unlock()
+		}
+		if readErr != nil {
+			file.Close()
+			if errors.Is(readErr, io.EOF) {
+				m.finish(id, partPath)
+			} else {
+				m.stopOrFail(ctx, id, readErr)
+			}
+			return
+		}
+	}
+}
+
+// runImport 执行本地文件复制导入；恢复时从头复制。
+func (m *Manager) runImport(ctx context.Context, id string) {
+	defer func() {
+		m.mu.Lock()
+		if state, ok := m.tasks[id]; ok {
+			state.running = false
+		}
+		m.mu.Unlock()
+	}()
+
+	m.mu.Lock()
+	state, ok := m.tasks[id]
+	var source string
+	if ok {
+		source = state.task.Source
+	}
+	m.mu.Unlock()
+	if !ok {
+		return
+	}
+
+	src, err := os.Open(source)
+	if err != nil {
+		m.fail(id, fmt.Errorf("打开导入文件失败：%w", err))
+		return
+	}
+	defer src.Close()
+
+	partPath := m.partPath(id)
+	if err := os.MkdirAll(filepath.Dir(partPath), 0o755); err != nil {
+		m.fail(id, fmt.Errorf("创建临时目录失败：%w", err))
+		return
+	}
+	file, err := os.OpenFile(partPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		m.fail(id, err)
+		return
+	}
+
+	buffer := make([]byte, copyBufferSize)
+	var copied int64
+	for {
+		n, readErr := src.Read(buffer)
+		if n > 0 {
+			if ctx.Err() != nil {
+				file.Close()
+				m.stopOrFail(ctx, id, ctx.Err())
+				return
+			}
+			if _, err := file.Write(buffer[:n]); err != nil {
+				file.Close()
+				m.fail(id, err)
+				return
+			}
+			copied += int64(n)
+			m.mu.Lock()
+			if state, ok := m.tasks[id]; ok {
+				state.task.DownloadedBytes = copied
 				state.task.UpdatedAt = m.now()
 			}
 			m.mu.Unlock()

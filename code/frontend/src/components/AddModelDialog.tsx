@@ -33,8 +33,8 @@ export function AddModelDialog({ open, onOpenChange, onSubmit, realMode = false 
       setError('请输入以 http:// 或 https:// 开头的下载地址。')
       return
     }
-    if (!realMode && sourceType === '本地导入' && !source.startsWith('/data/import/')) {
-      setError('Demo 仅允许从 /data/import/ 目录导入。')
+    if (sourceType === '本地导入' && !source.startsWith('/data/import/')) {
+      setError('仅允许从 /data/import/ 目录导入，请先将文件放入宿主机安装目录下的 import 文件夹。')
       return
     }
     onSubmit({ name: name.trim(), type, source, sourceType })
@@ -56,7 +56,7 @@ export function AddModelDialog({ open, onOpenChange, onSubmit, realMode = false 
           <div className="rounded-lg bg-slate-100 p-3 text-xs leading-5 text-slate-600">{realMode
             ? sourceType === 'URL 下载'
               ? '将从该地址真实下载并写入共享仓库，支持暂停、断点续传与失败重试；任务进度在模型中心与任务中心实时可见。'
-              : '本地导入将在后续版本接入；请先将模型文件放入共享仓库目录，模型中心会自动识别。'
+              : '将从 /data/import 目录（宿主机安装目录下的 import 文件夹）复制文件并写入共享仓库，支持暂停与校验；任务进度在模型中心与任务中心实时可见。'
             : <>磁盘预检通过 · 可用空间 3.42 TB<br />Demo 使用模拟进度，不会访问该地址或路径。</>}</div>
           {error && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
         </div>

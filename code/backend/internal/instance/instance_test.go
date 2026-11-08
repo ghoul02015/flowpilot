@@ -90,7 +90,7 @@ func (f *fakeDocker) RemoveContainer(_ context.Context, id string, _ bool) error
 }
 
 func newManager(dockerAPI DockerAPI, gpuCount int) *Manager {
-	return NewManager(dockerAPI, func() int { return gpuCount }, "/host/data", "comfyui:test", 8188)
+	return NewManager(dockerAPI, func() int { return gpuCount }, "/host/data", "comfyui:test", 8188, "", "", "")
 }
 
 func validSpec() Spec {

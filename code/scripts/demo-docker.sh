@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-IMAGE="flowpilot-web:0.0.3.0"
+IMAGE="flowpilot-web:0.0.4.0"
 CONTAINER="flowpilot-web-demo"
 PORT="${FLOWPILOT_DEMO_PORT:-18080}"
 DOCKER_SOCKET="${FLOWPILOT_DOCKER_SOCKET:-/var/run/docker.sock}"
@@ -22,11 +22,13 @@ start_container() {
     docker rm -f "${CONTAINER}" >/dev/null
   fi
   DATA_DIR="$(cd "${CODE_DIR}/.." && pwd)/.tmp/flowpilot-data"
-  mkdir -p "${DATA_DIR}"
+  IMPORT_DIR="$(cd "${CODE_DIR}/.." && pwd)/.tmp/flowpilot-import"
+  mkdir -p "${DATA_DIR}" "${IMPORT_DIR}"
   docker run -d --name "${CONTAINER}" --restart unless-stopped \
     -p "${PORT}:18080" \
     -v "${DOCKER_SOCKET}:/var/run/docker.sock" \
     -v "${DATA_DIR}:/data/flowpilot" \
+    -v "${IMPORT_DIR}:/data/import:ro" \
     -e FLOWPILOT_HOST_DATA_DIR="${DATA_DIR}" \
     "${IMAGE}" >/dev/null
   printf 'FlowPilot Demo：http://localhost:%s\n' "${PORT}"

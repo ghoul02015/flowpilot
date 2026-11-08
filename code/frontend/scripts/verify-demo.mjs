@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.3.0') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.4.0') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
@@ -143,6 +143,54 @@ try {
     await deleteDialog.getByRole('button', { name: '确认删除' }).click()
     await page.getByRole('button', { name: `删除 ${instanceName}`, exact: true }).waitFor({ state: 'detached', timeout: 15000 })
     check('真实实例删除')
+
+    // ComfyUI 实例链路：用默认预置镜像（comfyui-h3:spark）创建 →
+    // 等待 ComfyUI /system_stats 就绪 → 停止 → 删除。
+    const instancesBody = await (await page.request.get(`${baseURL}/api/v1/instances`)).json()
+    const comfyImage = instancesBody.defaults?.image ?? 'comfyui:latest'
+    const comfyName = 'comfy-real'
+    await page.getByRole('button', { name: '新建实例', exact: true }).click()
+    const comfyDialog = page.getByRole('dialog')
+    await comfyDialog.waitFor()
+    await comfyDialog.getByLabel('实例名称').fill(comfyName)
+    await comfyDialog.getByLabel('容器镜像').fill(comfyImage)
+    await comfyDialog.getByText('已在本机，可直接创建', { exact: false }).waitFor({ timeout: 8000 })
+    await comfyDialog.getByLabel('分配 GPU').selectOption('0')
+    await comfyDialog.getByLabel('访问端口').fill('18189')
+    await comfyDialog.getByLabel('容器端口').fill('8188')
+    await page.getByRole('button', { name: /下一步/ }).click()
+    await page.getByRole('button', { name: /下一步/ }).click()
+    await page.getByRole('button', { name: /确认部署|正在创建容器/ }).click()
+    await page.getByRole('button', { name: `停止 ${comfyName}`, exact: true }).waitFor({ timeout: 60000 })
+    check('ComfyUI 实例创建并启动（预置镜像）')
+
+    const comfyURL = new URL(baseURL)
+    comfyURL.port = '18189'
+    const comfyDeadline = Date.now() + 180000
+    let comfyReady = false
+    while (Date.now() < comfyDeadline && !comfyReady) {
+      try {
+        const statsResponse = await page.request.get(`${comfyURL.origin}/system_stats`)
+        if (statsResponse.ok()) {
+          const stats = await statsResponse.json()
+          comfyReady = Boolean(stats.system?.comfyui_version)
+        }
+      } catch { /* 容器尚未就绪，继续等待 */ }
+      if (!comfyReady) await page.waitForTimeout(5000)
+    }
+    if (!comfyReady) throw new Error('ComfyUI 实例 180 秒内未就绪')
+    check('ComfyUI 服务就绪（/system_stats）')
+    await screenshot('02-instances-comfyui')
+
+    await page.getByRole('button', { name: `停止 ${comfyName}`, exact: true }).click()
+    await page.getByRole('button', { name: `启动 ${comfyName}`, exact: true }).waitFor({ timeout: 30000 })
+    check('ComfyUI 实例停止')
+    await page.getByRole('button', { name: `删除 ${comfyName}`, exact: true }).click()
+    const comfyDeleteDialog = page.getByRole('dialog')
+    await comfyDeleteDialog.getByLabel('实例名称').fill(comfyName)
+    await comfyDeleteDialog.getByRole('button', { name: '确认删除' }).click()
+    await page.getByRole('button', { name: `删除 ${comfyName}`, exact: true }).waitFor({ state: 'detached', timeout: 15000 })
+    check('ComfyUI 实例删除')
   } else {
     await page.getByLabel('分配 GPU').selectOption('1')
     await page.getByRole('button', { name: /下一步/ }).click()
@@ -183,8 +231,15 @@ try {
       const modelDeleteDialog = page.getByRole('dialog')
       await modelDeleteDialog.getByRole('button', { name: '确认删除' }).click()
       await seedRow.waitFor({ state: 'detached', timeout: 10000 })
-      const afterDelete = await (await page.request.get(`${baseURL}/api/v1/models`)).json()
-      if (afterDelete.files?.some((file) => file.path === 'checkpoints/regress-test.safetensors')) throw new Error('模型文件删除后仍在仓库中')
+      // 仓库扫描存在秒级缓存窗口，轮询等待列表收敛而不是单次取快照。
+      const seedDeleteDeadline = Date.now() + 15000
+      let seedRemoved = false
+      while (Date.now() < seedDeleteDeadline && !seedRemoved) {
+        const modelsBody = await (await page.request.get(`${baseURL}/api/v1/models`)).json()
+        seedRemoved = !modelsBody.files?.some((file) => file.path === 'checkpoints/regress-test.safetensors')
+        if (!seedRemoved) await page.waitForTimeout(500)
+      }
+      if (!seedRemoved) throw new Error('模型文件删除后仍在仓库中')
       check('真实模型文件界面删除')
     } else {
       check('真实模型仓库为空（跳过种子文件删除验证）')
@@ -226,6 +281,41 @@ try {
     }
     if (!fileRemoved) throw new Error('下载文件删除后仍在仓库中')
     check('下载文件界面删除')
+
+    // 真实本地导入链路：界面创建导入任务 → 从 /data/import 复制入库 → 界面删除。
+    // 源文件由部署步骤在目标机 seed 到安装目录 import 文件夹。
+    await page.getByRole('button', { name: '添加模型', exact: true }).click()
+    const importDialog = page.getByRole('dialog')
+    await importDialog.waitFor()
+    await importDialog.getByRole('button', { name: /本地导入/ }).click()
+    await importDialog.getByLabel(/模型名称/).fill('')
+    await importDialog.getByLabel(/模型类型/).selectOption('其他')
+    await importDialog.getByLabel(/服务器文件路径/).fill('/data/import/regress-import.safetensors')
+    await importDialog.getByRole('button', { name: '开始导入' }).click()
+
+    const importDeadline = Date.now() + 30000
+    let importDone = false
+    while (Date.now() < importDeadline && !importDone) {
+      const tasksBody = await (await page.request.get(`${baseURL}/api/v1/downloads`)).json()
+      const modelsBody = await (await page.request.get(`${baseURL}/api/v1/models`)).json()
+      importDone = tasksBody.tasks?.some((task) => task.kind === 'import' && task.path === 'regress-import.safetensors' && task.status === 'completed') && modelsBody.files?.some((file) => file.path === 'regress-import.safetensors')
+      if (!importDone) await page.waitForTimeout(1000)
+    }
+    if (!importDone) throw new Error('本地导入任务未完成或文件未写入共享仓库')
+    check('真实本地导入写入共享仓库')
+    await page.getByRole('row').filter({ hasText: 'regress-import.safetensors' }).getByText('就绪', { exact: true }).waitFor({ timeout: 15000 })
+
+    await page.getByRole('button', { name: '删除 regress-import.safetensors', exact: true }).click()
+    await page.getByRole('dialog').getByRole('button', { name: '确认删除' }).click()
+    const importDeleteDeadline = Date.now() + 15000
+    let importRemoved = false
+    while (Date.now() < importDeleteDeadline && !importRemoved) {
+      const modelsBody = await (await page.request.get(`${baseURL}/api/v1/models`)).json()
+      importRemoved = !modelsBody.files?.some((file) => file.path === 'regress-import.safetensors')
+      if (!importRemoved) await page.waitForTimeout(500)
+    }
+    if (!importRemoved) throw new Error('导入文件删除后仍在仓库中')
+    check('导入文件界面删除')
   } else {
     await page.getByRole('button', { name: '添加模型', exact: true }).click()
     await page.getByRole('button', { name: '开始下载' }).click()
@@ -264,7 +354,7 @@ try {
     await page.getByText('下载 dreamshaper-xl.safetensors', { exact: true }).waitFor()
     check('任务中心与模型任务同步')
   } else {
-    await page.getByText('下载 index.html', { exact: true }).waitFor()
+    await page.getByText('下载 index.html', { exact: true }).first().waitFor()
     await page.getByText('下载完成，已写入共享仓库', { exact: false }).first().waitFor()
     check('任务中心展示真实下载任务')
   }

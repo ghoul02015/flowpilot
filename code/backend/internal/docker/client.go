@@ -226,11 +226,21 @@ func (c *Client) StartContainer(ctx context.Context, id string) error {
 }
 
 // StopContainer 停止容器；已停止时 Docker 返回 304，视为成功。
+// 优雅停止最长等待 timeoutSeconds，请求本身不套用默认客户端超时；
+// 若请求超时但 Docker 实际已完成停止（容器已退出），同样视为成功，
+// 保证停止操作幂等，避免大容器触发 502。
 func (c *Client) StopContainer(ctx context.Context, id string, timeoutSeconds int) error {
-	_, err := c.do(ctx, http.MethodPost, fmt.Sprintf("/containers/%s/stop?t=%d", url.PathEscape(id), timeoutSeconds), nil)
+	stopCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds+15)*time.Second)
+	defer cancel()
+	_, err := c.doWith(c.streamClient, stopCtx, http.MethodPost, fmt.Sprintf("/containers/%s/stop?t=%d", url.PathEscape(id), timeoutSeconds), nil)
 	var statusError *StatusError
 	if errors.As(err, &statusError) && statusError.StatusCode == http.StatusNotModified {
 		return nil
+	}
+	if err != nil {
+		if inspected, inspectErr := c.ContainerInspect(ctx, id); inspectErr == nil && !inspected.State.Running {
+			return nil
+		}
 	}
 	return err
 }
@@ -258,6 +268,11 @@ func (c *Client) getJSON(ctx context.Context, path string, target any) error {
 
 // do 执行一次 Docker API 请求并返回响应体；204 空响应返回 nil。
 func (c *Client) do(ctx context.Context, method, path string, payload any) ([]byte, error) {
+	return c.doWith(c.httpClient, ctx, method, path, payload)
+}
+
+// doWith 使用指定 HTTP 客户端执行请求，停止等长耗时操作可绕过默认超时。
+func (c *Client) doWith(client *http.Client, ctx context.Context, method, path string, payload any) ([]byte, error) {
 	var reader io.Reader
 	if payload != nil {
 		encoded, err := json.Marshal(payload)
@@ -275,7 +290,7 @@ func (c *Client) do(ctx context.Context, method, path string, payload any) ([]by
 		request.Header.Set("Content-Type", "application/json")
 	}
 
-	response, err := c.httpClient.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		return nil, err
 	}

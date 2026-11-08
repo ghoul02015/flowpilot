@@ -72,7 +72,7 @@ func TestDownloadCompletesIntoRepository(t *testing.T) {
 	server := rangeServer(t, 0)
 	defer server.Close()
 	root := t.TempDir()
-	manager := NewManager(root)
+	manager := NewManager(root, nil)
 
 	task, err := manager.Create(Spec{URL: server.URL + "/models/test.safetensors", Category: "checkpoints", SHA256: sha256Hex(payload)})
 	if err != nil {
@@ -98,7 +98,7 @@ func TestPauseAndResume(t *testing.T) {
 	server := rangeServer(t, 256) // 限速，确保能在中途暂停
 	defer server.Close()
 	root := t.TempDir()
-	manager := NewManager(root)
+	manager := NewManager(root, nil)
 
 	task, err := manager.Create(Spec{URL: server.URL + "/m.bin", Category: "loras"})
 	if err != nil {
@@ -140,7 +140,7 @@ func TestPauseAndResume(t *testing.T) {
 func TestSHA256MismatchFails(t *testing.T) {
 	server := rangeServer(t, 0)
 	defer server.Close()
-	manager := NewManager(t.TempDir())
+	manager := NewManager(t.TempDir(), nil)
 
 	task, err := manager.Create(Spec{URL: server.URL + "/m.bin", Category: "vae", SHA256: strings.Repeat("0", 64)})
 	if err != nil {
@@ -159,7 +159,7 @@ func TestCreateValidationAndConflict(t *testing.T) {
 	server := rangeServer(t, 0)
 	defer server.Close()
 	root := t.TempDir()
-	manager := NewManager(root)
+	manager := NewManager(root, nil)
 
 	var validation *ValidationError
 	if _, err := manager.Create(Spec{URL: "ftp://x/y.bin"}); !errors.As(err, &validation) {
@@ -188,7 +188,7 @@ func TestCreateValidationAndConflict(t *testing.T) {
 func TestCancelDeletesPartFile(t *testing.T) {
 	server := rangeServer(t, 256)
 	defer server.Close()
-	manager := NewManager(t.TempDir())
+	manager := NewManager(t.TempDir(), nil)
 
 	task, err := manager.Create(Spec{URL: server.URL + "/m.bin", Category: "vae"})
 	if err != nil {
@@ -207,5 +207,47 @@ func TestCancelDeletesPartFile(t *testing.T) {
 	}
 	if _, err := manager.Get(task.ID); err == nil {
 		t.Fatal("删除后任务不应存在")
+	}
+}
+
+func TestImportCopiesIntoRepository(t *testing.T) {
+	root := t.TempDir()
+	importDir := t.TempDir()
+	source := filepath.Join(importDir, "seed.safetensors")
+	if err := os.WriteFile(source, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(root, []string{importDir})
+
+	task, err := manager.CreateImport(ImportSpec{Path: source, Category: "checkpoints", SHA256: sha256Hex(payload)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Kind != "import" || task.TotalBytes != int64(len(payload)) {
+		t.Fatalf("任务字段错误：%+v", task)
+	}
+	done := waitStatus(t, manager, task.ID, "completed")
+	if done.Message != "SHA256 校验通过，已写入共享仓库" {
+		t.Fatalf("完成消息异常：%s", done.Message)
+	}
+	content, err := os.ReadFile(filepath.Join(root, "checkpoints", "seed.safetensors"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != string(payload) {
+		t.Fatal("导入文件内容不一致")
+	}
+}
+
+func TestImportRejectsOutsideAllowedDirs(t *testing.T) {
+	root := t.TempDir()
+	manager := NewManager(root, []string{filepath.Join(root, "allowed")})
+
+	var validation *ValidationError
+	if _, err := manager.CreateImport(ImportSpec{Path: "/etc/hostname"}); !errors.As(err, &validation) {
+		t.Fatalf("目录外文件应被拒绝：%v", err)
+	}
+	if _, err := manager.CreateImport(ImportSpec{Path: "relative/path.bin"}); !errors.As(err, &validation) {
+		t.Fatalf("相对路径应被拒绝：%v", err)
 	}
 }

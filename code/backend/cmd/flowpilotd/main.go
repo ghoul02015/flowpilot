@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -39,10 +40,14 @@ func main() {
 		environment("FLOWPILOT_HOST_DATA_DIR", dataDir),
 		environment("FLOWPILOT_COMFYUI_IMAGE", "comfyui:latest"),
 		envInt("FLOWPILOT_COMFYUI_CONTAINER_PORT", 8188),
+		environment("FLOWPILOT_COMFYUI_MODELS_TARGET", "/data/models"),
+		environment("FLOWPILOT_COMFYUI_OUTPUTS_TARGET", "/data/outputs"),
+		environment("FLOWPILOT_COMFYUI_WORKFLOWS_TARGET", "/data/workflows"),
 	)
 	modelManager := model.NewManager(filepath.Join(dataDir, "models"))
 	imagePuller := image.NewPuller(dockerClient)
-	downloadManager := download.NewManager(filepath.Join(dataDir, "models"))
+	importDirs := strings.Split(environment("FLOWPILOT_IMPORT_DIRS", "/data/import"), ":")
+	downloadManager := download.NewManager(filepath.Join(dataDir, "models"), importDirs)
 
 	httpServer := &http.Server{
 		Addr:              address,

@@ -59,6 +59,38 @@ func TestEngineAndContainers(t *testing.T) {
 	}
 }
 
+// 停止请求失败但容器实际已退出时应视为成功（大容器优雅停止
+// 可能拖垮响应，但 Docker 已完成 SIGKILL），仍在运行时才报错。
+func TestStopContainerVerifiesStateOnError(t *testing.T) {
+	client := newFakeEngine(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/containers/stopped/stop"):
+			http.Error(w, "timeout", http.StatusInternalServerError)
+		case strings.HasPrefix(r.URL.Path, "/containers/stopped/json"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "stopped", "State": map[string]any{"Status": "exited", "Running": false}})
+		case strings.HasPrefix(r.URL.Path, "/containers/busy/stop"):
+			http.Error(w, "timeout", http.StatusInternalServerError)
+		case strings.HasPrefix(r.URL.Path, "/containers/busy/json"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "busy", "State": map[string]any{"Status": "running", "Running": true}})
+		case strings.HasPrefix(r.URL.Path, "/containers/gone/stop"):
+			w.WriteHeader(http.StatusNotModified)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+
+	if err := client.StopContainer(context.Background(), "stopped", 1); err != nil {
+		t.Fatalf("容器已退出时停止应视为成功，得到 %v", err)
+	}
+	if err := client.StopContainer(context.Background(), "busy", 1); err == nil {
+		t.Fatal("容器仍在运行且停止失败时应返回错误")
+	}
+	if err := client.StopContainer(context.Background(), "gone", 1); err != nil {
+		t.Fatalf("已停止（304）应视为成功，得到 %v", err)
+	}
+}
+
 func TestDockerErrorIncludesStatus(t *testing.T) {
 	client := newFakeEngine(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "permission denied", http.StatusUnauthorized)

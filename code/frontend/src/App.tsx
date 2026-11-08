@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Activity, Box, ChevronRight, Database, LayoutDashboard, Menu, RotateCcw, Server, Settings, Waves, X } from 'lucide-react'
 import { Toaster, toast } from 'sonner'
-import { createDownloadApi, createInstanceApi, deleteDownloadApi, deleteInstanceApi, deleteModelApi, downloadActionApi, formatBytes, getDownloads, getHardware, getInstances, getModels, modelTypeToCategory, postInstanceAction, type DownloadTask, type InstanceDefaults, type ModelReport, type RealInstance } from '@/api'
+import { createDownloadApi, createImportApi, createInstanceApi, deleteDownloadApi, deleteInstanceApi, deleteModelApi, downloadActionApi, formatBytes, getDownloads, getHardware, getInstances, getModels, modelTypeToCategory, postInstanceAction, type DownloadTask, type InstanceDefaults, type ModelReport, type RealInstance } from '@/api'
 import { CreateInstanceDialog } from '@/components/CreateInstanceDialog'
 import { AddModelDialog } from '@/components/AddModelDialog'
 import { Dashboard } from '@/pages/Dashboard'
@@ -158,7 +158,7 @@ export default function App() {
           name: task.fileName,
           type: task.category === 'other' ? '其他' : task.category,
           size: task.totalBytes > 0 ? formatBytes(task.totalBytes) : '等待计算',
-          source: 'URL 下载',
+          source: task.kind === 'import' ? '本地导入' : 'URL 下载',
           status: task.status === 'running' ? 'downloading' : task.status === 'paused' ? 'paused' : task.status === 'failed' ? 'failed' : 'cancelled',
           progress: task.totalBytes > 0 ? Math.round((task.downloadedBytes / task.totalBytes) * 100) : 0,
           createdAt: new Date(task.createdAt).toLocaleString('zh-CN', { hour12: false }),
@@ -180,8 +180,8 @@ export default function App() {
   const displayTasks: TaskItem[] = realDownloadMode
     ? (realDownloads ?? []).map((task) => ({
       id: task.id,
-      name: `下载 ${task.fileName}`,
-      type: '模型下载',
+      name: `${task.kind === 'import' ? '导入' : '下载'} ${task.fileName}`,
+      type: task.kind === 'import' ? '模型导入' : '模型下载',
       target: task.path,
       status: task.status,
       progress: task.totalBytes > 0 ? Math.round((task.downloadedBytes / task.totalBytes) * 100) : 0,
@@ -285,7 +285,14 @@ export default function App() {
   function addModel(input: AddModelInput) {
     if (realDownloadMode) {
       if (input.sourceType === '本地导入') {
-        toast.info('本地导入将在后续版本接入', { description: `请先将模型文件放入共享仓库目录 ${realModels?.root ?? ''}，界面会自动识别。` })
+        createImportApi({ path: input.source, category: modelTypeToCategory(input.type), name: input.name || undefined })
+          .then((task) => {
+            toast.success('导入任务已创建', { description: `${task.fileName} → ${task.path}` })
+            void refreshDownloads()
+          })
+          .catch((error: unknown) => {
+            toast.error('创建导入任务失败', { description: error instanceof Error ? error.message : '请求失败' })
+          })
         return
       }
       createDownloadApi({ url: input.source, category: modelTypeToCategory(input.type), name: input.name || undefined })
@@ -409,7 +416,7 @@ export default function App() {
       <div className="flex h-20 items-center gap-3 border-b border-white/8 px-5"><div className="flex size-10 items-center justify-center rounded-lg bg-teal-500 text-slate-950"><Waves className="size-6" /></div><div><div className="font-bold tracking-wide text-white">慧浪智算</div><div className="mt-0.5 text-xs font-medium tracking-[0.16em] text-teal-300">FLOWPILOT</div></div><button type="button" className="ml-auto cursor-pointer rounded-md p-2 text-slate-300 hover:bg-white/10 md:hidden" aria-label="关闭菜单" onClick={() => setMobileOpen(false)}><X className="size-5" /></button></div>
       <nav className="flex-1 space-y-1 px-3 py-5" aria-label="主导航">{navigation.map(({ key, label, icon: Icon }) => <button type="button" key={key} onClick={() => navigate(key)} className={`flex min-h-12 w-full cursor-pointer items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:outline-teal-300 ${page === key ? 'bg-white/10 text-white' : 'text-slate-400 hover:bg-white/5 hover:text-white'}`}><Icon className={`size-5 ${page === key ? 'text-teal-300' : ''}`} /><span className="flex-1 text-left">{label}</span>{key === 'tasks' && activeTasks > 0 && <span className="rounded-full bg-teal-400/15 px-2 py-0.5 text-xs text-teal-300">{activeTasks}</span>}</button>)}</nav>
       <div className="mx-3 mb-3 rounded-lg border border-white/8 p-4"><div className="flex items-center gap-2 text-sm font-medium text-white"><span className="size-2 rounded-full bg-emerald-400" />{hostInfo.name}</div><div className="mt-2 text-xs leading-5 text-slate-400">{hostInfo.gpuSummary}<br />管理端运行正常</div><button type="button" className="mt-3 flex min-h-10 cursor-pointer items-center gap-2 text-xs text-slate-400 transition-colors hover:text-white" onClick={resetDemo}><RotateCcw className="size-3.5" />重置演示数据</button></div>
-      <div className="border-t border-white/8 px-5 py-4 text-xs text-slate-500">MVP Demo · v0.0.3.0</div>
+      <div className="border-t border-white/8 px-5 py-4 text-xs text-slate-500">MVP Demo · v0.0.4.0</div>
     </aside>
 
     <div className="min-h-dvh md:pl-[248px]">

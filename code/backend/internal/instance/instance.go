@@ -25,20 +25,28 @@ const (
 	labelGPU          = "flowpilot.instance.gpu"
 	labelPort         = "flowpilot.instance.port"
 	labelAutoStart    = "flowpilot.instance.autostart"
+	labelModelsTarget = "flowpilot.instance.models-target"
 	containerPrefix   = "flowpilot-comfyui-"
 	stopTimeoutSecond = 10
 )
 
-var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}$`)
+var (
+	namePattern   = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}$`)
+	targetPattern = regexp.MustCompile(`^/[a-zA-Z0-9_./-]{1,127}$`)
+)
 
 // Spec 是创建实例的请求参数。GPU 为 -1 表示不分配 GPU。
+// ModelsTarget 等挂载目标为空时使用管理器默认值。
 type Spec struct {
-	Name          string `json:"name"`
-	Image         string `json:"image"`
-	GPU           int    `json:"gpu"`
-	Port          int    `json:"port"`
-	ContainerPort int    `json:"containerPort"`
-	AutoStart     bool   `json:"autoStart"`
+	Name            string `json:"name"`
+	Image           string `json:"image"`
+	GPU             int    `json:"gpu"`
+	Port            int    `json:"port"`
+	ContainerPort   int    `json:"containerPort"`
+	AutoStart       bool   `json:"autoStart"`
+	ModelsTarget    string `json:"modelsTarget"`
+	OutputsTarget   string `json:"outputsTarget"`
+	WorkflowsTarget string `json:"workflowsTarget"`
 }
 
 // Instance 是实例的对外视图。
@@ -51,6 +59,7 @@ type Instance struct {
 	GPU           int       `json:"gpu"`
 	Port          int       `json:"port"`
 	AutoStart     bool      `json:"autoStart"`
+	ModelsTarget  string    `json:"modelsTarget"`
 	CreatedAt     time.Time `json:"createdAt"`
 }
 
@@ -59,6 +68,7 @@ type Defaults struct {
 	Image         string `json:"image"`
 	ContainerPort int    `json:"containerPort"`
 	DataDir       string `json:"dataDir"`
+	ModelsTarget  string `json:"modelsTarget"`
 }
 
 // DockerAPI 是实例管理依赖的 Docker 操作子集，便于测试替换。
@@ -76,30 +86,46 @@ type GPUCounter func() int
 
 // Manager 管理实例生命周期。
 type Manager struct {
-	docker        DockerAPI
-	gpuCount      GPUCounter
-	hostDataDir   string
-	defaultImage  string
-	containerPort int
+	docker          DockerAPI
+	gpuCount        GPUCounter
+	hostDataDir     string
+	defaultImage    string
+	containerPort   int
+	modelsTarget    string
+	outputsTarget   string
+	workflowsTarget string
 }
 
-// NewManager 创建实例管理器；hostDataDir 是宿主机共享数据目录（绑定挂载用宿主机路径）。
-func NewManager(dockerClient DockerAPI, gpuCount GPUCounter, hostDataDir, defaultImage string, defaultContainerPort int) *Manager {
+// NewManager 创建实例管理器；hostDataDir 是宿主机共享数据目录（绑定挂载用宿主机路径），
+// modelsTarget 等为共享目录在实例容器内的默认挂载点（按镜像目录约定调整）。
+func NewManager(dockerClient DockerAPI, gpuCount GPUCounter, hostDataDir, defaultImage string, defaultContainerPort int, modelsTarget, outputsTarget, workflowsTarget string) *Manager {
 	if defaultContainerPort <= 0 {
 		defaultContainerPort = 8188
 	}
+	if modelsTarget == "" {
+		modelsTarget = "/data/models"
+	}
+	if outputsTarget == "" {
+		outputsTarget = "/data/outputs"
+	}
+	if workflowsTarget == "" {
+		workflowsTarget = "/data/workflows"
+	}
 	return &Manager{
-		docker:        dockerClient,
-		gpuCount:      gpuCount,
-		hostDataDir:   hostDataDir,
-		defaultImage:  defaultImage,
-		containerPort: defaultContainerPort,
+		docker:          dockerClient,
+		gpuCount:        gpuCount,
+		hostDataDir:     hostDataDir,
+		defaultImage:    defaultImage,
+		containerPort:   defaultContainerPort,
+		modelsTarget:    modelsTarget,
+		outputsTarget:   outputsTarget,
+		workflowsTarget: workflowsTarget,
 	}
 }
 
 // Defaults 返回创建表单的推荐默认值。
 func (m *Manager) Defaults() Defaults {
-	return Defaults{Image: m.defaultImage, ContainerPort: m.containerPort, DataDir: m.hostDataDir}
+	return Defaults{Image: m.defaultImage, ContainerPort: m.containerPort, DataDir: m.hostDataDir, ModelsTarget: m.modelsTarget}
 }
 
 // List 返回全部实例，按创建时间倒序。
@@ -148,25 +174,35 @@ func (m *Manager) Create(ctx context.Context, spec Spec) (Instance, error) {
 	if spec.ContainerPort <= 0 {
 		spec.ContainerPort = m.containerPort
 	}
+	if spec.ModelsTarget == "" {
+		spec.ModelsTarget = m.modelsTarget
+	}
+	if spec.OutputsTarget == "" {
+		spec.OutputsTarget = m.outputsTarget
+	}
+	if spec.WorkflowsTarget == "" {
+		spec.WorkflowsTarget = m.workflowsTarget
+	}
 	if err := m.validate(ctx, spec); err != nil {
 		return Instance{}, err
 	}
 
 	labels := map[string]string{
-		LabelManaged:   "true",
-		LabelInstance:  "true",
-		labelName:      spec.Name,
-		labelGPU:       strconv.Itoa(spec.GPU),
-		labelPort:      strconv.Itoa(spec.Port),
-		labelAutoStart: strconv.FormatBool(spec.AutoStart),
+		LabelManaged:      "true",
+		LabelInstance:     "true",
+		labelName:         spec.Name,
+		labelGPU:          strconv.Itoa(spec.GPU),
+		labelPort:         strconv.Itoa(spec.Port),
+		labelAutoStart:    strconv.FormatBool(spec.AutoStart),
+		labelModelsTarget: spec.ModelsTarget,
 	}
 	portKey := fmt.Sprintf("%d/tcp", spec.ContainerPort)
 	hostConfig := map[string]any{
 		"PortBindings": map[string]any{portKey: []map[string]string{{"HostPort": strconv.Itoa(spec.Port)}}},
 		"Binds": []string{
-			m.hostDataDir + "/models:/data/models",
-			m.hostDataDir + "/workflows:/data/workflows",
-			m.hostDataDir + "/outputs:/data/outputs",
+			m.hostDataDir + "/models:" + spec.ModelsTarget,
+			m.hostDataDir + "/workflows:" + spec.WorkflowsTarget,
+			m.hostDataDir + "/outputs:" + spec.OutputsTarget,
 		},
 	}
 	if spec.AutoStart {
@@ -217,6 +253,11 @@ func (m *Manager) validate(ctx context.Context, spec Spec) error {
 	}
 	if spec.GPU >= 0 && m.gpuCount != nil && spec.GPU >= m.gpuCount() {
 		return &ValidationError{Message: fmt.Sprintf("GPU %d 不存在，当前主机共 %d 块 GPU", spec.GPU, m.gpuCount())}
+	}
+	for _, target := range []string{spec.ModelsTarget, spec.OutputsTarget, spec.WorkflowsTarget} {
+		if !targetPattern.MatchString(target) || strings.Contains(target, "..") {
+			return &ValidationError{Message: fmt.Sprintf("挂载目标路径不合法：%s", target)}
+		}
 	}
 	exists, err := m.docker.ImageExists(ctx, spec.Image)
 	if err != nil {
@@ -292,6 +333,7 @@ func fromContainer(container docker.Container) Instance {
 		GPU:           gpuIndex,
 		Port:          port,
 		AutoStart:     container.Labels[labelAutoStart] == "true",
+		ModelsTarget:  container.Labels[labelModelsTarget],
 		CreatedAt:     time.Unix(container.Created, 0),
 	}
 }

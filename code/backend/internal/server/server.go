@@ -18,7 +18,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/model"
 )
 
-const Version = "0.0.3.0"
+const Version = "0.0.4.0"
 
 type Handler struct {
 	docker    *docker.Client
@@ -51,6 +51,7 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("POST /api/v1/images/pull", handler.startPull)
 	mux.HandleFunc("GET /api/v1/downloads", handler.listDownloads)
 	mux.HandleFunc("POST /api/v1/downloads", handler.createDownload)
+	mux.HandleFunc("POST /api/v1/imports", handler.createImport)
 	mux.HandleFunc("POST /api/v1/downloads/{id}/{action}", handler.downloadAction)
 	mux.HandleFunc("DELETE /api/v1/downloads/{id}", handler.deleteDownload)
 	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, _ *http.Request) {
@@ -283,6 +284,24 @@ func (h *Handler) createDownload(w http.ResponseWriter, r *http.Request) {
 	task, err := h.downloads.Create(spec)
 	if err != nil {
 		h.writeDownloadError(w, err, "创建下载任务失败")
+		return
+	}
+	writeJSON(w, http.StatusCreated, task)
+}
+
+func (h *Handler) createImport(w http.ResponseWriter, r *http.Request) {
+	if h.downloads == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "下载任务未启用"})
+		return
+	}
+	var spec download.ImportSpec
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&spec); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误", "detail": err.Error()})
+		return
+	}
+	task, err := h.downloads.CreateImport(spec)
+	if err != nil {
+		h.writeDownloadError(w, err, "创建导入任务失败")
 		return
 	}
 	writeJSON(w, http.StatusCreated, task)

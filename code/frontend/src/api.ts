@@ -207,7 +207,9 @@ export async function getImagePullStatus(): Promise<ImagePullStatus> {
 
 export interface DownloadTask {
   id: string
+  kind: 'download' | 'import'
   url: string
+  source: string
   category: string
   fileName: string
   path: string
@@ -234,6 +236,17 @@ export async function getDownloads(signal?: AbortSignal): Promise<DownloadTask[]
 
 export async function createDownloadApi(spec: DownloadSpec): Promise<DownloadTask> {
   return sendJSON<DownloadTask>('POST', '/api/v1/downloads', spec)
+}
+
+export interface ImportSpec {
+  path: string
+  category: string
+  name?: string
+  sha256?: string
+}
+
+export async function createImportApi(spec: ImportSpec): Promise<DownloadTask> {
+  return sendJSON<DownloadTask>('POST', '/api/v1/imports', spec)
 }
 
 export async function downloadActionApi(id: string, action: 'pause' | 'resume' | 'cancel' | 'retry'): Promise<DownloadTask> {

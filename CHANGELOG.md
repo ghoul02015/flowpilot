@@ -2,6 +2,26 @@
 
 所有重要变更均记录于此。详细内容见 `context/changes/`。
 
+## 0.0.4.0 — 2026-11-08
+
+### 新增
+
+- 本地导入真实化：`POST /api/v1/imports` 将服务器本地文件（默认白名单目录 `/data/import`，`FLOWPILOT_IMPORT_DIRS` 可配置）任务化复制入共享仓库，与下载共用任务模型（kind=import，进度、暂停、SHA256 校验、目标冲突检测一致）；前端添加模型弹窗"本地导入"接入真实接口。
+- ComfyUI 镜像预置策略：install.sh 自动探测默认实例镜像（`FLOWPILOT_COMFYUI_IMAGE` 指定 → `comfyui-h3:spark` → `comfyui:latest`），并读取镜像 WorkingDir 自动适配挂载目标（如 `/app/ComfyUI/{models,output,user/workflows}`），新实例开箱即见平台模型库；`FLOWPILOT_COMFYUI_MODELS_TARGET/OUTPUTS_TARGET/WORKFLOWS_TARGET` 可覆盖，实例创建时亦可单独指定。
+
+### 修复
+
+- 大容器停止返回 502：停止请求改用无全局超时通道（上限为优雅停止时长＋15 秒），且请求失败时回查容器真实状态，已退出视为成功，停止操作幂等（ComfyUI 类容器不响应 SIGTERM，Docker 10 秒后 SIGKILL，此前客户端 10 秒超时先于 Docker 返回）。
+- 回归套件消除两处时序脆弱点：仓库扫描缓存窗口改为轮询收敛；任务中心历史任务重名匹配取第一条。
+
+### 验证
+
+- Go 八包测试全过（download 新增导入正／反用例，docker 新增停止状态回查用例）；前端 lint／build 通过。
+- DGX Spark 实测 34 项远程回归全部通过，新增：本地导入写入仓库＋界面删除、ComfyUI 实例（comfyui-h3:spark 预置镜像）创建→/system_stats 就绪→停止→删除。
+- 出图闭环实测：平台下载引擎拉取 SD1.5（4.27 GB，hf-mirror）→ API 创建实例（GPU 0、端口 18190）→ 提交 20 步工作流真实出图（宇航员骑马，512×512）→ 实例、模型、任务全部清理；生产容器 `comfyui-h3` 全程不受影响。
+
+详细记录：[0.0.4.0](context/changes/0.0.4.0.md)
+
 ## 0.0.3.0 — 2026-11-08
 
 ### 新增
