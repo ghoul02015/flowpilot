@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Activity, Cpu, Database, Gauge, HardDrive, MemoryStick, Server, Thermometer, Zap } from 'lucide-react'
+import { Activity, CircleAlert, Cpu, Database, Gauge, HardDrive, MemoryStick, Server, Thermometer, Zap } from 'lucide-react'
 import { getHardware, type HardwareReport } from '@/api'
 import { Panel, PanelHeader, ProgressBar } from '@/components/common'
-import { hardwareProfiles } from '@/data/hardware'
 import type { GpuDevice, HardwareProfile } from '@/types'
 
 const memoryModeNames = { discrete: '独立显存', unified: '统一内存', coherent: '一致性内存' }
@@ -60,16 +59,6 @@ function profileFromReport(report: HardwareReport): HardwareProfile {
   }
 }
 
-function sampleDevices(profile: HardwareProfile, sample: number) {
-  return profile.gpus.map((gpu, index) => ({
-    ...gpu,
-    utilization: gpu.utilization != null ? Math.round(clamp(gpu.utilization + Math.sin(sample * 0.72 + index) * 7)) : null,
-    temperatureC: gpu.temperatureC != null ? Math.round(gpu.temperatureC + Math.sin(sample * 0.51 + index * 0.7) * 3) : null,
-    powerW: gpu.powerW != null && gpu.powerLimitW != null ? Math.max(0, Math.round(gpu.powerW + Math.sin(sample * 0.66 + index * 0.8) * gpu.powerLimitW * 0.035)) : gpu.powerW,
-    memoryUsedGB: Math.min(gpu.memoryTotalGB, Math.max(0, Number((gpu.memoryUsedGB + Math.sin(sample * 0.29 + index) * 0.4).toFixed(1)))),
-  }))
-}
-
 function SummaryCard({ icon: Icon, label, value, description, usage }: { icon: typeof Server; label: string; value: string; description: string; usage?: number }) {
   return <div className="min-w-0 bg-white p-5">
     <div className="flex items-center gap-2 text-xs font-medium text-slate-500"><Icon className="size-4 text-teal-700" />{label}</div>
@@ -103,10 +92,8 @@ function GpuCard({ gpu, profile }: { gpu: GpuDevice; profile: HardwareProfile })
 }
 
 export function HardwareMonitor() {
-  const [profileId, setProfileId] = useState(hardwareProfiles[0].id)
-  const [sample, setSample] = useState(0)
   const [report, setReport] = useState<HardwareReport | null>(null)
-  const [reportFailed, setReportFailed] = useState(false)
+  const [reportError, setReportError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -115,59 +102,62 @@ export function HardwareMonitor() {
         const next = await getHardware()
         if (!cancelled) {
           setReport(next)
-          setReportFailed(false)
+          setReportError(null)
         }
-      } catch {
-        if (!cancelled) setReportFailed(true)
+      } catch (error) {
+        if (!cancelled) setReportError(error instanceof Error ? error.message : '硬件采集接口不可用')
       }
     }
     void poll()
-    const timer = window.setInterval(() => {
-      setSample((current) => current + 1)
-      void poll()
-    }, 2000)
+    const timer = window.setInterval(() => void poll(), 2000)
     return () => {
       cancelled = true
       window.clearInterval(timer)
     }
   }, [])
 
-  const realProfile = useMemo(() => (report ? profileFromReport(report) : null), [report])
-  const isReal = realProfile !== null
-  const profile = realProfile ?? (hardwareProfiles.find((item) => item.id === profileId) ?? hardwareProfiles[0])
-  const devices = useMemo(() => (isReal ? profile.gpus : sampleDevices(profile, sample)), [isReal, profile, sample])
+  const profile = useMemo(() => (report ? profileFromReport(report) : null), [report])
+  const devices = profile?.gpus ?? []
   const knownUtilizations = devices.map((gpu) => gpu.utilization).filter((value): value is number => value != null)
   const averageUsage = knownUtilizations.length ? Math.round(knownUtilizations.reduce((total, value) => total + value, 0) / knownUtilizations.length) : 0
   const totalGpuMemory = devices.reduce((total, gpu) => total + gpu.memoryTotalGB, 0)
-  const memorySummary = profile.gpuMemoryMode === 'unified'
-    ? `${formatCapacity(profile.memoryTotalGB)} CPU／GPU 共享，不重复累计`
-    : profile.gpuMemoryMode === 'coherent'
-      ? `${formatCapacity(profile.memoryTotalGB + totalGpuMemory)} 一致性地址空间`
-      : `${devices.length} 卡共 ${formatCapacity(totalGpuMemory)} 显存`
+  const memorySummary = !profile
+    ? ''
+    : profile.gpuMemoryMode === 'unified'
+      ? `${formatCapacity(profile.memoryTotalGB)} CPU／GPU 共享，不重复累计`
+      : profile.gpuMemoryMode === 'coherent'
+        ? `${formatCapacity(profile.memoryTotalGB + totalGpuMemory)} 一致性地址空间`
+        : `${devices.length} 卡共 ${formatCapacity(totalGpuMemory)} 显存`
 
-  const cpuUsage = isReal ? Math.round(profile.cpuUsage) : Math.round(clamp(profile.cpuUsage + Math.sin(sample * 0.43) * 5))
-  const memoryUsage = safePercent(profile.memoryUsedGB, profile.memoryTotalGB)
-  const storageUsage = safePercent(profile.storageUsedGB, profile.storageTotalGB)
+  const cpuUsage = profile ? Math.round(clamp(profile.cpuUsage)) : 0
+  const memoryUsage = profile ? safePercent(profile.memoryUsedGB, profile.memoryTotalGB) : 0
+  const storageUsage = profile ? safePercent(profile.storageUsedGB, profile.storageTotalGB) : 0
 
-  return <Panel className="mt-5" data-hardware-source={isReal ? 'real' : 'demo'}>
-    <PanelHeader title="硬件与实时监控" description={`${profile.hostName} · ${profile.productName}`} action={isReal
+  return <Panel className="mt-5" data-hardware-source={profile ? 'real' : 'unavailable'} data-hardware-collected={report?.collectedAt ?? ''}>
+    <PanelHeader title="硬件与实时监控" description={profile ? `${profile.hostName} · ${profile.productName}` : '宿主机硬件实时采集'} action={profile
       ? <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700"><Activity className="size-3.5" />本机实测</span>
-      : <label className="flex items-center gap-2 text-xs whitespace-nowrap text-slate-500">演示机型<select aria-label="演示硬件机型" className="field-input min-h-10 max-w-64 bg-white py-1 text-xs" value={profileId} onChange={(event) => setProfileId(event.target.value)}>{hardwareProfiles.map((item) => <option key={item.id} value={item.id}>{item.productName}</option>)}</select></label>} />
-    <div className="flex flex-col gap-2 border-b border-slate-200 bg-teal-50/60 px-5 py-3 text-xs text-teal-900 sm:flex-row sm:items-center sm:justify-between">
-      <span className="inline-flex items-center gap-2"><span className="relative flex size-2"><span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-60" /><span className="relative inline-flex size-2 rounded-full bg-emerald-500" /></span>{isReal ? '2 秒自动刷新 · 真实采集自宿主机 nvidia-smi 与 /proc' : `2 秒自动刷新 · Demo 遥测${reportFailed ? '（硬件接口不可用，显示演示数据）' : '，后续接入宿主机采集'}`}</span>
-      <span className="inline-flex items-center gap-1.5 font-medium"><Activity className="size-3.5" />{profile.architecture} · {memoryModeNames[profile.gpuMemoryMode]}</span>
+      : undefined} />
+    <div className={`flex flex-col gap-2 border-b px-5 py-3 text-xs sm:flex-row sm:items-center sm:justify-between ${reportError ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-slate-200 bg-teal-50/60 text-teal-900'}`}>
+      {reportError
+        ? <span className="inline-flex items-center gap-2"><CircleAlert className="size-3.5 shrink-0" />硬件采集接口暂不可用（{reportError}），每 2 秒自动重试。</span>
+        : <span className="inline-flex items-center gap-2"><span className="relative flex size-2"><span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-60" /><span className="relative inline-flex size-2 rounded-full bg-emerald-500" /></span>{profile ? '2 秒自动刷新 · 真实采集自宿主机 nvidia-smi 与 /proc' : '正在连接硬件采集接口…'}</span>}
+      {profile && <span className="inline-flex items-center gap-1.5 font-medium"><Activity className="size-3.5" />{profile.architecture} · {memoryModeNames[profile.gpuMemoryMode]}</span>}
     </div>
-    <div className="grid gap-px bg-slate-200 sm:grid-cols-2 xl:grid-cols-4" data-telemetry-sample={sample}>
-      <SummaryCard icon={Server} label="主机名称" value={profile.hostName} description={`${profile.os} · ${profile.architecture}`} />
-      <SummaryCard icon={Cpu} label="CPU" value={`${profile.cpuModel} · ${profile.cpuCores} 核`} description={isReal && report?.cpuUsagePercent == null ? '利用率采样中…' : `实时利用率 ${cpuUsage}%`} usage={isReal && report?.cpuUsagePercent == null ? undefined : cpuUsage} />
-      <SummaryCard icon={MemoryStick} label={profile.gpuMemoryMode === 'discrete' ? '内存' : profile.gpuMemoryMode === 'unified' ? '统一内存' : 'CPU 内存'} value={`${profile.memoryUsedGB}／${formatCapacity(profile.memoryTotalGB)} 已用`} description={profile.memoryDescription} usage={memoryUsage} />
-      <SummaryCard icon={HardDrive} label="存储" value={`${formatCapacity(profile.storageUsedGB)}／${formatCapacity(profile.storageTotalGB)} 已用`} description={profile.storageDescription} usage={storageUsage} />
-    </div>
-    <div className="border-t border-slate-200 p-5">
-      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-center gap-2"><Database className="size-4 text-teal-700" /><h3 className="text-sm font-semibold text-slate-900">GPU 设备</h3><span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{devices.length} 个</span></div><div className="text-xs text-slate-500">平均利用率 <strong className="font-semibold text-slate-800">{knownUtilizations.length ? `${averageUsage}%` : '—'}</strong><span className="mx-2 text-slate-300">|</span>{memorySummary}</div></div>
-      {devices.length > 0
-        ? <div className={`grid gap-3 ${devices.length >= 4 ? 'sm:grid-cols-2 xl:grid-cols-4' : 'sm:grid-cols-2'}`}>{devices.map((gpu) => <GpuCard key={gpu.id} gpu={gpu} profile={profile} />)}</div>
-        : <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500" data-testid="gpu-empty">未检测到 GPU 设备{report?.gpuError ? `：${report.gpuError}` : '。'}GPU 实例创建将被阻塞。</p>}
-    </div>
+    {profile && <>
+      <div className="grid gap-px bg-slate-200 sm:grid-cols-2 xl:grid-cols-4">
+        <SummaryCard icon={Server} label="主机名称" value={profile.hostName} description={`${profile.os} · ${profile.architecture}`} />
+        <SummaryCard icon={Cpu} label="CPU" value={`${profile.cpuModel} · ${profile.cpuCores} 核`} description={report?.cpuUsagePercent == null ? '利用率采样中…' : `实时利用率 ${cpuUsage}%`} usage={report?.cpuUsagePercent == null ? undefined : cpuUsage} />
+        <SummaryCard icon={MemoryStick} label={profile.gpuMemoryMode === 'discrete' ? '内存' : profile.gpuMemoryMode === 'unified' ? '统一内存' : 'CPU 内存'} value={`${profile.memoryUsedGB}／${formatCapacity(profile.memoryTotalGB)} 已用`} description={profile.memoryDescription} usage={memoryUsage} />
+        <SummaryCard icon={HardDrive} label="存储" value={`${formatCapacity(profile.storageUsedGB)}／${formatCapacity(profile.storageTotalGB)} 已用`} description={profile.storageDescription} usage={storageUsage} />
+      </div>
+      <div className="border-t border-slate-200 p-5">
+        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-center gap-2"><Database className="size-4 text-teal-700" /><h3 className="text-sm font-semibold text-slate-900">GPU 设备</h3><span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{devices.length} 个</span></div><div className="text-xs text-slate-500">平均利用率 <strong className="font-semibold text-slate-800">{knownUtilizations.length ? `${averageUsage}%` : '—'}</strong><span className="mx-2 text-slate-300">|</span>{memorySummary}</div></div>
+        {devices.length > 0
+          ? <div className={`grid gap-3 ${devices.length >= 4 ? 'sm:grid-cols-2 xl:grid-cols-4' : 'sm:grid-cols-2'}`}>{devices.map((gpu) => <GpuCard key={gpu.id} gpu={gpu} profile={profile} />)}</div>
+          : <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center text-sm text-slate-500" data-testid="gpu-empty">未检测到 GPU 设备{report?.gpuError ? `：${report.gpuError}` : '。'}GPU 实例创建将被阻塞。</p>}
+      </div>
+    </>}
+    {!profile && !reportError && <div className="p-8 text-center text-sm text-slate-500">正在读取宿主机硬件信息…</div>}
+    {!profile && reportError && <div className="p-8 text-center text-sm text-slate-500">硬件数据暂不可用，恢复后自动展示。</div>}
   </Panel>
 }

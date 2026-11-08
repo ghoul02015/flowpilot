@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.5.0') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.5.1') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
@@ -50,13 +50,16 @@ try {
   }
 
   await page.goto(baseURL, { waitUntil: 'networkidle' })
-  await page.getByRole('heading', { name: '下午好，管理员' }).waitFor()
+  await page.getByRole('heading', { name: /凌晨好|上午好|下午好|晚上好/ }).waitFor()
   await page.getByRole('heading', { name: '硬件与实时监控' }).waitFor()
   check('首页看板与完整硬件信息加载')
   await screenshot('01-dashboard')
 
-  const firstSample = await page.locator('[data-telemetry-sample]').getAttribute('data-telemetry-sample')
-  await page.waitForFunction((previous) => document.querySelector('[data-telemetry-sample]')?.getAttribute('data-telemetry-sample') !== previous, firstSample, { timeout: 4000 })
+  const firstCollected = await page.locator('[data-hardware-collected]').getAttribute('data-hardware-collected')
+  await page.waitForFunction((previous) => {
+    const current = document.querySelector('[data-hardware-collected]')?.getAttribute('data-hardware-collected')
+    return current && current !== previous && current !== ''
+  }, firstCollected, { timeout: 6000 })
   check('GPU 遥测每 2 秒自动刷新')
 
   if (hasRealHardware && hardware.gpuAvailable) {
@@ -72,22 +75,18 @@ try {
     check('真实硬件面板展示宿主机数据')
     await screenshot('01-hardware-real')
   } else {
-    await page.getByLabel('演示硬件机型').selectOption('dgx-spark')
-    await page.getByText('128 GB CPU／GPU 共享，不重复累计', { exact: false }).waitFor()
-    await page.getByText('独立显存占用不适用；此处显示系统统一内存使用率。', { exact: true }).waitFor()
-    check('DGX Spark 统一内存展示（Demo 回退）')
-    await screenshot('01-hardware-dgx-spark')
-
-    await page.getByLabel('演示硬件机型').selectOption('dgx-station-gb300')
-    await page.getByText('LPDDR5X · 与 252 GB HBM3e 构成最高 748 GB 一致性地址空间', { exact: true }).waitFor()
-    check('DGX Station GB300 一致性内存展示（Demo 回退）')
-
-    await page.getByLabel('演示硬件机型').selectOption('rtx5090-16')
-    await page.getByTestId('gpu-card-15').waitFor()
-    if (await page.locator('[data-testid^="gpu-card-"]').count() !== 16) throw new Error('十六卡机型未完整展示 16 个 GPU 设备')
-    check('十六卡 RTX 5090 完整展示（Demo 回退）')
-    await screenshot('01-hardware-16-gpu')
+    // 无 GPU 或采集失败的生产环境：面板必须明确提示，而不是回退演示数据。
+    await page.getByText(/未检测到 GPU 设备|硬件采集接口暂不可用/, { exact: false }).first().waitFor()
+    check('硬件不可用状态明确提示（无演示数据回退）')
+    await screenshot('01-hardware-unavailable')
   }
+
+  // 全站不得出现演示数据标识（0.0.5.1 起移除全部模拟数据）。
+  const bodyText = await page.evaluate(() => document.body.innerText)
+  for (const marker of ['重置演示数据', '演示机型', '本地模拟数据', 'Demo ·', '模拟打开', '演示数据']) {
+    if (bodyText.includes(marker)) throw new Error(`页面仍包含演示数据标识：${marker}`)
+  }
+  check('界面无演示数据标识')
 
   await page.getByRole('button', { name: 'ComfyUI 实例', exact: true }).click()
   await page.getByRole('heading', { name: '实例管理' }).waitFor()
@@ -116,6 +115,7 @@ try {
     await createDialog.getByLabel('访问端口').fill('18188')
     await createDialog.getByLabel('容器端口').fill('18080')
     await page.getByRole('button', { name: /下一步/ }).click()
+    await page.getByText('共享模型仓库将自动挂载进实例容器', { exact: false }).waitFor()
     await page.getByRole('button', { name: /下一步/ }).click()
     await page.getByRole('button', { name: /确认部署|正在创建容器/ }).click()
     await page.getByRole('button', { name: `停止 ${instanceName}`, exact: true }).waitFor({ timeout: 30000 })
@@ -159,6 +159,7 @@ try {
     await comfyDialog.getByLabel('访问端口').fill('18189')
     await comfyDialog.getByLabel('容器端口').fill('8188')
     await page.getByRole('button', { name: /下一步/ }).click()
+    await page.getByText('共享模型仓库将自动挂载进实例容器', { exact: false }).waitFor()
     await page.getByRole('button', { name: /下一步/ }).click()
     await page.getByRole('button', { name: /确认部署|正在创建容器/ }).click()
     await page.getByRole('button', { name: `停止 ${comfyName}`, exact: true }).waitFor({ timeout: 60000 })
@@ -222,19 +223,12 @@ try {
     await comfyDeleteDialog.getByRole('button', { name: '确认删除' }).click()
     await page.getByRole('button', { name: `删除 ${comfyName}`, exact: true }).waitFor({ state: 'detached', timeout: 15000 })
     check('ComfyUI 实例删除')
+
+    // 实例全部删除后应展示生产空态，而非演示数据。
+    await page.getByText('暂无 ComfyUI 实例', { exact: true }).waitFor()
+    check('实例列表空态展示（无演示数据）')
   } else {
-    await page.getByLabel('分配 GPU').selectOption('1')
-    await page.getByRole('button', { name: /下一步/ }).click()
-    await page.getByText('选择需要预置的全局模型').waitFor()
-    await page.getByRole('button', { name: /下一步/ }).click()
-    await page.getByRole('button', { name: '确认部署' }).click()
-    await page.getByRole('button', { name: '停止 生产绘图-04', exact: true }).waitFor({ timeout: 8000 })
-    check('新建实例与模拟部署')
-    await page.getByRole('button', { name: '停止 生产绘图-04', exact: true }).click()
-    const newInstanceRow = page.getByRole('row').filter({ hasText: '生产绘图-04' })
-    await newInstanceRow.getByText('已停止', { exact: true }).waitFor({ timeout: 5000 })
-    check('实例停止')
-    await screenshot('02-instances')
+    throw new Error('实例接口不可用：0.0.5.1 起页面仅支持真实后端，请确认平台服务已启动')
   }
 
   // 模型中心：接口可用时验证真实仓库扫描与删除，否则走 Demo 流程。
@@ -249,7 +243,7 @@ try {
 
   if (realModelsAvailable) {
     check('真实模型仓库扫描接口')
-    await page.getByText('真实共享仓库扫描', { exact: true }).waitFor()
+    await page.getByText('共享仓库实时扫描', { exact: true }).waitFor()
     if (seedFile) {
       // 预置的回归文件（部署时在目标机 seed）：checkpoints/regress-test.safetensors
       const seedRow = page.getByRole('row').filter({ hasText: 'regress-test.safetensors' })
@@ -348,13 +342,7 @@ try {
     if (!importRemoved) throw new Error('导入文件删除后仍在仓库中')
     check('导入文件界面删除')
   } else {
-    await page.getByRole('button', { name: '添加模型', exact: true }).click()
-    await page.getByRole('button', { name: '开始下载' }).click()
-    await page.getByRole('button', { name: '暂停 dreamshaper-xl.safetensors', exact: true }).waitFor()
-    await page.getByRole('button', { name: '暂停 dreamshaper-xl.safetensors', exact: true }).click()
-    await page.getByRole('button', { name: '继续 dreamshaper-xl.safetensors', exact: true }).waitFor()
-    check('模型添加、下载与暂停')
-    await screenshot('03-models')
+    throw new Error('模型接口不可用：0.0.5.1 起页面仅支持真实后端，请确认平台服务已启动')
   }
 
   if (realModelsAvailable) {
@@ -381,14 +369,9 @@ try {
 
   await page.getByRole('button', { name: /^任务中心/ }).first().click()
   await page.getByRole('heading', { name: '任务中心' }).waitFor()
-  if (!realModelsAvailable) {
-    await page.getByText('下载 dreamshaper-xl.safetensors', { exact: true }).waitFor()
-    check('任务中心与模型任务同步')
-  } else {
-    await page.getByText('下载 index.html', { exact: true }).first().waitFor()
-    await page.getByText('下载完成，已写入共享仓库', { exact: false }).first().waitFor()
-    check('任务中心展示真实下载任务')
-  }
+  await page.getByText('下载 index.html', { exact: true }).first().waitFor()
+  await page.getByText('下载完成，已写入共享仓库', { exact: false }).first().waitFor()
+  check('任务中心展示真实下载任务')
   await screenshot('04-tasks')
 
   await page.getByRole('button', { name: '系统管理', exact: true }).click()
@@ -400,17 +383,12 @@ try {
   check('环境重新检测')
   await screenshot('05-system')
 
-  await page.getByRole('tab', { name: '系统设置' }).click()
-  await page.getByRole('button', { name: '保存设置' }).click()
-  await page.getByText('系统设置已保存', { exact: true }).waitFor()
-  await page.getByRole('tab', { name: '操作日志' }).click()
-  await page.getByText('修改镜像仓库配置', { exact: true }).waitFor()
   await page.getByRole('tab', { name: '诊断与关于' }).click()
   const downloadPromise = page.waitForEvent('download')
   await page.getByRole('button', { name: '导出诊断包' }).click()
   const download = await downloadPromise
   await download.saveAs(`${outputDir}diagnostics.json`)
-  check('系统页签、设置保存与诊断导出')
+  check('诊断导出')
 
   await page.setViewportSize({ width: 375, height: 812 })
   await page.getByRole('button', { name: '打开菜单' }).click()

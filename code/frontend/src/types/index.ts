@@ -3,7 +3,7 @@ export type PageKey = 'dashboard' | 'instances' | 'models' | 'tasks' | 'system'
 export type InstanceStatus = 'creating' | 'starting' | 'running' | 'stopping' | 'stopped' | 'restarting' | 'error'
 export type ModelStatus = 'waiting' | 'downloading' | 'paused' | 'ready' | 'failed' | 'cancelled'
 export type TaskStatus = 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'
-export type TaskType = '实例部署' | '模型下载' | '模型导入' | '环境检测' | '诊断导出'
+export type TaskType = '模型下载' | '模型导入'
 
 export interface Instance {
   id: string
@@ -14,10 +14,9 @@ export interface Instance {
   gpu: number
   port: number
   autoStart: boolean
-  models: number
   createdAt: string
   uptime: string
-  // 真实模式下由后端代理探测的 ComfyUI 制图队列摘要。
+  // 由后端代理探测的 ComfyUI 制图队列摘要。
   comfy?: {
     reachable: boolean
     queueRunning: number
@@ -46,18 +45,13 @@ export interface TaskItem {
   progress: number
   createdAt: string
   message: string
-  modelId?: string
-  instanceId?: string
 }
 
 export interface CreateInstanceInput {
   name: string
-  template: string
-  version: string
   gpu: number
   port: number
   autoStart: boolean
-  models: number
   image?: string
   containerPort?: number
 }

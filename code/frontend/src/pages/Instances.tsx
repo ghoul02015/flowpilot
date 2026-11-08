@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react'
 import { ExternalLink, Play, Plus, RefreshCw, Search, Settings2, Square, Trash2 } from 'lucide-react'
-import { toast } from 'sonner'
 import { EmptyState, PageHeader, Panel, StatusBadge } from '@/components/common'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { Instance } from '@/types'
@@ -12,10 +11,9 @@ interface Props {
   onCreate: () => void
   onAction: (id: string, action: 'start' | 'stop' | 'restart') => void
   onDelete: (id: string) => void
-  onToggleAutoStart: (id: string) => void
 }
 
-export function Instances({ instances, gpuNames, realMode, onCreate, onAction, onDelete, onToggleAutoStart }: Props) {
+export function Instances({ instances, gpuNames, realMode, onCreate, onAction, onDelete }: Props) {
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all')
   const [detailId, setDetailId] = useState<string | null>(null)
@@ -56,7 +54,7 @@ export function Instances({ instances, gpuNames, realMode, onCreate, onAction, o
           </div></td>
         </tr>})}
       </tbody></table></div>
-      {filtered.length === 0 && <EmptyState title="没有匹配的实例" description="请调整搜索词或状态筛选。" />}
+      {filtered.length === 0 && <EmptyState title={instances.length === 0 ? '暂无 ComfyUI 实例' : '没有匹配的实例'} description={instances.length === 0 ? '点击右上角「新建实例」开始部署。' : '请调整搜索词或状态筛选。'} />}
     </Panel>
 
     <Dialog open={Boolean(detail)} onOpenChange={(open) => !open && setDetailId(null)}>
@@ -68,19 +66,17 @@ export function Instances({ instances, gpuNames, realMode, onCreate, onAction, o
           ['访问端口', String(detail.port)],
           ['制图任务', detail.status !== 'running' ? '实例未运行' : detail.comfy ? (detail.comfy.reachable ? `运行 ${detail.comfy.queueRunning} · 排队 ${detail.comfy.queuePending}${detail.comfy.comfyuiVersion ? ` · ComfyUI ${detail.comfy.comfyuiVersion}` : ''}` : '服务启动中…') : '探测中…'],
           ['创建时间', detail.createdAt],
-          ['数据目录', realMode ? '/data/flowpilot/shared（共享仓库）' : `/data/flowpilot/instances/${detail.id}`],
-          ['容器名称', realMode ? `flowpilot-comfyui-${detail.name}` : `flowpilot-${detail.id}`],
+          ['数据目录', '/data/flowpilot/shared（共享仓库）'],
+          ['容器名称', `flowpilot-comfyui-${detail.name}`],
         ].map(([term, value]) => <div key={term} className={term.includes('目录') || term.includes('容器') ? 'col-span-2' : ''}><dt className="text-xs text-slate-500">{term}</dt><dd className="mt-1 break-all font-medium text-slate-800">{value}</dd></div>)}</dl>
-        <label className="flex min-h-12 cursor-pointer items-center justify-between rounded-lg border border-slate-200 px-4"><span className="text-sm font-medium text-slate-700">开机自动启动{realMode && '（由容器重启策略记录）'}</span><input type="checkbox" className="size-4 accent-teal-700" checked={detail.autoStart} disabled={realMode} onChange={() => onToggleAutoStart(detail.id)} /></label>
-        <DialogFooter>{realMode
-          ? <button type="button" className="btn-secondary" disabled={detail.status !== 'running'} onClick={() => window.open(`http://${window.location.hostname}:${detail.port}`, '_blank', 'noopener')}><ExternalLink className="size-4" />打开 ComfyUI</button>
-          : <button type="button" className="btn-secondary" onClick={() => toast.info('Demo 未连接真实 ComfyUI', { description: `实际环境中将打开 http://服务器IP:${detail.port}` })}><ExternalLink className="size-4" />模拟打开</button>}<button type="button" className="btn-primary" onClick={() => setDetailId(null)}>完成</button></DialogFooter>
+        <label className="flex min-h-12 items-center justify-between rounded-lg border border-slate-200 px-4"><span className="text-sm font-medium text-slate-700">开机自动启动（创建时指定，由容器重启策略执行）</span><input type="checkbox" className="size-4 accent-teal-700" checked={detail.autoStart} disabled readOnly /></label>
+        <DialogFooter><button type="button" className="btn-secondary" disabled={detail.status !== 'running'} onClick={() => window.open(`http://${window.location.hostname}:${detail.port}`, '_blank', 'noopener')}><ExternalLink className="size-4" />打开 ComfyUI</button><button type="button" className="btn-primary" onClick={() => setDetailId(null)}>完成</button></DialogFooter>
       </>}</DialogContent>
     </Dialog>
 
     <Dialog open={Boolean(deleting)} onOpenChange={(open) => !open && closeDelete()}>
       <DialogContent>{deleting && <>
-        <DialogHeader><DialogTitle>删除实例</DialogTitle><DialogDescription>{realMode ? '此操作将删除真实 Docker 容器；共享模型目录始终保留。' : '此操作删除容器和管理记录。共享模型始终保留，Demo 不产生真实数据变更。'}</DialogDescription></DialogHeader>
+        <DialogHeader><DialogTitle>删除实例</DialogTitle><DialogDescription>此操作将删除真实 Docker 容器；共享模型目录始终保留。</DialogDescription></DialogHeader>
         <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm leading-6 text-rose-800">请输入实例名称 <strong>{deleting.name}</strong> 以确认删除。</div>
         <label className="field-label">实例名称<input className="field-input" value={confirmName} onChange={(event) => setConfirmName(event.target.value)} autoComplete="off" /></label>
         <DialogFooter><button type="button" className="btn-secondary" onClick={closeDelete}>取消</button><button type="button" className="btn-danger" disabled={confirmName !== deleting.name} onClick={() => { onDelete(deleting.id); closeDelete() }}><Trash2 className="size-4" />确认删除</button></DialogFooter>
