@@ -51,6 +51,8 @@ export interface CreateInstanceInput {
   port: number
   autoStart: boolean
   models: number
+  image?: string
+  containerPort?: number
 }
 
 export interface AddModelInput {

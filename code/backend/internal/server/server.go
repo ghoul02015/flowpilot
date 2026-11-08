@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -11,24 +12,32 @@ import (
 
 	"github.com/ghoul02015/flowpilot/internal/docker"
 	"github.com/ghoul02015/flowpilot/internal/hardware"
+	"github.com/ghoul02015/flowpilot/internal/instance"
 )
 
-const Version = "0.0.0.6"
+const Version = "0.0.1.0"
 
 type Handler struct {
 	docker    *docker.Client
 	staticDir string
 	hardware  *hardware.Collector
+	instances *instance.Manager
 }
 
-func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector) http.Handler {
-	handler := &Handler{docker: dockerClient, staticDir: staticDir, hardware: hardwareCollector}
+func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager) http.Handler {
+	handler := &Handler{docker: dockerClient, staticDir: staticDir, hardware: hardwareCollector, instances: instanceManager}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", handler.health)
 	mux.HandleFunc("GET /api/v1/system/info", handler.systemInfo)
 	mux.HandleFunc("GET /api/v1/hardware", handler.hardwareReport)
 	mux.HandleFunc("GET /api/v1/docker/info", handler.dockerInfo)
 	mux.HandleFunc("GET /api/v1/docker/containers", handler.dockerContainers)
+	mux.HandleFunc("GET /api/v1/instances", handler.listInstances)
+	mux.HandleFunc("POST /api/v1/instances", handler.createInstance)
+	mux.HandleFunc("POST /api/v1/instances/{name}/start", handler.instanceAction("start"))
+	mux.HandleFunc("POST /api/v1/instances/{name}/stop", handler.instanceAction("stop"))
+	mux.HandleFunc("POST /api/v1/instances/{name}/restart", handler.instanceAction("restart"))
+	mux.HandleFunc("DELETE /api/v1/instances/{name}", handler.deleteInstance)
 	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "API endpoint not found"})
 	})
@@ -83,6 +92,81 @@ func (h *Handler) dockerContainers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, containers)
+}
+
+func (h *Handler) listInstances(w http.ResponseWriter, r *http.Request) {
+	if h.instances == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "实例管理未启用"})
+		return
+	}
+	instances, err := h.instances.List(r.Context())
+	if err != nil {
+		slog.Warn("list instances failed", "error", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "无法读取实例列表", "detail": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"instances": instances, "defaults": h.instances.Defaults()})
+}
+
+func (h *Handler) createInstance(w http.ResponseWriter, r *http.Request) {
+	if h.instances == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "实例管理未启用"})
+		return
+	}
+	var spec instance.Spec
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&spec); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误", "detail": err.Error()})
+		return
+	}
+	created, err := h.instances.Create(r.Context(), spec)
+	if err != nil {
+		h.writeInstanceError(w, err, "创建实例失败")
+		return
+	}
+	writeJSON(w, http.StatusCreated, created)
+}
+
+func (h *Handler) instanceAction(action string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if h.instances == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "实例管理未启用"})
+			return
+		}
+		updated, err := h.instances.Action(r.Context(), r.PathValue("name"), action)
+		if err != nil {
+			h.writeInstanceError(w, err, "实例操作失败")
+			return
+		}
+		writeJSON(w, http.StatusOK, updated)
+	}
+}
+
+func (h *Handler) deleteInstance(w http.ResponseWriter, r *http.Request) {
+	if h.instances == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "实例管理未启用"})
+		return
+	}
+	force := r.URL.Query().Get("force") == "1" || r.URL.Query().Get("force") == "true"
+	if err := h.instances.Delete(r.Context(), r.PathValue("name"), force); err != nil {
+		h.writeInstanceError(w, err, "删除实例失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// writeInstanceError 将实例层错误映射为合适的 HTTP 状态码。
+func (h *Handler) writeInstanceError(w http.ResponseWriter, err error, prefix string) {
+	var validationError *instance.ValidationError
+	var notFoundError *instance.NotFoundError
+	switch {
+	case errors.As(err, &validationError):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationError.Message})
+	case errors.As(err, &notFoundError):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": notFoundError.Error()})
+	default:
+		slog.Warn(prefix, "error", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": prefix, "detail": err.Error()})
+	}
 }
 
 func (h *Handler) spa() http.Handler {

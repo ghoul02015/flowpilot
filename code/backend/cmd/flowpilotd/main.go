@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/ghoul02015/flowpilot/internal/docker"
 	"github.com/ghoul02015/flowpilot/internal/hardware"
+	"github.com/ghoul02015/flowpilot/internal/instance"
 	"github.com/ghoul02015/flowpilot/internal/server"
 )
 
@@ -25,10 +27,18 @@ func main() {
 		DataDir:      os.Getenv("FLOWPILOT_DATA_DIR"),
 		NvidiaSMIBin: os.Getenv("FLOWPILOT_NVIDIA_SMI"),
 	})
+	dockerClient := docker.NewClient(socketPath)
+	instanceManager := instance.NewManager(
+		dockerClient,
+		func() int { return len(hardwareCollector.Collect(context.Background()).GPUs) },
+		environment("FLOWPILOT_HOST_DATA_DIR", environment("FLOWPILOT_DATA_DIR", "/data/flowpilot")),
+		environment("FLOWPILOT_COMFYUI_IMAGE", "comfyui:latest"),
+		envInt("FLOWPILOT_COMFYUI_CONTAINER_PORT", 8188),
+	)
 
 	httpServer := &http.Server{
 		Addr:              address,
-		Handler:           server.New(staticDir, docker.NewClient(socketPath), hardwareCollector),
+		Handler:           server.New(staticDir, dockerClient, hardwareCollector, instanceManager),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -56,6 +66,15 @@ func main() {
 func environment(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
+	}
+	return fallback
+}
+
+func envInt(key string, fallback int) int {
+	if value := os.Getenv(key); value != "" {
+		if parsed, err := strconv.Atoi(value); err == nil {
+			return parsed
+		}
 	}
 	return fallback
 }

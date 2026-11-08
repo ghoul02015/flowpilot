@@ -1,7 +1,7 @@
 # 慧浪智算·FlowPilot MVP 产品需求文档
 
 > 文档性质：立项评审稿
-> 项目版本：0.0.0.6
+> 项目版本：0.0.1.0
 > 产品阶段：MVP
 > 编写日期：2026-11-04
 > 产品品牌：慧浪智算
@@ -535,6 +535,13 @@ URL 下载表单：
 - 一体化离线镜像包（当前约 6.7 MB），一条命令安装并等待容器 healthy。
 - 一键卸载需显式确认（`--yes`），只删除 FlowPilot 容器、镜像和用户目录；通过 `flowpilot.managed=true` 容器标签判断共享镜像，保护同机其他实例与无关业务容器。
 - 已在 DGX Spark（Ubuntu 24.04 arm64、NVIDIA GB10、Docker 29.2.1）实测安装、卸载、重装与界面回归。
+
+### 9.6 实例生命周期落地补充（0.0.1.0 已落地）
+
+- 实例管理已接入真实 Docker API：创建、启动、停止、重启、删除 ComfyUI 容器全生命周期可用，前端实例页在接口可用时自动进入真实模式。
+- 实例即带 `flowpilot.instance=true` 标签的容器（命名 `flowpilot-comfyui-<name>`），配置全部存标签，无需数据库；只管理本标签容器，不触碰宿主机其他容器。
+- GPU 分配通过 Docker `DeviceRequests` 精确到单卡，支持仅 CPU 实例；共享数据目录 `{models,workflows,outputs}` 自动挂载，与第 10 章容器数据规划一致。
+- 镜像名可配置（`FLOWPILOT_COMFYUI_IMAGE`，默认 `comfyui:latest`）；验证阶段以平台自身镜像代替 ComfyUI 镜像完成全链路实测。
 
 ## 10. 容器与数据规划
 

@@ -8,10 +8,18 @@ import (
 
 	"github.com/ghoul02015/flowpilot/internal/docker"
 	"github.com/ghoul02015/flowpilot/internal/hardware"
+	"github.com/ghoul02015/flowpilot/internal/instance"
 )
 
+func newTestHandler(t *testing.T, instances *instance.Manager) http.Handler {
+	t.Helper()
+	return New(t.TempDir(), docker.NewClient("/unused/docker.sock"),
+		hardware.NewCollector(hardware.Config{ProcRoot: t.TempDir(), HostRoot: t.TempDir(), DataDir: t.TempDir(), NvidiaSMIBin: ""}),
+		instances)
+}
+
 func TestHealth(t *testing.T) {
-	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), hardware.NewCollector(hardware.Config{ProcRoot: t.TempDir(), HostRoot: t.TempDir(), DataDir: t.TempDir(), NvidiaSMIBin: ""}))
+	handler := newTestHandler(t, nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -32,7 +40,7 @@ func TestHealth(t *testing.T) {
 }
 
 func TestUnknownAPIReturnsJSON(t *testing.T) {
-	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), hardware.NewCollector(hardware.Config{ProcRoot: t.TempDir(), HostRoot: t.TempDir(), DataDir: t.TempDir(), NvidiaSMIBin: ""}))
+	handler := newTestHandler(t, nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/unknown", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -46,7 +54,7 @@ func TestUnknownAPIReturnsJSON(t *testing.T) {
 }
 
 func TestHardwareEndpoint(t *testing.T) {
-	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), hardware.NewCollector(hardware.Config{ProcRoot: t.TempDir(), HostRoot: t.TempDir(), DataDir: t.TempDir(), NvidiaSMIBin: ""}))
+	handler := newTestHandler(t, nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/hardware", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -69,8 +77,18 @@ func TestHardwareEndpoint(t *testing.T) {
 }
 
 func TestHardwareEndpointWithoutCollector(t *testing.T) {
-	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil)
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/hardware", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", response.Code)
+	}
+}
+
+func TestInstancesEndpointWithoutManager(t *testing.T) {
+	handler := newTestHandler(t, nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/instances", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable {

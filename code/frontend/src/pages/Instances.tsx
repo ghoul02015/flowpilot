@@ -7,13 +7,15 @@ import type { Instance } from '@/types'
 
 interface Props {
   instances: Instance[]
+  gpuNames: string[]
+  realMode: boolean
   onCreate: () => void
   onAction: (id: string, action: 'start' | 'stop' | 'restart') => void
   onDelete: (id: string) => void
   onToggleAutoStart: (id: string) => void
 }
 
-export function Instances({ instances, onCreate, onAction, onDelete, onToggleAutoStart }: Props) {
+export function Instances({ instances, gpuNames, realMode, onCreate, onAction, onDelete, onToggleAutoStart }: Props) {
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all')
   const [detailId, setDetailId] = useState<string | null>(null)
@@ -38,7 +40,7 @@ export function Instances({ instances, onCreate, onAction, onDelete, onToggleAut
       <div className="overflow-x-auto"><table className="data-table min-w-[980px]"><thead><tr><th>实例名称</th><th>状态</th><th>资源</th><th>访问端口</th><th>模型</th><th>操作</th></tr></thead><tbody>
         {filtered.map((item) => { const busy = ['creating', 'starting', 'stopping', 'restarting'].includes(item.status); return <tr key={item.id}>
           <td><button type="button" className="cursor-pointer text-left font-medium text-slate-900 hover:text-teal-700" onClick={() => setDetailId(item.id)}>{item.name}</button><div className="mt-1 text-xs text-slate-500">{item.template} · {item.version}</div></td>
-          <td><StatusBadge status={item.status} /></td><td>GPU {item.gpu}<div className="mt-1 text-xs text-slate-500">NVIDIA L40S</div></td><td className="font-mono text-xs">{item.port}</td><td>{item.models} 个</td>
+          <td><StatusBadge status={item.status} /></td><td>{item.gpu >= 0 ? `GPU ${item.gpu}` : '不分配'}<div className="mt-1 text-xs text-slate-500">{item.gpu >= 0 ? gpuNames[item.gpu] ?? 'GPU' : '仅 CPU 运行'}</div></td><td className="font-mono text-xs">{item.port}</td><td>{item.models} 个</td>
           <td><div className="flex items-center gap-1">
             {item.status === 'running' ? <><button type="button" className="icon-button" aria-label={`停止 ${item.name}`} title="停止" disabled={busy} onClick={() => onAction(item.id, 'stop')}><Square className="size-4" /></button><button type="button" className="icon-button" aria-label={`重启 ${item.name}`} title="重启" disabled={busy} onClick={() => onAction(item.id, 'restart')}><RefreshCw className="size-4" /></button></> : <button type="button" className="icon-button" aria-label={`启动 ${item.name}`} title="启动" disabled={busy} onClick={() => onAction(item.id, 'start')}><Play className="size-4" /></button>}
             <button type="button" className="icon-button" aria-label={`查看 ${item.name} 详情`} title="实例详情" onClick={() => setDetailId(item.id)}><Settings2 className="size-4" /></button>
@@ -53,15 +55,24 @@ export function Instances({ instances, onCreate, onAction, onDelete, onToggleAut
       <DialogContent className="sm:max-w-xl">{detail && <>
         <DialogHeader><DialogTitle>{detail.name}</DialogTitle><DialogDescription>{detail.template} · {detail.version}</DialogDescription></DialogHeader>
         <div className="flex items-center justify-between rounded-lg bg-slate-100 px-4 py-3"><StatusBadge status={detail.status} /><span className="text-xs text-slate-500">{detail.uptime}</span></div>
-        <dl className="grid grid-cols-2 gap-4 text-sm">{[['GPU', `GPU ${detail.gpu} · L40S`], ['访问端口', String(detail.port)], ['模型数量', `${detail.models} 个`], ['创建时间', detail.createdAt], ['数据目录', `/data/flowpilot/instances/${detail.id}`], ['容器名称', `flowpilot-${detail.id}`]].map(([term, value]) => <div key={term} className={term.includes('目录') || term.includes('容器') ? 'col-span-2' : ''}><dt className="text-xs text-slate-500">{term}</dt><dd className="mt-1 break-all font-medium text-slate-800">{value}</dd></div>)}</dl>
-        <label className="flex min-h-12 cursor-pointer items-center justify-between rounded-lg border border-slate-200 px-4"><span className="text-sm font-medium text-slate-700">开机自动启动</span><input type="checkbox" className="size-4 accent-teal-700" checked={detail.autoStart} onChange={() => onToggleAutoStart(detail.id)} /></label>
-        <DialogFooter><button type="button" className="btn-secondary" onClick={() => toast.info('Demo 未连接真实 ComfyUI', { description: `实际环境中将打开 http://服务器IP:${detail.port}` })}><ExternalLink className="size-4" />模拟打开</button><button type="button" className="btn-primary" onClick={() => setDetailId(null)}>完成</button></DialogFooter>
+        <dl className="grid grid-cols-2 gap-4 text-sm">{[
+          ['GPU', detail.gpu >= 0 ? `GPU ${detail.gpu} · ${gpuNames[detail.gpu] ?? 'GPU'}` : '不分配 GPU'],
+          ['访问端口', String(detail.port)],
+          ['模型数量', `${detail.models} 个`],
+          ['创建时间', detail.createdAt],
+          ['数据目录', realMode ? '/data/flowpilot/shared（共享仓库）' : `/data/flowpilot/instances/${detail.id}`],
+          ['容器名称', realMode ? `flowpilot-comfyui-${detail.name}` : `flowpilot-${detail.id}`],
+        ].map(([term, value]) => <div key={term} className={term.includes('目录') || term.includes('容器') ? 'col-span-2' : ''}><dt className="text-xs text-slate-500">{term}</dt><dd className="mt-1 break-all font-medium text-slate-800">{value}</dd></div>)}</dl>
+        <label className="flex min-h-12 cursor-pointer items-center justify-between rounded-lg border border-slate-200 px-4"><span className="text-sm font-medium text-slate-700">开机自动启动{realMode && '（由容器重启策略记录）'}</span><input type="checkbox" className="size-4 accent-teal-700" checked={detail.autoStart} disabled={realMode} onChange={() => onToggleAutoStart(detail.id)} /></label>
+        <DialogFooter>{realMode
+          ? <button type="button" className="btn-secondary" disabled={detail.status !== 'running'} onClick={() => window.open(`http://${window.location.hostname}:${detail.port}`, '_blank', 'noopener')}><ExternalLink className="size-4" />打开 ComfyUI</button>
+          : <button type="button" className="btn-secondary" onClick={() => toast.info('Demo 未连接真实 ComfyUI', { description: `实际环境中将打开 http://服务器IP:${detail.port}` })}><ExternalLink className="size-4" />模拟打开</button>}<button type="button" className="btn-primary" onClick={() => setDetailId(null)}>完成</button></DialogFooter>
       </>}</DialogContent>
     </Dialog>
 
     <Dialog open={Boolean(deleting)} onOpenChange={(open) => !open && closeDelete()}>
       <DialogContent>{deleting && <>
-        <DialogHeader><DialogTitle>删除实例</DialogTitle><DialogDescription>此操作删除容器和管理记录。共享模型始终保留，Demo 不产生真实数据变更。</DialogDescription></DialogHeader>
+        <DialogHeader><DialogTitle>删除实例</DialogTitle><DialogDescription>{realMode ? '此操作将删除真实 Docker 容器；共享模型目录始终保留。' : '此操作删除容器和管理记录。共享模型始终保留，Demo 不产生真实数据变更。'}</DialogDescription></DialogHeader>
         <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm leading-6 text-rose-800">请输入实例名称 <strong>{deleting.name}</strong> 以确认删除。</div>
         <label className="field-label">实例名称<input className="field-input" value={confirmName} onChange={(event) => setConfirmName(event.target.value)} autoComplete="off" /></label>
         <DialogFooter><button type="button" className="btn-secondary" onClick={closeDelete}>取消</button><button type="button" className="btn-danger" disabled={confirmName !== deleting.name} onClick={() => { onDelete(deleting.id); closeDelete() }}><Trash2 className="size-4" />确认删除</button></DialogFooter>

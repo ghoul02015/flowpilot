@@ -2,6 +2,22 @@
 
 所有重要变更均记录于此。详细内容见 `context/changes/`。
 
+## 0.0.1.0 — 2026-11-08
+
+### 新增
+
+- 实例管理接入真实 Docker API：新增 `GET/POST /api/v1/instances`、`POST /api/v1/instances/{name}/start|stop|restart`、`DELETE /api/v1/instances/{name}?force=1`，实例为带 `flowpilot.instance=true` 标签的容器，配置全部存标签，无数据库。
+- 创建实例：名称／端口／GPU 冲突与合法性校验（正则、1024–65535、GPU 越界、镜像必须本地存在），GPU 分配通过 `DeviceRequests`（nvidia 驱动＋DeviceIDs），支持"不分配 GPU（仅 CPU）"，自动挂载共享数据目录 `{models,workflows,outputs}`，启动失败自动删除容器回滚。
+- 前端实例页真实模式：3 秒轮询真实实例列表，GPU 列显示真实型号（如 NVIDIA GB10），创建弹窗支持容器镜像、访问端口、容器端口与真实 GPU 下拉选择，"打开 ComfyUI"直达实例端口。
+- 新增环境变量：`FLOWPILOT_HOST_DATA_DIR`（宿主机共享数据目录）、`FLOWPILOT_COMFYUI_IMAGE`（默认 `comfyui:latest`）、`FLOWPILOT_COMFYUI_CONTAINER_PORT`（默认 8188）。
+
+### 验证
+
+- Go 四包测试全过（新增实例管理 7 个用例与 API 映射用例）；前端 lint／build 通过。
+- DGX Spark 实测：以 `flowpilot-web:0.0.1.0` 自身镜像作为实例镜像（Spark 上暂无 ComfyUI 镜像，容器端口 18080），通过界面完成 `regress-01` 的创建（GPU 0／端口 18188）、访问验证、停止、启动、删除全生命周期；21 项远程回归全部通过；业务容器 `comfyui-h3` 不受影响。
+
+详细记录：[0.0.1.0](context/changes/0.0.1.0.md)
+
 ## 0.0.0.6 — 2026-11-08
 
 ### 修复

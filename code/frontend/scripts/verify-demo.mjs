@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.0.6') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.1.0') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
@@ -101,18 +101,60 @@ try {
   if (['transparent', 'rgba(0, 0, 0, 0)'].includes(dialogStyle.background) || dialogStyle.opacity !== '1') throw new Error(`新建实例弹窗未正常显示：${JSON.stringify(dialogStyle)}`)
   check('新建实例弹窗背景不透明')
   await screenshot('02-create-dialog')
-  await page.getByLabel('分配 GPU').selectOption('1')
-  await page.getByRole('button', { name: /下一步/ }).click()
-  await page.getByText('选择需要预置的全局模型').waitFor()
-  await page.getByRole('button', { name: /下一步/ }).click()
-  await page.getByRole('button', { name: '确认部署' }).click()
-  await page.getByRole('button', { name: '停止 生产绘图-04', exact: true }).waitFor({ timeout: 8000 })
-  check('新建实例与模拟部署')
-  await page.getByRole('button', { name: '停止 生产绘图-04', exact: true }).click()
-  const newInstanceRow = page.getByRole('row').filter({ hasText: '生产绘图-04' })
-  await newInstanceRow.getByText('已停止', { exact: true }).waitFor({ timeout: 5000 })
-  check('实例停止')
-  await screenshot('02-instances')
+
+  const instancesApiResponse = await page.request.get(`${baseURL}/api/v1/instances`)
+  const realInstancesAvailable = instancesApiResponse.ok()
+
+  if (realInstancesAvailable) {
+    // 真实生命周期：创建 → 端口可达 → 停止 → 启动 → 删除，全程通过界面操作。
+    const instanceName = 'regress-01'
+    await createDialog.getByLabel('实例名称').fill(instanceName)
+    await createDialog.getByLabel('容器镜像').fill(`flowpilot-web:${health.version}`)
+    await createDialog.getByLabel('分配 GPU').selectOption('0')
+    await createDialog.getByLabel('访问端口').fill('18188')
+    await createDialog.getByLabel('容器端口').fill('18080')
+    await page.getByRole('button', { name: /下一步/ }).click()
+    await page.getByRole('button', { name: /下一步/ }).click()
+    await page.getByRole('button', { name: /确认部署|正在创建容器/ }).click()
+    await page.getByRole('button', { name: `停止 ${instanceName}`, exact: true }).waitFor({ timeout: 30000 })
+    check('真实实例创建并启动（Docker API）')
+
+    const instanceURL = new URL(baseURL)
+    instanceURL.port = '18188'
+    const instanceHealth = await page.request.get(`${instanceURL.origin}/api/v1/health`)
+    if (!instanceHealth.ok()) throw new Error(`实例端口不可达：HTTP ${instanceHealth.status()}`)
+    check('真实实例端口可访问')
+
+    await page.getByRole('button', { name: `停止 ${instanceName}`, exact: true }).click()
+    await page.getByRole('button', { name: `启动 ${instanceName}`, exact: true }).waitFor({ timeout: 20000 })
+    check('真实实例停止')
+    await page.getByRole('button', { name: `启动 ${instanceName}`, exact: true }).click()
+    await page.getByRole('button', { name: `停止 ${instanceName}`, exact: true }).waitFor({ timeout: 20000 })
+    check('真实实例启动')
+    await screenshot('02-instances-real')
+
+    await page.getByRole('button', { name: `停止 ${instanceName}`, exact: true }).click()
+    await page.getByRole('button', { name: `启动 ${instanceName}`, exact: true }).waitFor({ timeout: 20000 })
+    await page.getByRole('button', { name: `删除 ${instanceName}`, exact: true }).click()
+    const deleteDialog = page.getByRole('dialog')
+    await deleteDialog.getByLabel('实例名称').fill(instanceName)
+    await deleteDialog.getByRole('button', { name: '确认删除' }).click()
+    await page.getByRole('button', { name: `删除 ${instanceName}`, exact: true }).waitFor({ state: 'detached', timeout: 15000 })
+    check('真实实例删除')
+  } else {
+    await page.getByLabel('分配 GPU').selectOption('1')
+    await page.getByRole('button', { name: /下一步/ }).click()
+    await page.getByText('选择需要预置的全局模型').waitFor()
+    await page.getByRole('button', { name: /下一步/ }).click()
+    await page.getByRole('button', { name: '确认部署' }).click()
+    await page.getByRole('button', { name: '停止 生产绘图-04', exact: true }).waitFor({ timeout: 8000 })
+    check('新建实例与模拟部署')
+    await page.getByRole('button', { name: '停止 生产绘图-04', exact: true }).click()
+    const newInstanceRow = page.getByRole('row').filter({ hasText: '生产绘图-04' })
+    await newInstanceRow.getByText('已停止', { exact: true }).waitFor({ timeout: 5000 })
+    check('实例停止')
+    await screenshot('02-instances')
+  }
 
   await page.getByRole('button', { name: '模型中心', exact: true }).click()
   await page.getByRole('heading', { name: '模型中心' }).waitFor()

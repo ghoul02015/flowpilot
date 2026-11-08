@@ -1,25 +1,35 @@
 import { useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, Server } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, LoaderCircle, Server } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { CreateInstanceInput, Instance, ModelItem } from '@/types'
+
+// 真实容器名称需要兼容 Docker 命名规则。
+const realNamePattern = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}$/
 
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onSubmit: (input: CreateInstanceInput) => void
+  onSubmit: (input: CreateInstanceInput) => Promise<boolean>
   models: ModelItem[]
   instances: Instance[]
+  gpuNames: string[]
+  realMode: boolean
+  defaultImage?: string
+  defaultContainerPort?: number
 }
 
-export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, instances }: Props) {
+export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, instances, gpuNames, realMode, defaultImage, defaultContainerPort }: Props) {
   const [step, setStep] = useState(1)
-  const [name, setName] = useState(`生产绘图-${String(instances.length + 1).padStart(2, '0')}`)
+  const [name, setName] = useState(realMode ? `comfy-${String(instances.length + 1).padStart(2, '0')}` : `生产绘图-${String(instances.length + 1).padStart(2, '0')}`)
   const [template, setTemplate] = useState('ComfyUI 标准版')
+  const [image, setImage] = useState(defaultImage ?? 'comfyui:latest')
+  const [containerPort, setContainerPort] = useState(defaultContainerPort ?? 8188)
   const [gpu, setGpu] = useState(0)
   const [port, setPort] = useState(8188 + instances.length)
   const [autoStart, setAutoStart] = useState(true)
   const [selectedModels, setSelectedModels] = useState<string[]>([])
   const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
 
   const readyModels = models.filter((model) => model.status === 'ready')
   const version = template === 'ComfyUI 视频版' ? 'v0.3.76-video' : 'v0.3.76'
@@ -27,6 +37,10 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
   function next() {
     if (!name.trim()) {
       setError('请输入实例名称。')
+      return
+    }
+    if (realMode && !realNamePattern.test(name.trim())) {
+      setError('真实实例名称需以字母或数字开头，仅含字母、数字、下划线和连字符。')
       return
     }
     if (instances.some((item) => item.name === name.trim())) {
@@ -37,7 +51,7 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
       setError('端口已被其他实例占用，请更换端口。')
       return
     }
-    if (instances.some((item) => item.gpu === gpu && ['running', 'starting', 'creating'].includes(item.status))) {
+    if (gpu >= 0 && instances.some((item) => item.gpu === gpu && ['running', 'starting', 'creating'].includes(item.status))) {
       setError(`GPU ${gpu} 正在被运行实例使用，请选择另一块 GPU。`)
       return
     }
@@ -45,9 +59,14 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
     setStep(2)
   }
 
-  function submit() {
-    onSubmit({ name: name.trim(), template, version, gpu, port, autoStart, models: selectedModels.length })
-    onOpenChange(false)
+  async function submit() {
+    setSubmitting(true)
+    try {
+      const ok = await onSubmit({ name: name.trim(), template, version, gpu, port, autoStart, models: selectedModels.length, image: image.trim(), containerPort })
+      if (ok) onOpenChange(false)
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -68,28 +87,44 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
         </div>
 
         {step === 1 && <div className="grid gap-4 py-2">
-          <label className="field-label">镜像模板
-            <select className="field-input" value={template} onChange={(event) => setTemplate(event.target.value)}>
-              <option>ComfyUI 标准版</option><option>ComfyUI 视频版</option>
-            </select>
-          </label>
-          <div className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm leading-6 text-teal-950">镜像版本 {version} · 固定摘要 · 健康检查已配置</div>
+          {realMode
+            ? <>
+              <label className="field-label">容器镜像
+                <input className="field-input font-mono text-sm" value={image} onChange={(event) => setImage(event.target.value)} placeholder="comfyui:latest" autoComplete="off" />
+              </label>
+              <div className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm leading-6 text-teal-950">将创建真实 Docker 容器；镜像必须已存在于本机，离线环境请先导入。</div>
+            </>
+            : <>
+              <label className="field-label">镜像模板
+                <select className="field-input" value={template} onChange={(event) => setTemplate(event.target.value)}>
+                  <option>ComfyUI 标准版</option><option>ComfyUI 视频版</option>
+                </select>
+              </label>
+              <div className="rounded-lg border border-teal-200 bg-teal-50 p-3 text-sm leading-6 text-teal-950">镜像版本 {version} · 固定摘要 · 健康检查已配置</div>
+            </>}
           <label className="field-label">实例名称
             <input className="field-input" value={name} onChange={(event) => setName(event.target.value)} maxLength={32} autoComplete="off" />
           </label>
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="field-label">分配 GPU
-              <select className="field-input" value={gpu} onChange={(event) => setGpu(Number(event.target.value))}><option value={0}>GPU 0 · NVIDIA L40S</option><option value={1}>GPU 1 · NVIDIA L40S</option></select>
+              <select className="field-input" value={gpu} onChange={(event) => setGpu(Number(event.target.value))}>
+                {gpuNames.map((gpuName, index) => <option key={index} value={index}>GPU {index} · {gpuName}</option>)}
+                {realMode && <option value={-1}>不分配 GPU（仅 CPU）</option>}
+              </select>
             </label>
             <label className="field-label">访问端口
               <input className="field-input" type="number" min={1024} max={65535} value={port} onChange={(event) => setPort(Number(event.target.value))} />
             </label>
           </div>
+          {realMode && <label className="field-label">容器端口
+            <input className="field-input" type="number" min={1} max={65535} value={containerPort} onChange={(event) => setContainerPort(Number(event.target.value))} />
+          </label>}
           <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm text-slate-700"><input type="checkbox" className="size-4 accent-teal-700" checked={autoStart} onChange={(event) => setAutoStart(event.target.checked)} />服务器重启后自动启动</label>
           {error && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
         </div>}
 
         {step === 2 && <div className="py-2">
+          {realMode && <p className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-600">模型仓库预置将在后续版本接入真实挂载；当前创建的空实例已挂载共享模型目录。</p>}
           <p className="mb-3 text-sm leading-6 text-slate-600">选择需要预置的全局模型，也可以跳过，先创建空实例。</p>
           <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
             {readyModels.map((model) => <label key={model.id} className="flex min-h-14 cursor-pointer items-center gap-3 rounded-lg border border-slate-200 px-3 py-2 transition-colors hover:border-teal-400">
@@ -102,16 +137,19 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
 
         {step === 3 && <div className="py-2">
           <dl className="divide-y divide-slate-200 rounded-lg border border-slate-200 px-4">
-            {[['实例名称', name], ['镜像模板', `${template} · ${version}`], ['计算资源', `GPU ${gpu} · NVIDIA L40S`], ['访问地址', `http://服务器IP:${port}`], ['预置模型', `${selectedModels.length} 个`], ['开机自启', autoStart ? '启用' : '关闭']].map(([term, value]) => <div key={term} className="grid grid-cols-[100px_1fr] gap-4 py-3 text-sm"><dt className="text-slate-500">{term}</dt><dd className="break-all font-medium text-slate-800">{value}</dd></div>)}
+            {(realMode
+              ? [['实例名称', name], ['容器镜像', image], ['计算资源', gpu >= 0 ? `GPU ${gpu} · ${gpuNames[gpu] ?? 'GPU'}` : '不分配 GPU（仅 CPU）'], ['访问地址', `http://服务器IP:${port} → 容器 ${containerPort}`], ['开机自启', autoStart ? '启用' : '关闭']]
+              : [['实例名称', name], ['镜像模板', `${template} · ${version}`], ['计算资源', `GPU ${gpu} · ${gpuNames[gpu] ?? 'GPU'}`], ['访问地址', `http://服务器IP:${port}`], ['预置模型', `${selectedModels.length} 个`], ['开机自启', autoStart ? '启用' : '关闭']]
+            ).map(([term, value]) => <div key={term} className="grid grid-cols-[100px_1fr] gap-4 py-3 text-sm"><dt className="text-slate-500">{term}</dt><dd className="break-all font-medium text-slate-800">{value}</dd></div>)}
           </dl>
-          <p className="mt-4 text-xs leading-5 text-slate-500">Demo 将模拟镜像拉取、容器创建和健康检查，不会操作真实 Docker 容器。</p>
+          <p className="mt-4 text-xs leading-5 text-slate-500">{realMode ? '将通过 Docker API 真实创建并启动容器，失败会自动回滚清理。' : 'Demo 将模拟镜像拉取、容器创建和健康检查，不会操作真实 Docker 容器。'}</p>
         </div>}
 
         <DialogFooter>
-          {step > 1 && <button type="button" className="btn-secondary" onClick={() => setStep(step - 1)}><ArrowLeft className="size-4" />上一步</button>}
+          {step > 1 && <button type="button" className="btn-secondary" disabled={submitting} onClick={() => setStep(step - 1)}><ArrowLeft className="size-4" />上一步</button>}
           {step === 1 && <button type="button" className="btn-primary" onClick={next}>下一步<ArrowRight className="size-4" /></button>}
           {step === 2 && <button type="button" className="btn-primary" onClick={() => setStep(3)}>下一步<ArrowRight className="size-4" /></button>}
-          {step === 3 && <button type="button" className="btn-primary" onClick={submit}><Check className="size-4" />确认部署</button>}
+          {step === 3 && <button type="button" className="btn-primary" disabled={submitting} onClick={() => void submit()}>{submitting ? <LoaderCircle className="size-4 animate-spin" /> : <Check className="size-4" />}{submitting ? '正在创建容器' : '确认部署'}</button>}
         </DialogFooter>
       </DialogContent>
     </Dialog>
