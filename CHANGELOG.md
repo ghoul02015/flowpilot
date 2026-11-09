@@ -2,6 +2,28 @@
 
 所有重要变更均记录于此。详细内容见 `context/changes/`。
 
+## 0.0.8.0 — 2026-11-09（镜像构建/拉取任务化：有界并发＋排队＋停止＋记录管理）
+
+### 新增
+
+- **镜像任务列表**：构建与拉取从全局单任务重构为任务列表，最多 2 个构建 + 1 个拉取并行，超出自动排队；同名镜像任务互斥防重复提交。
+- **任务停止与删除**：排队中/进行中的任务可随时停止（取消 context 中止 Docker 构建/拉取流）；已结束任务记录可手动删除。
+- **任务持久化**：任务记录落盘 `image-tasks.json`，服务重启后未完成任务自动标记「已中断」，不再永久挂起。
+- **残留治理**：构建成功覆盖同名镜像时自动清理被替换的悬挂旧镜像；新增构建缓存占用展示与手动「清理构建缓存」（`POST /api/v1/images/cache/prune`、`GET /api/v1/images/disk-usage`）；成功入库的任务记录自动清理，已结束记录保留最新 20 条。
+- **磁盘水位检查**：提交构建前校验数据盘剩余空间，不足 15 GB 直接拒绝并提示。
+
+### 接口变更
+
+- 新增 `GET /api/v1/images/tasks`、`GET /api/v1/images/tasks/{id}`、`POST /api/v1/images/tasks/{id}/cancel`、`DELETE /api/v1/images/tasks/{id}`、`GET /api/v1/images/disk-usage`、`POST /api/v1/images/cache/prune`。
+- 移除 `GET /api/v1/images/build`、`GET /api/v1/images/pull` 单任务状态接口（由任务列表取代）；`POST /api/v1/images/build`、`POST /api/v1/images/pull` 改为返回任务对象。
+
+### 验证
+
+- 后端 `gofmt + go vet + go test ./...` 全部通过；新增并发上限与排队、取消竞态、持久化中断、悬挂镜像清理、磁盘水位拦截等回归测试。
+- 前端 `npm run lint && npm run build` 通过。
+
+详细记录：[0.0.8.0](context/changes/0.0.8.0.md)
+
 ## 0.0.7.4 — 2026-11-09（修复：cu128/amd64 构建脚本 Dockerfile LABEL 语法）
 
 ### 修复

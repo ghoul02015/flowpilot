@@ -186,13 +186,6 @@ export interface ImageCheckResponse {
   exists: boolean
 }
 
-export interface ImagePullStatus {
-  image: string
-  state: 'idle' | 'pulling' | 'done' | 'error'
-  message: string
-  updatedAt: string
-}
-
 // LocalImage 是本机 Docker 镜像摘要（创建实例向导的镜像候选）。
 export interface LocalImage {
   Id: string
@@ -252,14 +245,20 @@ export interface ImageBuildSummary {
   description?: string
 }
 
-export interface ImageBuildStatus {
+// ImageTask 是一个镜像构建／拉取任务（0.0.8.0 起为有界并发任务列表）。
+export type ImageTaskState = 'queued' | 'running' | 'done' | 'error' | 'cancelled' | 'interrupted'
+
+export interface ImageTask {
+  id: string
+  kind: 'build' | 'pull'
   image: string
-  variant: string
-  state: 'idle' | 'building' | 'done' | 'error'
+  variant?: string
+  state: ImageTaskState
   message: string
   progress: number
   summary: ImageBuildSummary[]
   logs: string[]
+  createdAt: string
   updatedAt: string
 }
 
@@ -272,12 +271,36 @@ export interface ImageBuildSpec {
   platform: string
 }
 
-export async function startImageBuild(spec: ImageBuildSpec): Promise<ImageBuildStatus> {
-  return sendJSON<ImageBuildStatus>('POST', '/api/v1/images/build', spec)
+export async function getImageTasks(): Promise<ImageTask[]> {
+  const body = await getJSON<{ tasks: ImageTask[] }>('/api/v1/images/tasks', AbortSignal.timeout(5000))
+  return body.tasks
 }
 
-export async function getImageBuildStatus(): Promise<ImageBuildStatus> {
-  return getJSON<ImageBuildStatus>('/api/v1/images/build', AbortSignal.timeout(5000))
+export async function startImageBuild(spec: ImageBuildSpec): Promise<ImageTask> {
+  return sendJSON<ImageTask>('POST', '/api/v1/images/build', spec)
+}
+
+export async function cancelImageTask(id: string): Promise<ImageTask> {
+  return sendJSON<ImageTask>('POST', `/api/v1/images/tasks/${encodeURIComponent(id)}/cancel`)
+}
+
+export async function deleteImageTask(id: string): Promise<void> {
+  await sendJSON<{ status: string }>('DELETE', `/api/v1/images/tasks/${encodeURIComponent(id)}`)
+}
+
+export interface ImageDiskUsage {
+  imagesBytes: number
+  imagesCount: number
+  buildCacheBytes: number
+}
+
+export async function getImageDiskUsage(): Promise<ImageDiskUsage> {
+  return getJSON<ImageDiskUsage>('/api/v1/images/disk-usage', AbortSignal.timeout(8000))
+}
+
+export async function pruneImageBuildCache(): Promise<number> {
+  const body = await sendJSON<{ status: string; reclaimedBytes: number }>('POST', '/api/v1/images/cache/prune')
+  return body.reclaimedBytes
 }
 
 export interface ComfyRef {
@@ -428,12 +451,8 @@ export async function checkImage(image: string): Promise<ImageCheckResponse> {
   return getJSON<ImageCheckResponse>(`/api/v1/images/check?image=${encodeURIComponent(image)}`, AbortSignal.timeout(8000))
 }
 
-export async function startImagePull(image: string): Promise<ImagePullStatus> {
-  return sendJSON<ImagePullStatus>('POST', '/api/v1/images/pull', { image })
-}
-
-export async function getImagePullStatus(): Promise<ImagePullStatus> {
-  return getJSON<ImagePullStatus>('/api/v1/images/pull', AbortSignal.timeout(5000))
+export async function startImagePull(image: string): Promise<ImageTask> {
+  return sendJSON<ImageTask>('POST', '/api/v1/images/pull', { image })
 }
 
 export interface DownloadTask {

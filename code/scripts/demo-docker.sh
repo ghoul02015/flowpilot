@@ -3,8 +3,8 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-IMAGE="flowpilot-web:0.0.7.4"
-REGRESSION_IMAGE="flowpilot/comfyui-regress:0.0.7.4"
+IMAGE="flowpilot-web:0.0.8.0"
+REGRESSION_IMAGE="flowpilot/comfyui-regress:0.0.8.0"
 CONTAINER="flowpilot-web-demo"
 PORT="${FLOWPILOT_DEMO_PORT:-18080}"
 DOCKER_SOCKET="${FLOWPILOT_DOCKER_SOCKET:-/var/run/docker.sock}"

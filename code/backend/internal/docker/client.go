@@ -228,6 +228,67 @@ func (c *Client) RemoveImage(ctx context.Context, image string, force bool) erro
 	return err
 }
 
+// ImageID 返回镜像 ID；镜像不存在时返回空字符串。
+func (c *Client) ImageID(ctx context.Context, name string) (string, error) {
+	body, err := c.do(ctx, http.MethodGet, "/images/"+url.PathEscape(name)+"/json", nil)
+	if err != nil {
+		if IsNotFound(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	var result struct {
+		ID string `json:"Id"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("decode image inspect: %w", err)
+	}
+	return result.ID, nil
+}
+
+// DiskUsage 是 Docker 磁盘占用的摘要视图。
+type DiskUsage struct {
+	ImagesBytes    int64 `json:"imagesBytes"`
+	ImagesCount    int   `json:"imagesCount"`
+	BuildCacheSize int64 `json:"buildCacheBytes"`
+}
+
+// DiskUsage 读取 /system/df，汇总镜像与构建缓存占用。
+func (c *Client) DiskUsage(ctx context.Context) (DiskUsage, error) {
+	var raw struct {
+		LayersSize int64 `json:"LayersSize"`
+		Images     []struct {
+			Size int64 `json:"Size"`
+		} `json:"Images"`
+		BuildCache []struct {
+			Size int64 `json:"Size"`
+		} `json:"BuildCache"`
+	}
+	if err := c.getJSON(ctx, "/system/df", &raw); err != nil {
+		return DiskUsage{}, fmt.Errorf("read Docker disk usage: %w", err)
+	}
+	usage := DiskUsage{ImagesBytes: raw.LayersSize, ImagesCount: len(raw.Images)}
+	for _, cache := range raw.BuildCache {
+		usage.BuildCacheSize += cache.Size
+	}
+	return usage, nil
+}
+
+// PruneBuildCache 清理 BuildKit 构建缓存，返回回收的字节数。
+func (c *Client) PruneBuildCache(ctx context.Context) (int64, error) {
+	body, err := c.do(ctx, http.MethodPost, "/builds/prune", nil)
+	if err != nil {
+		return 0, fmt.Errorf("清理构建缓存失败：%w", err)
+	}
+	var result struct {
+		SpaceReclaimed int64 `json:"SpaceReclaimed"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return 0, fmt.Errorf("decode build prune response: %w", err)
+	}
+	return result.SpaceReclaimed, nil
+}
+
 // TagImage 为已有镜像增加一个新标签。
 func (c *Client) TagImage(ctx context.Context, source, target string) error {
 	repo, tag := splitImageTag(target)

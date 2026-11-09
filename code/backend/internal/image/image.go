@@ -1,53 +1,22 @@
-// Package image 管理 ComfyUI 实例镜像的本地预置、后台拉取与手动构建。
+// Package image 管理 ComfyUI 实例镜像的本地预置、构建配方与 Dockerfile 生成。
+// 构建／拉取任务管理见 tasks.go（0.0.8.0 起为有界并发任务列表）。
 package image
 
 import (
 	"archive/tar"
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"strings"
-	"sync"
-	"time"
-
-	"github.com/ghoul02015/flowpilot/internal/docker"
 )
 
 const maxBuildLogLines = 500
-
-// ImageAPI 是镜像管理依赖的 Docker 操作子集，便于测试替换。
-type ImageAPI interface {
-	ImageExists(ctx context.Context, image string) (bool, error)
-	PullImage(ctx context.Context, image string, onEvent func(docker.PullEvent)) error
-	BuildImage(ctx context.Context, context io.Reader, options docker.BuildOptions, onEvent func(docker.BuildEvent)) error
-}
-
-// Status 是镜像拉取任务的对外视图。
-type Status struct {
-	Image     string    `json:"image"`
-	State     string    `json:"state"` // idle | pulling | done | error
-	Message   string    `json:"message"`
-	UpdatedAt time.Time `json:"updatedAt"`
-}
 
 // BuildParamSummary 是一次构建参数的简述，用于镜像清单回显。
 type BuildParamSummary struct {
 	Label       string `json:"label"`
 	Value       string `json:"value"`
 	Description string `json:"description,omitempty"`
-}
-
-// BuildStatus 是镜像构建任务的对外视图。
-type BuildStatus struct {
-	Image     string              `json:"image"`
-	Variant   string              `json:"variant"`
-	State     string              `json:"state"` // idle | building | done | error
-	Message   string              `json:"message"`
-	Progress  int                 `json:"progress"`
-	Summary   []BuildParamSummary `json:"summary"`
-	Logs      []string            `json:"logs"`
-	UpdatedAt time.Time           `json:"updatedAt"`
 }
 
 // BuildParams 是平台内手动构建 ComfyUI 镜像的参数。
@@ -60,7 +29,7 @@ type BuildParams struct {
 	Platform    string `json:"platform"`
 }
 
-// ConflictError 表示已有镜像任务在进行中。
+// ConflictError 表示已有同名镜像的任务在进行中。
 type ConflictError struct{ Image string }
 
 func (e *ConflictError) Error() string {
@@ -71,163 +40,6 @@ func (e *ConflictError) Error() string {
 type ValidationError struct{ Message string }
 
 func (e *ValidationError) Error() string { return e.Message }
-
-// Puller 串行管理镜像拉取与构建任务。
-type Puller struct {
-	docker ImageAPI
-	mu     sync.Mutex
-	status Status
-	build  BuildStatus
-}
-
-// NewPuller 创建镜像任务管理器。
-func NewPuller(dockerClient ImageAPI) *Puller {
-	now := time.Now()
-	return &Puller{docker: dockerClient, status: Status{State: "idle", UpdatedAt: now}, build: BuildStatus{State: "idle", Progress: 0, Summary: []BuildParamSummary{}, Logs: []string{}, UpdatedAt: now}}
-}
-
-// Exists 检查镜像是否在本地。
-func (p *Puller) Exists(ctx context.Context, image string) (bool, error) {
-	if err := validateImage(image); err != nil {
-		return false, err
-	}
-	return p.docker.ImageExists(ctx, image)
-}
-
-// Status 返回当前拉取任务状态。
-func (p *Puller) Status() Status {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.status
-}
-
-// BuildStatus 返回当前构建任务状态。
-func (p *Puller) BuildStatus() BuildStatus {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	status := p.build
-	status.Logs = append([]string{}, p.build.Logs...)
-	status.Summary = append([]BuildParamSummary{}, p.build.Summary...)
-	return status
-}
-
-// Start 启动后台拉取；已有任务进行中时返回 ConflictError。
-func (p *Puller) Start(image string) error {
-	image = strings.TrimSpace(image)
-	if err := validateImage(image); err != nil {
-		return err
-	}
-	p.mu.Lock()
-	if p.status.State == "pulling" {
-		image := p.status.Image
-		p.mu.Unlock()
-		return &ConflictError{Image: image}
-	}
-	p.status = Status{Image: image, State: "pulling", Message: "正在连接镜像仓库", UpdatedAt: time.Now()}
-	p.mu.Unlock()
-
-	go func() {
-		// 拉取可能持续数分钟，与请求生命周期解耦。
-		err := p.docker.PullImage(context.Background(), image, func(event docker.PullEvent) {
-			message := event.Status
-			if event.Progress != "" {
-				message = event.Status + " " + event.Progress
-			}
-			p.update("pulling", message)
-		})
-		if err != nil {
-			p.update("error", err.Error())
-			return
-		}
-		p.update("done", "镜像拉取完成")
-	}()
-	return nil
-}
-
-// StartBuild 启动后台 Docker 构建；已有构建进行中时返回 ConflictError。
-func (p *Puller) StartBuild(params BuildParams) error {
-	recipe, err := params.validate()
-	if err != nil {
-		return err
-	}
-	contextReader, err := BuildContext(params, recipe)
-	if err != nil {
-		return err
-	}
-	summary := buildSummary(params, recipe)
-	p.mu.Lock()
-	if p.build.State == "building" {
-		image := p.build.Image
-		p.mu.Unlock()
-		return &ConflictError{Image: image}
-	}
-	p.build = BuildStatus{Image: params.ImageName, Variant: recipe.ID, State: "building", Message: "正在准备 Docker 构建上下文", Progress: 1, Summary: summary, UpdatedAt: time.Now(), Logs: []string{"开始构建 " + params.ImageName + " · " + recipe.Label}}
-	p.mu.Unlock()
-
-	go func() {
-		options := docker.BuildOptions{
-			Tag:         params.ImageName,
-			Dockerfile:  "Dockerfile",
-			NetworkMode: "host",
-			Platform:    dockerPlatform(params.Platform),
-			BuildArgs: map[string]string{
-				"PIP_INDEX_URL":   params.PipIndexURL,
-				"TORCH_INDEX_URL": torchIndexURL(recipe),
-				"COMFYUI_REF":     params.ComfyUIRef,
-				"WITH_MANAGER":    params.WithManager,
-			},
-		}
-		err := p.docker.BuildImage(context.Background(), contextReader, options, func(event docker.BuildEvent) {
-			message := strings.TrimSpace(event.Message())
-			if message != "" {
-				p.appendBuildLog(message, inferBuildProgress(message))
-			}
-		})
-		if err != nil {
-			p.finishBuild("error", err.Error())
-			return
-		}
-		p.finishBuild("done", "镜像构建完成")
-	}()
-	return nil
-}
-
-func (p *Puller) update(state, message string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.status.State = state
-	p.status.Message = message
-	p.status.UpdatedAt = time.Now()
-}
-
-func (p *Puller) appendBuildLog(line string, progress int) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.build.Message = line
-	if progress > p.build.Progress {
-		p.build.Progress = progress
-	}
-	p.build.UpdatedAt = time.Now()
-	p.build.Logs = append(p.build.Logs, line)
-	if len(p.build.Logs) > maxBuildLogLines {
-		p.build.Logs = append([]string(nil), p.build.Logs[len(p.build.Logs)-maxBuildLogLines:]...)
-	}
-}
-
-func (p *Puller) finishBuild(state, message string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.build.State = state
-	p.build.Message = message
-	if state == "done" {
-		p.build.Progress = 100
-	}
-	p.build.UpdatedAt = time.Now()
-	p.build.Logs = append(p.build.Logs, message)
-	if len(p.build.Logs) > maxBuildLogLines {
-		p.build.Logs = append([]string(nil), p.build.Logs[len(p.build.Logs)-maxBuildLogLines:]...)
-	}
-}
 
 func (p *BuildParams) validate() (Recipe, error) {
 	p.Variant = strings.TrimSpace(p.Variant)

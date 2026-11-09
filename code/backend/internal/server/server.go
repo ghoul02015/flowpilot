@@ -24,7 +24,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/model"
 )
 
-const Version = "0.0.7.4"
+const Version = "0.0.8.0"
 
 type Handler struct {
 	docker       *docker.Client
@@ -32,20 +32,20 @@ type Handler struct {
 	hardware     *hardware.Collector
 	instances    *instance.Manager
 	models       *model.Manager
-	images       *image.Puller
+	images       *image.Manager
 	downloads    *download.Manager
 	catalog      *catalog.Manager
 	comfyGateway string
 	comfyClient  *http.Client
 }
 
-func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imagePuller *image.Puller, downloadManager *download.Manager, comfyGateway string, catalogManager *catalog.Manager) http.Handler {
+func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imageManager *image.Manager, downloadManager *download.Manager, comfyGateway string, catalogManager *catalog.Manager) http.Handler {
 	if comfyGateway == "" {
 		comfyGateway = "host.docker.internal"
 	}
 	handler := &Handler{
 		docker: dockerClient, staticDir: staticDir, hardware: hardwareCollector, instances: instanceManager,
-		models: modelManager, images: imagePuller, downloads: downloadManager, catalog: catalogManager,
+		models: modelManager, images: imageManager, downloads: downloadManager, catalog: catalogManager,
 		comfyGateway: comfyGateway,
 		// ComfyUI 状态探测是秒级接口，必须有整体超时，避免拖住轮询。
 		comfyClient: &http.Client{Timeout: 4 * time.Second},
@@ -80,10 +80,14 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("GET /api/v1/images/comfyui-refs", handler.comfyUIRefs)
 	mux.HandleFunc("GET /api/v1/images/build-script", handler.buildScript)
 	mux.HandleFunc("GET /api/v1/images/install-script", handler.installScript)
-	mux.HandleFunc("GET /api/v1/images/pull", handler.pullStatus)
 	mux.HandleFunc("POST /api/v1/images/pull", handler.startPull)
-	mux.HandleFunc("GET /api/v1/images/build", handler.buildStatus)
 	mux.HandleFunc("POST /api/v1/images/build", handler.startBuild)
+	mux.HandleFunc("GET /api/v1/images/tasks", handler.imageTasks)
+	mux.HandleFunc("GET /api/v1/images/tasks/{id}", handler.imageTask)
+	mux.HandleFunc("POST /api/v1/images/tasks/{id}/cancel", handler.cancelImageTask)
+	mux.HandleFunc("DELETE /api/v1/images/tasks/{id}", handler.deleteImageTask)
+	mux.HandleFunc("GET /api/v1/images/disk-usage", handler.imageDiskUsage)
+	mux.HandleFunc("POST /api/v1/images/cache/prune", handler.pruneBuildCache)
 	mux.HandleFunc("GET /api/v1/downloads", handler.listDownloads)
 	mux.HandleFunc("POST /api/v1/downloads", handler.createDownload)
 	mux.HandleFunc("POST /api/v1/imports", handler.createImport)
@@ -570,12 +574,96 @@ func (h *Handler) installScript(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, script)
 }
 
-func (h *Handler) pullStatus(w http.ResponseWriter, _ *http.Request) {
+// imageTasks 返回全部镜像构建／拉取任务（最新在前）。
+func (h *Handler) imageTasks(w http.ResponseWriter, _ *http.Request) {
 	if h.images == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "镜像管理未启用"})
 		return
 	}
-	writeJSON(w, http.StatusOK, h.images.Status())
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": h.images.List()})
+}
+
+// imageTask 返回单个任务详情（含日志）。
+func (h *Handler) imageTask(w http.ResponseWriter, r *http.Request) {
+	if h.images == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "镜像管理未启用"})
+		return
+	}
+	task, err := h.images.Get(r.PathValue("id"))
+	if err != nil {
+		var notFoundError *image.TaskNotFoundError
+		if errors.As(err, &notFoundError) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": notFoundError.Error()})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "读取任务失败", "detail": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
+}
+
+// cancelImageTask 停止排队中／进行中的任务。
+func (h *Handler) cancelImageTask(w http.ResponseWriter, r *http.Request) {
+	if h.images == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "镜像管理未启用"})
+		return
+	}
+	task, err := h.images.Cancel(r.PathValue("id"))
+	if err != nil {
+		h.writeImageTaskError(w, err, "停止任务失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
+}
+
+// deleteImageTask 删除已结束的任务记录。
+func (h *Handler) deleteImageTask(w http.ResponseWriter, r *http.Request) {
+	if h.images == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "镜像管理未启用"})
+		return
+	}
+	if err := h.images.Delete(r.PathValue("id")); err != nil {
+		h.writeImageTaskError(w, err, "删除任务记录失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// imageDiskUsage 返回镜像与构建缓存的磁盘占用。
+func (h *Handler) imageDiskUsage(w http.ResponseWriter, r *http.Request) {
+	usage, err := h.docker.DiskUsage(r.Context())
+	if err != nil {
+		slog.Warn("read docker disk usage failed", "error", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "无法读取 Docker 磁盘占用", "detail": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, usage)
+}
+
+// pruneBuildCache 手动清理 BuildKit 构建缓存，返回回收空间。
+func (h *Handler) pruneBuildCache(w http.ResponseWriter, r *http.Request) {
+	reclaimed, err := h.docker.PruneBuildCache(r.Context())
+	if err != nil {
+		slog.Warn("prune build cache failed", "error", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "清理构建缓存失败", "detail": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "pruned", "reclaimedBytes": reclaimed})
+}
+
+// writeImageTaskError 将任务层错误映射为合适的 HTTP 状态码。
+func (h *Handler) writeImageTaskError(w http.ResponseWriter, err error, prefix string) {
+	var validationError *image.ValidationError
+	var notFoundError *image.TaskNotFoundError
+	switch {
+	case errors.As(err, &validationError):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationError.Message})
+	case errors.As(err, &notFoundError):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": notFoundError.Error()})
+	default:
+		slog.Warn(prefix, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": prefix, "detail": err.Error()})
+	}
 }
 
 func (h *Handler) startPull(w http.ResponseWriter, r *http.Request) {
@@ -590,7 +678,8 @@ func (h *Handler) startPull(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误", "detail": err.Error()})
 		return
 	}
-	if err := h.images.Start(request.Image); err != nil {
+	task, err := h.images.SubmitPull(request.Image)
+	if err != nil {
 		var validationError *image.ValidationError
 		var conflictError *image.ConflictError
 		switch {
@@ -599,20 +688,12 @@ func (h *Handler) startPull(w http.ResponseWriter, r *http.Request) {
 		case errors.As(err, &conflictError):
 			writeJSON(w, http.StatusConflict, map[string]string{"error": conflictError.Error()})
 		default:
-			slog.Warn("start image pull failed", "error", err)
+			slog.Warn("submit image pull failed", "error", err)
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "启动镜像拉取失败", "detail": err.Error()})
 		}
 		return
 	}
-	writeJSON(w, http.StatusAccepted, h.images.Status())
-}
-
-func (h *Handler) buildStatus(w http.ResponseWriter, _ *http.Request) {
-	if h.images == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "镜像管理未启用"})
-		return
-	}
-	writeJSON(w, http.StatusOK, h.images.BuildStatus())
+	writeJSON(w, http.StatusAccepted, task)
 }
 
 func (h *Handler) startBuild(w http.ResponseWriter, r *http.Request) {
@@ -625,7 +706,8 @@ func (h *Handler) startBuild(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误", "detail": err.Error()})
 		return
 	}
-	if err := h.images.StartBuild(request); err != nil {
+	task, err := h.images.SubmitBuild(request)
+	if err != nil {
 		var validationError *image.ValidationError
 		var conflictError *image.ConflictError
 		switch {
@@ -634,12 +716,12 @@ func (h *Handler) startBuild(w http.ResponseWriter, r *http.Request) {
 		case errors.As(err, &conflictError):
 			writeJSON(w, http.StatusConflict, map[string]string{"error": conflictError.Error()})
 		default:
-			slog.Warn("start image build failed", "error", err)
+			slog.Warn("submit image build failed", "error", err)
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "启动镜像构建失败", "detail": err.Error()})
 		}
 		return
 	}
-	writeJSON(w, http.StatusAccepted, h.images.BuildStatus())
+	writeJSON(w, http.StatusAccepted, task)
 }
 
 func (h *Handler) listDownloads(w http.ResponseWriter, _ *http.Request) {

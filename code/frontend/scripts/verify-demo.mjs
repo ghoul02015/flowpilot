@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.7.4') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.8.0') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
@@ -109,7 +109,7 @@ try {
   if (realInstancesAvailable) {
     // 真实生命周期：创建 → 端口可达 → 停止 → 启动 → 删除，全程通过界面操作。
     const instanceName = 'regress-01'
-    // 0.0.7.4：镜像分类、构建弹窗、在线版本和构建脚本接口回归断言。
+    // 0.0.8.0：镜像任务列表接口回归断言（有界并发＋排队＋停止/删除）。
     const localImagesResponse = await page.request.get(`${baseURL}/api/v1/images/local`)
     const localImagesBody = await localImagesResponse.json()
     if (!localImagesResponse.ok() || !Array.isArray(localImagesBody.images)) throw new Error(`本机镜像列表接口异常：HTTP ${localImagesResponse.status()}`)
@@ -122,10 +122,13 @@ try {
     const refsBody = refsResponse.ok() ? await refsResponse.json() : null
     if (!refsResponse.ok() || !Array.isArray(refsBody.refs) || !refsBody.refs.some((item) => item.name === 'master')) throw new Error(`ComfyUI 在线版本接口异常：${JSON.stringify(refsBody)}`)
     check('ComfyUI 在线版本接口')
-    const buildStatusResponse = await page.request.get(`${baseURL}/api/v1/images/build`)
-    const buildStatus = buildStatusResponse.ok() ? await buildStatusResponse.json() : null
-    if (!buildStatusResponse.ok() || !['idle', 'building', 'done', 'error'].includes(buildStatus.state) || !Array.isArray(buildStatus.logs) || typeof buildStatus.progress !== 'number' || !Array.isArray(buildStatus.summary)) throw new Error(`镜像构建状态接口异常：${JSON.stringify(buildStatus)}`)
-    check('镜像手动构建状态、进度与日志接口')
+    const tasksResponse = await page.request.get(`${baseURL}/api/v1/images/tasks`)
+    const tasksBody = tasksResponse.ok() ? await tasksResponse.json() : null
+    if (!tasksResponse.ok() || !Array.isArray(tasksBody.tasks)) throw new Error(`镜像任务列表接口异常：HTTP ${tasksResponse.status()}`)
+    check('镜像构建/拉取任务列表接口')
+    const diskUsageResponse = await page.request.get(`${baseURL}/api/v1/images/disk-usage`)
+    if (!diskUsageResponse.ok()) throw new Error(`镜像磁盘占用接口异常：HTTP ${diskUsageResponse.status()}`)
+    check('镜像磁盘占用接口')
     const buildScriptResponse = await page.request.get(`${baseURL}/api/v1/images/build-script?variant=nvidia-cu130&image=flowpilot%2Fcomfyui%3Aregress&ref=master&pip=tsinghua&manager=1&platform=linux%2Farm64`)
     const buildScriptText = await buildScriptResponse.text()
     if (!buildScriptResponse.ok() || !buildScriptText.startsWith('#!/usr/bin/env bash') || !buildScriptText.includes('--platform') || !buildScriptText.includes('flowpilot.build.summary')) throw new Error('一键构建脚本生成接口异常')
