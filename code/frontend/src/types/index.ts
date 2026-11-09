@@ -18,6 +18,7 @@ export interface Instance {
   uptime: string
   modelsTarget?: string
   outputsTarget?: string
+  workflowsTarget?: string
   // 由后端代理探测的 ComfyUI 制图队列摘要。
   comfy?: {
     reachable: boolean

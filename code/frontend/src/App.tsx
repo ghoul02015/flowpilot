@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Activity, Box, ChevronRight, Database, LayoutDashboard, Menu, Server, Settings, Waves, X } from 'lucide-react'
 import { Toaster, toast } from 'sonner'
-import { createDownloadApi, createImportApi, createInstanceApi, deleteDownloadApi, deleteInstanceApi, deleteModelApi, downloadActionApi, formatBytes, getComfyStatus, getDownloads, getHardware, getInstances, getModels, modelTypeToCategory, postInstanceAction, type CatalogEntry, type ComfyStatus, type DownloadTask, type InstanceDefaults, type ModelReport, type OnlineFile, type RealInstance } from '@/api'
+import { createDownloadApi, createImportApi, createInstanceApi, deleteDownloadApi, deleteInstanceApi, deleteModelApi, downloadActionApi, formatBytes, getComfyStatus, getDownloads, getHardware, getHealth, getInstances, getModels, modelTypeToCategory, postInstanceAction, type CatalogEntry, type ComfyStatus, type DownloadTask, type InstanceDefaults, type ModelReport, type OnlineFile, type RealInstance } from '@/api'
 import { CreateInstanceDialog } from '@/components/CreateInstanceDialog'
 import { AddModelDialog } from '@/components/AddModelDialog'
 import { Dashboard } from '@/pages/Dashboard'
@@ -36,6 +36,10 @@ export default function App() {
   const [backendOnline, setBackendOnline] = useState(true)
   // 运行中实例的 ComfyUI 制图队列摘要（后端代理探测）。
   const [comfyStatuses, setComfyStatuses] = useState<Record<string, ComfyStatus>>({})
+  // 实例操作进行中集合：请求发出到下一次列表刷新期间禁用该实例的操作按钮。
+  const [busyIds, setBusyIds] = useState<string[]>([])
+  // 界面版本号跟随后端 /health，避免硬编码漂移；离线时回退常量。
+  const [backendVersion, setBackendVersion] = useState('0.0.9.0')
 
   const realMode = realInstances !== null
   const realModelMode = realModels !== null
@@ -113,6 +117,9 @@ export default function App() {
         if (!cancelled) setRealDownloads(null)
       }
       if (!cancelled) setBackendOnline(online)
+      if (online) {
+        getHealth().then((health) => { if (!cancelled) setBackendVersion(health.version) }).catch(() => {})
+      }
     }
     void poll()
     const timer = window.setInterval(() => void poll(), 3000)
@@ -168,6 +175,7 @@ export default function App() {
     uptime: item.status === 'running' ? '容器运行中' : item.status === 'stopped' ? '容器已停止' : '容器状态异常',
     modelsTarget: item.modelsTarget,
     outputsTarget: item.outputsTarget,
+    workflowsTarget: item.workflowsTarget,
     comfy: comfyStatuses[item.name]
       ? {
         reachable: comfyStatuses[item.name].reachable,
@@ -237,15 +245,19 @@ export default function App() {
   function instanceAction(id: string, action: 'start' | 'stop' | 'restart') {
     const target = displayInstances.find((item) => item.id === id)
     if (!target || !requireBackend('实例操作')) return
+    if (busyIds.includes(id)) return
     const actionName = action === 'stop' ? '停止' : action === 'start' ? '启动' : '重启'
+    setBusyIds((previous) => [...previous, id])
     postInstanceAction(target.name, action)
       .then(() => {
         toast.success(`实例已${actionName}`, { description: target.name })
-        void refreshInstances()
       })
       .catch((error: unknown) => {
         toast.error(`实例${actionName}失败`, { description: error instanceof Error ? error.message : '请求失败' })
+      })
+      .finally(() => {
         void refreshInstances()
+        setBusyIds((previous) => previous.filter((item) => item !== id))
       })
   }
 
@@ -285,27 +297,20 @@ export default function App() {
       })
   }
 
-  function addModel(input: AddModelInput) {
-    if (!requireBackend('创建模型任务')) return
-    if (input.sourceType === '本地导入') {
-      createImportApi({ path: input.source, category: modelTypeToCategory(input.type), name: input.name || undefined })
-        .then((task) => {
-          toast.success('导入任务已创建', { description: `${task.fileName} → ${task.path}` })
-          void refreshDownloads()
-        })
-        .catch((error: unknown) => {
-          toast.error('创建导入任务失败', { description: error instanceof Error ? error.message : '请求失败' })
-        })
-      return
+  // 返回是否创建成功：失败时弹窗保持打开，用户输入不丢失。
+  async function addModel(input: AddModelInput): Promise<boolean> {
+    if (!requireBackend('创建模型任务')) return false
+    try {
+      const task = input.sourceType === '本地导入'
+        ? await createImportApi({ path: input.source, category: modelTypeToCategory(input.type), name: input.name || undefined })
+        : await createDownloadApi({ url: input.source, category: modelTypeToCategory(input.type), name: input.name || undefined })
+      toast.success(input.sourceType === '本地导入' ? '导入任务已创建' : '下载任务已创建', { description: `${task.fileName} → ${task.path}` })
+      void refreshDownloads()
+      return true
+    } catch (error) {
+      toast.error(input.sourceType === '本地导入' ? '创建导入任务失败' : '创建下载任务失败', { description: error instanceof Error ? error.message : '请求失败' })
+      return false
     }
-    createDownloadApi({ url: input.source, category: modelTypeToCategory(input.type), name: input.name || undefined })
-      .then((task) => {
-        toast.success('下载任务已创建', { description: `${task.fileName} → ${task.path}` })
-        void refreshDownloads()
-      })
-      .catch((error: unknown) => {
-        toast.error('创建下载任务失败', { description: error instanceof Error ? error.message : '请求失败' })
-      })
   }
 
   function pauseModel(id: string) {
@@ -406,17 +411,17 @@ export default function App() {
       <div className="flex h-20 items-center gap-3 border-b border-white/8 px-5"><div className="flex size-10 items-center justify-center rounded-lg bg-teal-500 text-slate-950"><Waves className="size-6" /></div><div><div className="font-bold tracking-wide text-white">慧浪智算</div><div className="mt-0.5 text-xs font-medium tracking-[0.16em] text-teal-300">FLOWPILOT</div></div><button type="button" className="ml-auto cursor-pointer rounded-md p-2 text-slate-300 hover:bg-white/10 md:hidden" aria-label="关闭菜单" onClick={() => setMobileOpen(false)}><X className="size-5" /></button></div>
       <nav className="flex-1 space-y-1 px-3 py-5" aria-label="主导航">{navigation.map(({ key, label, icon: Icon }) => <button type="button" key={key} onClick={() => navigate(key)} className={`flex min-h-12 w-full cursor-pointer items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:outline-teal-300 ${page === key ? 'bg-white/10 text-white' : 'text-slate-400 hover:bg-white/5 hover:text-white'}`}><Icon className={`size-5 ${page === key ? 'text-teal-300' : ''}`} /><span className="flex-1 text-left">{label}</span>{key === 'tasks' && activeTasks > 0 && <span className="rounded-full bg-teal-400/15 px-2 py-0.5 text-xs text-teal-300">{activeTasks}</span>}</button>)}</nav>
       <div className="mx-3 mb-3 rounded-lg border border-white/8 p-4"><div className="flex items-center gap-2 text-sm font-medium text-white"><span className={`size-2 rounded-full ${backendOnline ? 'bg-emerald-400' : 'bg-rose-400'}`} />{hostInfo.name}</div><div className="mt-2 text-xs leading-5 text-slate-400">{hostInfo.gpuSummary}<br />{backendOnline ? '管理端运行正常' : '等待后端连接'}</div></div>
-      <div className="border-t border-white/8 px-5 py-4 text-xs text-slate-500">FlowPilot · v0.0.8.0</div>
+      <div className="border-t border-white/8 px-5 py-4 text-xs text-slate-500">FlowPilot · v{backendVersion}</div>
     </aside>
 
     <div className="min-h-dvh md:pl-[248px]">
       <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-slate-200 bg-[oklch(0.995_0.003_220)]/95 px-4 backdrop-blur md:px-8"><button type="button" className="icon-button md:hidden" aria-label="打开菜单" onClick={() => setMobileOpen(true)}><Menu className="size-5" /></button><div className="hidden items-center gap-2 text-sm text-slate-500 sm:flex"><Server className="size-4" /><span>{hostInfo.name}</span><ChevronRight className="size-3.5" /><span className="text-slate-800">{pageNames[page]}</span></div><div className="ml-auto flex items-center gap-2"><span className={`hidden rounded-full border px-3 py-1.5 text-xs font-medium sm:inline ${backendOnline ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-rose-200 bg-rose-50 text-rose-800'}`}>{backendOnline ? '后端已连接' : '后端连接失败'}</span><button type="button" className="btn-quiet" onClick={() => navigate('tasks')}><Activity className="size-4" /><span className="hidden sm:inline">任务</span>{activeTasks > 0 && <span className="rounded-full bg-teal-100 px-1.5 text-xs text-teal-800">{activeTasks}</span>}</button><div className="flex size-9 items-center justify-center rounded-full bg-slate-900 text-xs font-semibold text-white" title="管理员">AD</div></div></header>
       <main className="mx-auto max-w-[1600px] p-4 md:p-8">
         {page === 'dashboard' && <Dashboard instances={displayInstances} models={displayModels} tasks={displayTasks} gpuCount={gpuNames.length} gpuSummary={hostInfo.gpuSummary} modelsTotal={realModels ? formatBytes(realModels.totalBytes) : undefined} onNavigate={navigate} onCreate={openCreateDialog} onAddModel={openAddModelDialog} />}
-        {page === 'instances' && <Instances instances={displayInstances} gpuNames={gpuNames} realMode={realMode} onCreate={openCreateDialog} onAction={instanceAction} onDelete={deleteInstance} />}
+        {page === 'instances' && <Instances instances={displayInstances} gpuNames={gpuNames} realMode={realMode} busyIds={busyIds} onCreate={openCreateDialog} onAction={instanceAction} onDelete={deleteInstance} />}
         {page === 'models' && <Models models={displayModels} realMode={realModelMode} modelsRoot={realModels?.root} totalBytes={realModels?.totalBytes} hasRunningInstances={displayInstances.some((item) => item.status === 'running')} onAdd={openAddModelDialog} onPause={pauseModel} onDelete={deleteModel} />}
         {page === 'tasks' && <Tasks tasks={displayTasks} onAction={taskAction} />}
-        {page === 'system' && <System instances={displayInstances} models={displayModels} tasks={displayTasks} />}
+        {page === 'system' && <System instances={displayInstances} models={displayModels} tasks={displayTasks} version={backendVersion} />}
       </main>
     </div>
     <CreateInstanceDialog key={createOpen ? 'create-open' : 'create-closed'} open={createOpen} onOpenChange={setCreateOpen} onSubmit={createInstance} models={displayModels} instances={displayInstances} gpuNames={gpuNames} defaultImage={instanceDefaults?.image} defaultContainerPort={instanceDefaults?.containerPort} dataDir={instanceDefaults?.dataDir} defaultModelsTarget={instanceDefaults?.modelsTarget} defaultOutputsTarget={instanceDefaults?.outputsTarget} defaultWorkflowsTarget={instanceDefaults?.workflowsTarget} />

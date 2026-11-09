@@ -19,6 +19,10 @@ export function formatBytes(bytes: number): string {
   return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)} ${unit}`
 }
 
+export async function getHealth(signal?: AbortSignal): Promise<HealthResponse> {
+  return getJSON<HealthResponse>('/api/v1/health', signal ?? AbortSignal.timeout(5000))
+}
+
 export interface DockerEngine {
   info: {
     Name: string
@@ -100,6 +104,7 @@ export interface RealInstance {
   autoStart: boolean
   modelsTarget?: string
   outputsTarget?: string
+  workflowsTarget?: string
   createdAt: string
 }
 
@@ -516,6 +521,10 @@ export function modelTypeToCategory(type: string): string {
     ControlNet: 'controlnet',
     Embeddings: 'embeddings',
     'Upscale Models': 'upscale_models',
+    'Text Encoders': 'text_encoders',
+    'Diffusion Models': 'diffusion_models',
+    'CLIP Vision': 'clip_vision',
+    'Model Patches': 'model_patches',
   }
   return mapping[type] ?? 'other'
 }

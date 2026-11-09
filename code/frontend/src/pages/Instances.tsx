@@ -9,14 +9,15 @@ interface Props {
   instances: Instance[]
   gpuNames: string[]
   realMode: boolean
+  busyIds: string[]
   onCreate: () => void
   onAction: (id: string, action: 'start' | 'stop' | 'restart') => void
   onDelete: (id: string) => void
 }
 
-type InstanceTab = 'instances' | 'images' | 'build'
+type InstanceTab = 'instances' | 'images'
 
-export function Instances({ instances, gpuNames, realMode, onCreate, onAction, onDelete }: Props) {
+export function Instances({ instances, gpuNames, realMode, busyIds, onCreate, onAction, onDelete }: Props) {
   const [tab, setTab] = useState<InstanceTab>('instances')
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all')
@@ -32,22 +33,21 @@ export function Instances({ instances, gpuNames, realMode, onCreate, onAction, o
     setConfirmName('')
   }
 
-  const tabs: { key: InstanceTab; label: string }[] = [{ key: 'instances', label: '实例列表' }, { key: 'images', label: '容器镜像管理' }, { key: 'build', label: '手动构建 / 拉取' }]
+  const tabs: { key: InstanceTab; label: string }[] = [{ key: 'instances', label: '实例列表' }, { key: 'images', label: '镜像中心' }]
 
   return <>
     <PageHeader eyebrow="COMFYUI" title="实例管理" description="创建独立 ComfyUI 容器，统一管理本机镜像、手动构建、在线拉取与实例生命周期。" action={tab === 'instances' ? <button type="button" className="btn-primary" onClick={onCreate}><Plus className="size-4" />新建实例</button> : undefined} />
-    <div className="mb-5 flex gap-1 overflow-x-auto rounded-lg border border-slate-200 bg-white p-1" role="tablist" aria-label="实例管理子菜单">{tabs.map((item) => <button type="button" role="tab" aria-selected={tab === item.key} key={item.key} className={`min-h-11 flex-1 cursor-pointer rounded-md px-4 text-sm font-medium whitespace-nowrap transition-colors ${tab === item.key ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`} onClick={() => setTab(item.key)}>{item.label}</button>)}</div>
-    {tab === 'images' && <ImageManager mode="manage" />}
-    {tab === 'build' && <ImageManager mode="build" />}
+    <div className="mb-5 flex gap-1 overflow-x-auto rounded-lg border border-slate-200 bg-white p-1" role="tablist" aria-label="实例管理子菜单">{tabs.map((item) => <button type="button" role="tab" aria-selected={tab === item.key} key={item.key} className={`min-h-11 flex-1 cursor-pointer rounded-md px-4 text-sm font-medium whitespace-nowrap transition-colors ${tab === item.key ? 'bg-teal-700 text-white' : 'text-slate-600 hover:bg-slate-100'}`} onClick={() => setTab(item.key)}>{item.label}</button>)}</div>
+    {tab === 'images' && <ImageManager />}
     {tab === 'instances' && <Panel>
       <div className="flex flex-col gap-3 border-b border-slate-200 p-4 sm:flex-row sm:items-center">
         <label className="relative flex-1"><span className="sr-only">搜索实例</span><Search className="absolute top-3.5 left-3 size-4 text-slate-400" /><input className="field-input pl-9" placeholder="搜索实例名称" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
         <select className="field-input sm:w-44" aria-label="按状态筛选" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">全部状态</option><option value="running">运行中</option><option value="stopped">已停止</option><option value="error">异常</option></select>
       </div>
-      <div className="overflow-x-auto"><table className="data-table min-w-[1120px]"><thead><tr><th>实例名称</th><th>状态</th><th>资源</th><th>访问端口</th><th>制图任务</th><th>操作</th></tr></thead><tbody>
-        {filtered.map((item) => { const busy = ['creating', 'starting', 'stopping', 'restarting'].includes(item.status); return <tr key={item.id}>
+      <div className="overflow-x-auto"><table className="data-table min-w-[1080px]"><thead><tr><th>实例名称</th><th>状态</th><th>资源</th><th>访问端口</th><th>ComfyUI 队列</th><th>操作</th></tr></thead><tbody>
+        {filtered.map((item) => { const busy = busyIds.includes(item.id); return <tr key={item.id}>
           <td><button type="button" className="cursor-pointer text-left font-medium text-slate-900 hover:text-teal-700" onClick={() => setDetailId(item.id)}>{item.name}</button><div className="mt-1 text-xs text-slate-500">{item.template} · {item.version}</div></td>
-          <td><StatusBadge status={item.status} /></td><td>{item.gpu >= 0 ? `GPU ${item.gpu}` : '不分配'}<div className="mt-1 text-xs text-slate-500">{item.gpu >= 0 ? gpuNames[item.gpu] ?? 'GPU' : '仅 CPU 运行'}</div></td><td className="font-mono text-xs">{item.port}</td>
+          <td><StatusBadge status={item.status} /></td><td>{item.gpu >= 0 ? `GPU ${item.gpu}` : '不分配'}<div className="mt-1 max-w-48 truncate text-xs text-slate-500" title={item.gpu >= 0 ? gpuNames[item.gpu] ?? 'GPU' : undefined}>{item.gpu >= 0 ? gpuNames[item.gpu] ?? 'GPU' : '仅 CPU 运行'}</div></td><td className="font-mono text-xs">{item.port}</td>
           <td>{item.status === 'running'
             ? item.comfy
               ? item.comfy.reachable
@@ -56,9 +56,10 @@ export function Instances({ instances, gpuNames, realMode, onCreate, onAction, o
               : <span className="text-xs text-slate-400">探测中…</span>
             : <span className="text-xs text-slate-400">—</span>}</td>
           <td><div className="flex items-center gap-1">
-            {item.status === 'running' ? <><button type="button" className="icon-button" aria-label={`停止 ${item.name}`} title="停止" disabled={busy} onClick={() => onAction(item.id, 'stop')}><Square className="size-4" /></button><button type="button" className="icon-button" aria-label={`重启 ${item.name}`} title="重启" disabled={busy} onClick={() => onAction(item.id, 'restart')}><RefreshCw className="size-4" /></button></> : <button type="button" className="icon-button" aria-label={`启动 ${item.name}`} title="启动" disabled={busy} onClick={() => onAction(item.id, 'start')}><Play className="size-4" /></button>}
+            {item.status === 'running' ? <><button type="button" className="icon-button" aria-label={`停止 ${item.name}`} title="停止" disabled={busy} onClick={() => onAction(item.id, 'stop')}><Square className="size-4" /></button><button type="button" className="icon-button" aria-label={`重启 ${item.name}`} title="重启" disabled={busy} onClick={() => onAction(item.id, 'restart')}><RefreshCw className={`size-4 ${busy ? 'animate-spin' : ''}`} /></button></> : <button type="button" className="icon-button" aria-label={`启动 ${item.name}`} title="启动" disabled={busy} onClick={() => onAction(item.id, 'start')}><Play className="size-4" /></button>}
             {realMode && item.status === 'running' && <button type="button" className="icon-button text-teal-700 hover:bg-teal-50" aria-label={`打开 ${item.name} ComfyUI`} title="打开 ComfyUI 应用" onClick={() => window.open(`http://${window.location.hostname}:${item.port}`, '_blank', 'noopener')}><ExternalLink className="size-4" /></button>}
             <button type="button" className="icon-button" aria-label={`查看 ${item.name} 详情`} title="实例详情" onClick={() => setDetailId(item.id)}><Settings2 className="size-4" /></button>
+            <span className="mx-0.5 h-5 w-px bg-slate-200" aria-hidden="true" />
             <button type="button" className="icon-button text-rose-600 hover:bg-rose-50" aria-label={`删除 ${item.name}`} title="删除" disabled={busy} onClick={() => setDeleteId(item.id)}><Trash2 className="size-4" /></button>
           </div></td>
         </tr>})}
@@ -73,13 +74,14 @@ export function Instances({ instances, gpuNames, realMode, onCreate, onAction, o
         <dl className="grid grid-cols-2 gap-4 text-sm">{[
           ['GPU', detail.gpu >= 0 ? `GPU ${detail.gpu} · ${gpuNames[detail.gpu] ?? 'GPU'}` : '不分配 GPU'],
           ['访问端口', String(detail.port)],
-          ['制图任务', detail.status !== 'running' ? '实例未运行' : detail.comfy ? (detail.comfy.reachable ? `运行 ${detail.comfy.queueRunning} · 排队 ${detail.comfy.queuePending}${detail.comfy.comfyuiVersion ? ` · ComfyUI ${detail.comfy.comfyuiVersion}` : ''}` : '服务启动中…') : '探测中…'],
+          ['ComfyUI 队列', detail.status !== 'running' ? '实例未运行' : detail.comfy ? (detail.comfy.reachable ? `运行 ${detail.comfy.queueRunning} · 排队 ${detail.comfy.queuePending}${detail.comfy.comfyuiVersion ? ` · ComfyUI ${detail.comfy.comfyuiVersion}` : ''}` : '服务启动中…') : '探测中…'],
           ['创建时间', detail.createdAt],
           ['模型仓库挂载', detail.modelsTarget ? `共享仓库 → ${detail.modelsTarget}（只读）` : '共享仓库（默认挂载）'],
           ['导出资产路径', detail.outputsTarget ? `共享 outputs → ${detail.outputsTarget}` : '共享 outputs 目录'],
+          ['工作流挂载', detail.workflowsTarget ? `共享 workflows → ${detail.workflowsTarget}` : '共享 workflows 目录'],
           ['容器名称', `flowpilot-comfyui-${detail.name}`],
-        ].map(([term, value]) => <div key={term} className={term.includes('目录') || term.includes('容器') ? 'col-span-2' : ''}><dt className="text-xs text-slate-500">{term}</dt><dd className="mt-1 break-all font-medium text-slate-800">{value}</dd></div>)}</dl>
-        <label className="flex min-h-12 items-center justify-between rounded-lg border border-slate-200 px-4"><span className="text-sm font-medium text-slate-700">开机自动启动（创建时指定，由容器重启策略执行）</span><input type="checkbox" className="size-4 accent-teal-700" checked={detail.autoStart} disabled readOnly /></label>
+        ].map(([term, value]) => <div key={term} className={['模型仓库挂载', '导出资产路径', '工作流挂载', '容器名称'].includes(term) ? 'col-span-2' : ''}><dt className="text-xs text-slate-500">{term}</dt><dd className="mt-1 break-all font-medium text-slate-800">{value}</dd></div>)}</dl>
+        <div className="flex min-h-12 items-center justify-between rounded-lg border border-slate-200 px-4"><span className="text-sm font-medium text-slate-700">开机自动启动（创建时指定，由容器重启策略执行）</span><span className={`rounded-full px-2.5 py-1 text-xs font-medium ${detail.autoStart ? 'bg-teal-50 text-teal-700' : 'bg-slate-100 text-slate-600'}`}>{detail.autoStart ? '已启用' : '未启用'}</span></div>
         <DialogFooter><button type="button" className="btn-secondary" disabled={detail.status !== 'running'} onClick={() => window.open(`http://${window.location.hostname}:${detail.port}`, '_blank', 'noopener')}><ExternalLink className="size-4" />打开 ComfyUI</button><button type="button" className="btn-primary" onClick={() => setDetailId(null)}>完成</button></DialogFooter>
       </>}</DialogContent>
     </Dialog>

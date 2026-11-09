@@ -5,10 +5,6 @@ import { buildScriptURL, cancelImageTask, deleteImageTask, deleteLocalImageApi, 
 import { EmptyState, Panel, PanelHeader } from '@/components/common'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
-interface Props {
-  mode: 'manage' | 'build'
-}
-
 interface ImageTagRow {
   tag: string
   image?: LocalImage
@@ -16,14 +12,14 @@ interface ImageTagRow {
   virtual?: boolean
 }
 
+const taskStateText: Record<string, string> = { queued: '排队中', running: '进行中', done: '已完成', error: '失败', cancelled: '已取消', interrupted: '已中断' }
+
 const platformOptions = [
   { value: 'host', label: '宿主机架构', description: '在当前机器本机架构构建，适合快速验证。' },
   { value: 'linux/arm64', label: 'linux/arm64（aarch64）', description: '适合 DGX Spark / ARM 集群节点分发。' },
   { value: 'linux/amd64', label: 'linux/amd64（x86_64）', description: '适合通用 x86_64 GPU 服务器。' },
   { value: 'linux/arm/v7', label: 'linux/arm/v7', description: '预留给边缘 ARMv7 节点，需宿主机支持跨架构构建。' },
 ]
-
-const taskStateText: Record<string, string> = { queued: '排队中', running: '进行中', done: '已完成', error: '失败', cancelled: '已取消', interrupted: '已中断' }
 
 function isActiveTask(task: ImageTask): boolean {
   return task.state === 'queued' || task.state === 'running'
@@ -34,7 +30,7 @@ function TaskStateBadge({ state }: { state: string }) {
   return <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${tone}`}>{state === 'running' && <LoaderCircle className="size-3 animate-spin" />}{taskStateText[state] ?? state}</span>
 }
 
-export function ImageManager({ mode }: Props) {
+export function ImageManager() {
   const [images, setImages] = useState<LocalImage[]>([])
   const [recipes, setRecipes] = useState<ImageRecipe[]>([])
   const [refs, setRefs] = useState<ComfyRef[]>([{ name: 'master', type: 'branch' }])
@@ -285,8 +281,8 @@ export function ImageManager({ mode }: Props) {
         <div className="grid gap-4">
           <div className="grid gap-4 sm:grid-cols-2"><label className="field-label">CPU 芯片架构<select className="field-input" value={platform} onChange={(event) => setPlatform(event.target.value)}>{platformOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label className="field-label">GPU / PyTorch 配方<select className="field-input" value={recipeId} onChange={(event) => onRecipeChange(event.target.value)}>{recipes.map((recipe) => <option key={recipe.id} value={recipe.id}>{recipe.label}</option>)}</select></label></div>
           <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-600"><p><Cpu className="mr-1 inline size-4" />{selectedPlatform.description}</p>{selectedRecipe && <p><Layers className="mr-1 inline size-4" />{selectedRecipe.description}；建议镜像名 <span className="font-mono">{selectedRecipe.image}</span>。</p>}</div>
-          <div className="grid gap-4 sm:grid-cols-2"><label className="field-label">镜像名<input className="field-input font-mono text-sm" value={imageName} onChange={(event) => setImageName(event.target.value)} placeholder="flowpilot/comfyui:cu130" /></label><label className="field-label">ComfyUI 在线版本<select className="field-input font-mono text-sm" value={ref} onChange={(event) => setRef(event.target.value)}>{refs.map((item) => <option key={`${item.type}-${item.name}`} value={item.name}>{item.name} · {item.type === 'branch' ? '分支' : '标签'}</option>)}</select></label></div>
-          <div className="grid gap-4 sm:grid-cols-2"><label className="field-label">ComfyUI 版本手动修正<input className="field-input font-mono text-sm" value={ref} onChange={(event) => setRef(event.target.value)} placeholder="master 或标签" /></label><label className="field-label">pip 源<select className="field-input" value={pip} onChange={(event) => setPip(event.target.value)}><option value="tsinghua">清华镜像</option><option value="aliyun">阿里云镜像</option><option value="pypi">PyPI 官方</option></select></label></div>
+          <div className="grid gap-4 sm:grid-cols-2"><label className="field-label">镜像名<input className="field-input font-mono text-sm" value={imageName} onChange={(event) => setImageName(event.target.value)} placeholder="flowpilot/comfyui:cu130" /></label><label className="field-label">ComfyUI 版本（在线选择或手动输入）<input className="field-input font-mono text-sm" list="comfyui-refs" value={ref} onChange={(event) => setRef(event.target.value)} placeholder="master 或标签" /><datalist id="comfyui-refs">{refs.map((item) => <option key={`${item.type}-${item.name}`} value={item.name}>{item.name} · {item.type === 'branch' ? '分支' : '标签'}</option>)}</datalist></label></div>
+          <div className="grid gap-4 sm:grid-cols-2"><label className="field-label">pip 源<select className="field-input" value={pip} onChange={(event) => setPip(event.target.value)}><option value="tsinghua">清华镜像</option><option value="aliyun">阿里云镜像</option><option value="pypi">PyPI 官方</option></select></label></div>
           <label className="flex min-h-11 cursor-pointer items-center gap-2 text-sm text-slate-700"><input type="checkbox" className="size-4 accent-teal-700" checked={manager} onChange={(event) => setManager(event.target.checked)} />内置 ComfyUI-Manager</label>
           <div className="rounded-lg border border-slate-200 p-3 text-xs leading-6 text-slate-500"><p className="font-semibold text-slate-700">参数简述</p><p>CPU 架构：{selectedPlatform.label}</p><p>GPU 配方：{selectedRecipe?.label ?? recipeId}</p><p>ComfyUI 版本：{currentBuildSpec.ref}</p><p>pip 源：{pip}；Manager：{manager ? '内置' : '不内置'}</p></div>
         </div>
@@ -316,29 +312,21 @@ export function ImageManager({ mode }: Props) {
     </Dialog>
   </>
 
-  if (mode === 'manage') return <div className="grid gap-5">
+  // 镜像中心单视图：入口卡片 + 镜像清单 + 任务列表 + 磁盘占用。
+  return <div className="grid gap-5">
     <Panel>
-      <PanelHeader title="容器镜像管理" description="镜像分为 ComfyUI 镜像与机器其他镜像；新建实例只会从 ComfyUI 镜像中选择。" action={<div className="flex flex-wrap gap-2"><label className={`btn-secondary ${busy ? 'pointer-events-none opacity-60' : ''}`}><Upload className="size-4" />导入 tar<input type="file" accept=".tar,application/x-tar" className="sr-only" disabled={busy} onChange={(event) => void importImage(event.target.files?.[0])} /></label><button type="button" className="btn-secondary" onClick={refresh} disabled={loading}><RefreshCw className={`size-4 ${loading ? 'animate-spin' : ''}`} />刷新</button></div>} />
+      <PanelHeader title="镜像中心" description="构建、拉取、导入与管理本机镜像；任务支持并行与排队，可在任务列表中查看进度、停止或删除记录。" action={<div className="flex flex-wrap gap-2"><label className={`btn-secondary ${busy ? 'pointer-events-none opacity-60' : ''}`}><Upload className="size-4" />导入 tar<input type="file" accept=".tar,application/x-tar" className="sr-only" disabled={busy} onChange={(event) => void importImage(event.target.files?.[0])} /></label><button type="button" className="btn-secondary" onClick={refresh} disabled={loading}><RefreshCw className={`size-4 ${loading ? 'animate-spin' : ''}`} />刷新</button></div>} />
+      <div className="grid gap-4 p-5 md:grid-cols-2">
+        <button type="button" className="rounded-xl border border-slate-200 p-5 text-left transition-colors hover:border-teal-300 hover:bg-teal-50" onClick={() => setBuildOpen(true)}><Hammer className="mb-3 size-6 text-teal-700" /><span className="block font-semibold text-slate-900">一键构建 ComfyUI 镜像</span><span className="mt-2 block text-sm leading-6 text-slate-500">选择 CPU 架构、GPU 配方、ComfyUI 版本、pip 源和 Manager 开关，并可下载同参数构建脚本。</span></button>
+        <button type="button" className="rounded-xl border border-slate-200 p-5 text-left transition-colors hover:border-teal-300 hover:bg-teal-50" onClick={() => setPullOpen(true)}><CloudDownload className="mb-3 size-6 text-teal-700" /><span className="block font-semibold text-slate-900">拉取在线容器镜像</span><span className="mt-2 block text-sm leading-6 text-slate-500">输入远程镜像名后台拉取；拉取完成后按 ComfyUI/其他镜像自动归类。</span></button>
+      </div>
       {diskUsage && <div className="flex flex-col gap-2 border-t border-slate-200 px-5 py-3 text-xs text-slate-600 sm:flex-row sm:items-center sm:justify-between">
         <span>磁盘占用：镜像 {formatBytes(diskUsage.imagesBytes)}（{diskUsage.imagesCount} 个） · 构建缓存 {formatBytes(diskUsage.buildCacheBytes)}</span>
         <button type="button" className="btn-quiet px-2 text-xs" disabled={pruning} onClick={() => void pruneCache()}>{pruning ? <LoaderCircle className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}清理构建缓存</button>
       </div>}
     </Panel>
-    {renderImageTable('ComfyUI 镜像', '仅此分类会出现在新建实例的镜像选择框中。', comfyRowsWithVirtual, '暂无 ComfyUI 镜像')}
+    {renderImageTable('ComfyUI 镜像', '仅此分类会出现在新建实例的镜像选择框中；构建任务会以虚拟行进入清单，展示百分比、参数简述、日志与停止入口。', comfyRowsWithVirtual, '暂无 ComfyUI 镜像')}
     {renderImageTable('机器其他镜像', '用于环境排查和维护，不会作为 ComfyUI 实例候选。', otherRows, '暂无其他镜像')}
-    {taskPanel}
-    {dialogs}
-  </div>
-
-  return <div className="grid gap-5">
-    <Panel>
-      <PanelHeader title="手动构建 / 在线拉取" description="构建和拉取已拆为两个弹窗；任务支持并行与排队，可在下方任务列表中查看进度、停止或删除记录。" />
-      <div className="grid gap-4 p-5 md:grid-cols-2">
-        <button type="button" className="rounded-xl border border-slate-200 p-5 text-left transition-colors hover:border-teal-300 hover:bg-teal-50" onClick={() => setBuildOpen(true)}><Hammer className="mb-3 size-6 text-teal-700" /><span className="block font-semibold text-slate-900">一键构建 ComfyUI 镜像</span><span className="mt-2 block text-sm leading-6 text-slate-500">选择 CPU 架构、GPU 配方、ComfyUI 版本、pip 源和 Manager 开关，并可下载同参数构建脚本。</span></button>
-        <button type="button" className="rounded-xl border border-slate-200 p-5 text-left transition-colors hover:border-teal-300 hover:bg-teal-50" onClick={() => setPullOpen(true)}><CloudDownload className="mb-3 size-6 text-teal-700" /><span className="block font-semibold text-slate-900">拉取在线容器镜像</span><span className="mt-2 block text-sm leading-6 text-slate-500">输入远程镜像名后台拉取；拉取完成后按 ComfyUI/其他镜像自动归类。</span></button>
-      </div>
-    </Panel>
-    {renderImageTable('ComfyUI 镜像清单', '构建任务会以虚拟行进入清单，展示百分比、参数简述、日志与停止入口。', comfyRowsWithVirtual, '暂无 ComfyUI 镜像')}
     {taskPanel}
     {dialogs}
   </div>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, ChevronDown, LoaderCircle, Server } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, ChevronDown, CircleAlert, LoaderCircle, Server } from 'lucide-react'
 import { formatBytes, getLocalImages, isComfyImage, type LocalImage } from '@/api'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { CreateInstanceInput, Instance, ModelItem } from '@/types'
@@ -8,6 +8,25 @@ import type { CreateInstanceInput, Instance, ModelItem } from '@/types'
 const realNamePattern = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,31}$/
 // 容器内挂载目标必须是绝对路径。
 const targetPattern = /^\/[a-zA-Z0-9_./-]{0,127}$/
+
+// 扫描第一个空闲的默认实例名（comfy-01、comfy-02…）。
+function suggestName(instances: Instance[]): string {
+  const taken = new Set(instances.map((item) => item.name))
+  for (let index = 1; index < 100; index++) {
+    const candidate = `comfy-${String(index).padStart(2, '0')}`
+    if (!taken.has(candidate)) return candidate
+  }
+  return `comfy-${Date.now() % 1000}`
+}
+
+// 扫描第一个空闲的访问端口（8188 起，避开现有实例）。
+function suggestPort(instances: Instance[]): number {
+  const taken = new Set(instances.map((item) => item.port))
+  for (let port = 8188; port < 8288; port++) {
+    if (!taken.has(port)) return port
+  }
+  return 8188 + instances.length
+}
 
 interface Props {
   open: boolean
@@ -26,14 +45,14 @@ interface Props {
 
 export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, instances, gpuNames, defaultImage, defaultContainerPort, dataDir, defaultModelsTarget, defaultOutputsTarget, defaultWorkflowsTarget }: Props) {
   const [step, setStep] = useState(1)
-  const [name, setName] = useState(`comfy-${String(instances.length + 1).padStart(2, '0')}`)
-  // 0.0.7.4：新建实例只允许选择本机 ComfyUI 镜像；构建、拉取和导入移到实例页镜像子菜单。
+  const [name, setName] = useState(() => suggestName(instances))
+  // 新建实例只允许选择本机 ComfyUI 镜像；构建、拉取和导入在实例页「镜像中心」完成。
   const [localTag, setLocalTag] = useState('')
   const [localImages, setLocalImages] = useState<LocalImage[] | null>(null)
   const [loadingImages, setLoadingImages] = useState(false)
   const [containerPort, setContainerPort] = useState(defaultContainerPort ?? 8188)
   const [gpu, setGpu] = useState(gpuNames.length > 0 ? 0 : -1)
-  const [port, setPort] = useState(8188 + instances.length)
+  const [port, setPort] = useState(() => suggestPort(instances))
   const [autoStart, setAutoStart] = useState(true)
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -84,7 +103,7 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
       return
     }
     if (!image.trim()) {
-      setError('请选择一个本机已有镜像；如暂无镜像，请先到「手动构建 / 拉取」或「容器镜像管理」中准备镜像。')
+      setError('请选择一个本机已有镜像；如暂无镜像，请先到「镜像中心」构建、拉取或导入镜像。')
       return
     }
     if (instances.some((item) => item.name === name.trim())) {
@@ -120,20 +139,21 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
   }
 
   const hostDataDir = dataDir ?? '/data/flowpilot'
+  const stepNames = ['镜像与资源', '确认部署']
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Server className="size-5 text-teal-700" />新建 ComfyUI 实例</DialogTitle>
-          <DialogDescription>创建独立 Docker 容器；仅可选择本机已准备好的镜像，构建、拉取和导入请先在实例页镜像子菜单完成。</DialogDescription>
+          <DialogDescription>创建独立 Docker 容器；仅可选择本机已准备好的镜像，构建、拉取和导入请先在实例页「镜像中心」完成。</DialogDescription>
         </DialogHeader>
-        <div className="flex items-center gap-2 py-2" aria-label={`当前第 ${step} 步，共 3 步`}>
-          {['镜像与资源', '模型可见性', '确认部署'].map((label, index) => (
+        <div className="flex items-center gap-2 py-2" aria-label={`当前第 ${step} 步，共 2 步`}>
+          {stepNames.map((label, index) => (
             <div key={label} className="flex flex-1 items-center gap-2">
               <span className={`flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${step > index + 1 ? 'bg-teal-600 text-white' : step === index + 1 ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500'}`}>{step > index + 1 ? <Check className="size-4" /> : index + 1}</span>
               <span className={`hidden text-xs sm:inline ${step === index + 1 ? 'font-semibold text-slate-900' : 'text-slate-500'}`}>{label}</span>
-              {index < 2 && <div className="h-px flex-1 bg-slate-200" />}
+              {index < stepNames.length - 1 && <div className="h-px flex-1 bg-slate-200" />}
             </div>
           ))}
         </div>
@@ -148,9 +168,10 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
             </select>
           </label>
           <div className={`rounded-lg border p-3 text-sm leading-6 ${localTags.length > 0 ? 'border-teal-200 bg-teal-50 text-teal-950' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
-            {loadingImages ? '正在读取本机镜像列表…' : localTags.length > 0 ? <>将使用本机镜像 <span className="font-mono">{image}</span> 创建实例。</> : '当前本机暂无可选镜像；请先在「容器镜像管理」导入 tar，或在「手动构建 / 拉取」中构建/拉取镜像。'}
+            {loadingImages ? '正在读取本机镜像列表…' : localTags.length > 0 ? <>将使用本机镜像 <span className="font-mono">{image}</span> 创建实例。</> : '当前本机暂无可选镜像；请先在「镜像中心」构建、拉取或导入镜像。'}
             <button type="button" className="btn-secondary mt-2 w-full" onClick={loadImages} disabled={loadingImages}>刷新本机镜像列表</button>
           </div>
+          {gpuNames.length === 0 && <p className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-6 text-amber-900"><CircleAlert className="mt-0.5 size-4 shrink-0" />未检测到 GPU（硬件采集接口可能尚未就绪），当前将以「仅 CPU」创建；如需 GPU 实例请先返回首页确认硬件监控正常。</p>}
           <label className="field-label">实例名称
             <input className="field-input" value={name} onChange={(event) => setName(event.target.value)} maxLength={32} autoComplete="off" />
           </label>
@@ -190,39 +211,34 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
           {error && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
         </div>}
 
-        {step === 2 && <div className="py-2">
-          <p className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-600">共享模型仓库将自动挂载进实例容器（只读），以下 {readyModels.length} 个已就绪模型对新实例立即可见，无需复制或选择。</p>
-          <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
-            {readyModels.map((model) => <div key={model.id} className="flex min-h-14 items-center gap-3 rounded-lg border border-slate-200 px-3 py-2">
+        {step === 2 && <div className="grid gap-4 py-2">
+          <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-600">共享模型仓库将自动挂载进实例容器（只读），以下 {readyModels.length} 个已就绪模型对新实例立即可见，无需复制或选择。</p>
+          <div className="max-h-40 space-y-2 overflow-y-auto pr-1">
+            {readyModels.map((model) => <div key={model.id} className="flex min-h-12 items-center gap-3 rounded-lg border border-slate-200 px-3 py-2">
               <Check className="size-4 shrink-0 text-teal-600" />
               <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-slate-800">{model.name}</span><span className="text-xs text-slate-500">{model.type} · {model.size}</span></span>
             </div>)}
-            {readyModels.length === 0 && <p className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">共享仓库暂无模型，可创建后在模型中心下载或导入。</p>}
+            {readyModels.length === 0 && <p className="rounded-lg border border-dashed border-slate-300 p-4 text-center text-sm text-slate-500">共享仓库暂无模型，可创建后在模型中心下载或导入。</p>}
           </div>
-        </div>}
-
-        {step === 3 && <div className="py-2">
           <dl className="divide-y divide-slate-200 rounded-lg border border-slate-200 px-4">
             {[
               ['实例名称', name],
               ['容器镜像', image],
               ['计算资源', gpu >= 0 ? `GPU ${gpu} · ${gpuNames[gpu] ?? 'GPU'}` : '不分配 GPU（仅 CPU）'],
               ['访问地址', `http://服务器IP:${port} → 容器 ${containerPort}`],
-              ['共享模型', `${readyModels.length} 个已就绪模型自动可见`],
               ['模型仓库挂载', `${hostDataDir}/models → ${modelsTarget}（只读）`],
               ['导出资产路径', `${hostDataDir}/outputs → ${outputsTarget}`],
               ['工作流挂载', `${hostDataDir}/workflows → ${workflowsTarget}`],
               ['开机自启', autoStart ? '启用' : '关闭'],
             ].map(([term, value]) => <div key={term} className="grid grid-cols-[100px_1fr] gap-4 py-3 text-sm"><dt className="text-slate-500">{term}</dt><dd className="break-all font-medium text-slate-800">{value}</dd></div>)}
           </dl>
-          <p className="mt-4 text-xs leading-5 text-slate-500">将通过 Docker API 真实创建并启动容器，失败会自动回滚清理。</p>
+          <p className="text-xs leading-5 text-slate-500">将通过 Docker API 真实创建并启动容器，失败会自动回滚清理。</p>
         </div>}
 
         <DialogFooter>
           {step > 1 && <button type="button" className="btn-secondary" disabled={submitting} onClick={() => setStep(step - 1)}><ArrowLeft className="size-4" />上一步</button>}
           {step === 1 && <button type="button" className="btn-primary" onClick={next}>下一步<ArrowRight className="size-4" /></button>}
-          {step === 2 && <button type="button" className="btn-primary" onClick={() => setStep(3)}>下一步<ArrowRight className="size-4" /></button>}
-          {step === 3 && <button type="button" className="btn-primary" disabled={submitting} onClick={() => void submit()}>{submitting ? <LoaderCircle className="size-4 animate-spin" /> : <Check className="size-4" />}{submitting ? '正在创建容器' : '确认部署'}</button>}
+          {step === 2 && <button type="button" className="btn-primary" disabled={submitting} onClick={() => void submit()}>{submitting ? <LoaderCircle className="size-4 animate-spin" /> : <Check className="size-4" />}{submitting ? '正在创建容器' : '确认部署'}</button>}
         </DialogFooter>
       </DialogContent>
     </Dialog>

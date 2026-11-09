@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -287,16 +288,27 @@ func TestReplacedDanglingImageCleaned(t *testing.T) {
 func TestInterruptedOnRestart(t *testing.T) {
 	store := filepath.Join(t.TempDir(), "image-tasks.json")
 	release := make(chan struct{})
-	defer close(release)
 	first := NewManager(&fakeImages{buildWait: release}, store)
 	first.diskFree = func(string) (uint64, error) { return 100 << 30, nil }
 	task, err := first.SubmitBuild(BuildParams{Variant: "cpu", ImageName: "flowpilot/comfyui:restart"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 模拟服务重启：重新加载持久化文件。
-	second := NewManager(&fakeImages{}, store)
-	second.diskFree = func(string) (uint64, error) { return 100 << 30, nil }
+	// SubmitBuild 同步落盘 running 状态；快照该文件模拟崩溃前的任务记录。
+	snapshot, err := os.ReadFile(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store2 := filepath.Join(t.TempDir(), "image-tasks.json")
+	if err := os.WriteFile(store2, snapshot, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// 放行构建协程并等待收口，避免与临时目录清理竞争。
+	close(release)
+	waitForTaskState(t, first, task.ID, TaskDone)
+
+	// 模拟服务重启：从快照加载，未完成任务应标记为已中断。
+	second := NewManager(&fakeImages{}, store2)
 	loaded, err := second.Get(task.ID)
 	if err != nil {
 		t.Fatal(err)

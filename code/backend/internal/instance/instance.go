@@ -7,6 +7,7 @@ package instance
 import (
 	"context"
 	"fmt"
+	"net"
 	"regexp"
 	"sort"
 	"strconv"
@@ -291,6 +292,12 @@ func (m *Manager) validate(ctx context.Context, spec Spec) error {
 			return &ValidationError{Message: fmt.Sprintf("GPU %d 正被运行中的实例 %s 使用", spec.GPU, existing.Name)}
 		}
 	}
+	// 探测宿主机端口真实占用（覆盖管理端口 18080 与其他非实例服务）。
+	listener, err := net.Listen("tcp", ":"+strconv.Itoa(spec.Port))
+	if err != nil {
+		return &ValidationError{Message: fmt.Sprintf("端口 %d 已被宿主机其他服务占用，请更换端口", spec.Port)}
+	}
+	_ = listener.Close()
 	return nil
 }
 

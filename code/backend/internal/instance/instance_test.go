@@ -3,6 +3,7 @@ package instance
 import (
 	"context"
 	"errors"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -95,6 +96,25 @@ func newManager(dockerAPI DockerAPI, gpuCount int) *Manager {
 
 func validSpec() Spec {
 	return Spec{Name: "draw-01", Image: "comfyui:test", GPU: 0, Port: 18188, ContainerPort: 8188, AutoStart: true}
+}
+
+// 宿主机端口被非实例服务（如管理端口）占用时，创建应被拒绝。
+func TestCreateRejectsOccupiedHostPort(t *testing.T) {
+	listener, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	occupiedPort := listener.Addr().(*net.TCPAddr).Port
+
+	fake := &fakeDocker{images: map[string]bool{"comfyui:test": true}}
+	manager := newManager(fake, 1)
+	spec := validSpec()
+	spec.Port = occupiedPort
+	var validation *ValidationError
+	if _, err := manager.Create(context.Background(), spec); !errors.As(err, &validation) {
+		t.Fatalf("宿主机端口占用应返回 ValidationError：%v", err)
+	}
 }
 
 func TestCreateInstanceSuccess(t *testing.T) {

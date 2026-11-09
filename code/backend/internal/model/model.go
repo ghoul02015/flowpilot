@@ -35,12 +35,16 @@ type Report struct {
 
 // categoryTitles 将 ComfyUI 约定子目录映射为界面展示类型。
 var categoryTitles = map[string]string{
-	"checkpoints":    "Checkpoints",
-	"loras":          "LoRA",
-	"vae":            "VAE",
-	"controlnet":     "ControlNet",
-	"embeddings":     "Embeddings",
-	"upscale_models": "Upscale Models",
+	"checkpoints":      "Checkpoints",
+	"loras":            "LoRA",
+	"vae":              "VAE",
+	"controlnet":       "ControlNet",
+	"embeddings":       "Embeddings",
+	"upscale_models":   "Upscale Models",
+	"text_encoders":    "Text Encoders",
+	"diffusion_models": "Diffusion Models",
+	"clip_vision":      "CLIP Vision",
+	"model_patches":    "Model Patches",
 }
 
 // ValidationError 表示请求参数不合法。
