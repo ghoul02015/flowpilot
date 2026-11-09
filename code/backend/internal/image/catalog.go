@@ -2,8 +2,11 @@ package image
 
 import (
 	"bytes"
+	"context"
 	_ "embed"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 	"text/template"
@@ -43,6 +46,47 @@ func RecipeByID(id string) (Recipe, bool) {
 		}
 	}
 	return Recipe{}, false
+}
+
+// ComfyRef 是可用于构建的 ComfyUI 源码版本或分支。
+type ComfyRef struct {
+	Name string `json:"name"`
+	Type string `json:"type"` // branch | tag
+}
+
+// ComfyUIRefs 在线读取 ComfyUI 标签，用于构建参数选择；网络失败时返回安全兜底值。
+func ComfyUIRefs(ctx context.Context) []ComfyRef {
+	refs := []ComfyRef{{Name: "master", Type: "branch"}}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/comfyanonymous/ComfyUI/tags?per_page=40", nil)
+	if err != nil {
+		return refs
+	}
+	request.Header.Set("Accept", "application/vnd.github+json")
+	client := &http.Client{Timeout: 5 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return refs
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return refs
+	}
+	var tags []struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&tags); err != nil {
+		return refs
+	}
+	seen := map[string]bool{"master": true}
+	for _, tag := range tags {
+		name := strings.TrimSpace(tag.Name)
+		if name == "" || seen[name] || !comfyRefPattern.MatchString(name) || strings.Contains(name, "..") {
+			continue
+		}
+		refs = append(refs, ComfyRef{Name: name, Type: "tag"})
+		seen[name] = true
+	}
+	return refs
 }
 
 //go:embed assets/install-comfyui-image.sh.tmpl
@@ -119,4 +163,48 @@ func InstallScript(params InstallParams) (string, error) {
 		return "", fmt.Errorf("渲染安装脚本失败：%w", err)
 	}
 	return buffer.String(), nil
+}
+
+// BuildScript 生成仅用于构建 ComfyUI 镜像的一键脚本，不安装 FlowPilot 或下载模型。
+func BuildScript(params BuildParams) (string, error) {
+	recipe, err := params.validate()
+	if err != nil {
+		return "", err
+	}
+	dockerfile := BuildDockerfile(params, recipe)
+	platformFlag := ""
+	if platform := dockerPlatform(params.Platform); platform != "" {
+		platformFlag = " --platform " + shellQuote(platform)
+	}
+	var buffer bytes.Buffer
+	buffer.WriteString("#!/usr/bin/env bash\nset -Eeuo pipefail\n\n")
+	buffer.WriteString("# FlowPilot ComfyUI 镜像一键构建脚本\n")
+	buffer.WriteString("# 生成时间：" + time.Now().Format("2006-01-02 15:04") + "\n")
+	for _, item := range buildSummary(params, recipe) {
+		buffer.WriteString("# " + item.Label + "：" + item.Value)
+		if item.Description != "" {
+			buffer.WriteString("（" + item.Description + "）")
+		}
+		buffer.WriteString("\n")
+	}
+	buffer.WriteString("\nIMAGE=" + shellQuote(params.ImageName) + "\n")
+	buffer.WriteString("TMPDIR=$(mktemp -d)\ntrap 'rm -rf \"$TMPDIR\"' EXIT\n")
+	buffer.WriteString("cat > \"$TMPDIR/Dockerfile\" <<'DOCKERFILE'\n")
+	buffer.WriteString(dockerfile)
+	if !strings.HasSuffix(dockerfile, "\n") {
+		buffer.WriteString("\n")
+	}
+	buffer.WriteString("DOCKERFILE\n")
+	buffer.WriteString("docker build --network host" + platformFlag + " -t \"$IMAGE\" \\\n")
+	buffer.WriteString("  --build-arg PIP_INDEX_URL=" + shellQuote(params.PipIndexURL) + " \\\n")
+	buffer.WriteString("  --build-arg TORCH_INDEX_URL=" + shellQuote(torchIndexURL(recipe)) + " \\\n")
+	buffer.WriteString("  --build-arg COMFYUI_REF=" + shellQuote(params.ComfyUIRef) + " \\\n")
+	buffer.WriteString("  --build-arg WITH_MANAGER=" + shellQuote(params.WithManager) + " \\\n")
+	buffer.WriteString("  \"$TMPDIR\"\n")
+	buffer.WriteString("echo \"构建完成：$IMAGE\"\n")
+	return buffer.String(), nil
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }

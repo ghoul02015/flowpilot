@@ -128,10 +128,11 @@ type ContainerInspectResult struct {
 
 // Image 是本机一个镜像的摘要视图（对应 /images/json 条目）。
 type Image struct {
-	ID       string   `json:"Id"`
-	RepoTags []string `json:"RepoTags"`
-	Size     int64    `json:"Size"`
-	Created  int64    `json:"Created"`
+	ID       string            `json:"Id"`
+	RepoTags []string          `json:"RepoTags"`
+	Size     int64             `json:"Size"`
+	Created  int64             `json:"Created"`
+	Labels   map[string]string `json:"Labels"`
 }
 
 // Images 返回本机全部镜像摘要。
@@ -279,6 +280,7 @@ type BuildOptions struct {
 	Tag         string
 	Dockerfile  string
 	NetworkMode string
+	Platform    string
 	BuildArgs   map[string]string
 }
 
@@ -315,6 +317,9 @@ func (c *Client) BuildImage(ctx context.Context, tarContext io.Reader, options B
 	}
 	if options.NetworkMode != "" {
 		query.Set("networkmode", options.NetworkMode)
+	}
+	if options.Platform != "" {
+		query.Set("platform", options.Platform)
 	}
 	if len(options.BuildArgs) > 0 {
 		encoded, err := json.Marshal(options.BuildArgs)

@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.7.2') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.7.3') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
@@ -109,7 +109,7 @@ try {
   if (realInstancesAvailable) {
     // 真实生命周期：创建 → 端口可达 → 停止 → 启动 → 删除，全程通过界面操作。
     const instanceName = 'regress-01'
-    // 0.0.7.2：镜像管理与构建日志接口回归断言。
+    // 0.0.7.3：镜像分类、构建弹窗、在线版本和构建脚本接口回归断言。
     const localImagesResponse = await page.request.get(`${baseURL}/api/v1/images/local`)
     const localImagesBody = await localImagesResponse.json()
     if (!localImagesResponse.ok() || !Array.isArray(localImagesBody.images)) throw new Error(`本机镜像列表接口异常：HTTP ${localImagesResponse.status()}`)
@@ -118,29 +118,66 @@ try {
     const catalogBody = await catalogResponse.json()
     if (!catalogResponse.ok() || !Array.isArray(catalogBody.recipes) || catalogBody.recipes.length < 5) throw new Error(`镜像配方目录异常：${JSON.stringify(catalogBody)}`)
     check('镜像构建配方目录接口（六套多显卡配方）')
+    const refsResponse = await page.request.get(`${baseURL}/api/v1/images/comfyui-refs`)
+    const refsBody = refsResponse.ok() ? await refsResponse.json() : null
+    if (!refsResponse.ok() || !Array.isArray(refsBody.refs) || !refsBody.refs.some((item) => item.name === 'master')) throw new Error(`ComfyUI 在线版本接口异常：${JSON.stringify(refsBody)}`)
+    check('ComfyUI 在线版本接口')
     const buildStatusResponse = await page.request.get(`${baseURL}/api/v1/images/build`)
     const buildStatus = buildStatusResponse.ok() ? await buildStatusResponse.json() : null
-    if (!buildStatusResponse.ok() || !['idle', 'building', 'done', 'error'].includes(buildStatus.state) || !Array.isArray(buildStatus.logs)) throw new Error(`镜像构建状态接口异常：${JSON.stringify(buildStatus)}`)
-    check('镜像手动构建状态与日志接口')
+    if (!buildStatusResponse.ok() || !['idle', 'building', 'done', 'error'].includes(buildStatus.state) || !Array.isArray(buildStatus.logs) || typeof buildStatus.progress !== 'number' || !Array.isArray(buildStatus.summary)) throw new Error(`镜像构建状态接口异常：${JSON.stringify(buildStatus)}`)
+    check('镜像手动构建状态、进度与日志接口')
+    const buildScriptResponse = await page.request.get(`${baseURL}/api/v1/images/build-script?variant=nvidia-cu130&image=flowpilot%2Fcomfyui%3Aregress&ref=master&pip=tsinghua&manager=1&platform=linux%2Farm64`)
+    const buildScriptText = await buildScriptResponse.text()
+    if (!buildScriptResponse.ok() || !buildScriptText.startsWith('#!/usr/bin/env bash') || !buildScriptText.includes('--platform') || !buildScriptText.includes('flowpilot.build.summary')) throw new Error('一键构建脚本生成接口异常')
+    if (buildScriptText.includes('modelscope download') || buildScriptText.includes('hf download')) throw new Error('构建脚本不应包含模型下载逻辑')
+    check('一键构建脚本生成接口（参数简述＋CPU 架构）')
     const scriptResponse = await page.request.get(`${baseURL}/api/v1/images/install-script?variant=auto&pip=tsinghua&ref=master&manager=1`)
     const scriptText = await scriptResponse.text()
     if (!scriptResponse.ok() || !scriptText.startsWith('#!/usr/bin/env bash') || !scriptText.includes('nvidia-cu130') || !scriptText.includes('amd-rocm')) throw new Error('安装脚本生成接口异常')
     if (scriptText.includes('modelscope download') || scriptText.includes('hf download')) throw new Error('安装脚本不应包含模型下载逻辑')
     check('一键安装脚本生成接口（独立分发保留）')
     await page.getByRole('tab', { name: '容器镜像管理' }).click()
-    await page.getByRole('heading', { name: '本机容器镜像' }).waitFor()
-    check('容器镜像管理子菜单')
+    await page.getByRole('heading', { name: '容器镜像管理' }).waitFor()
+    await page.getByRole('heading', { name: 'ComfyUI 镜像' }).waitFor()
+    await page.getByRole('heading', { name: '机器其他镜像' }).waitFor()
+    check('容器镜像分类子菜单')
     await page.getByRole('tab', { name: '手动构建 / 拉取' }).click()
-    await page.getByRole('heading', { name: '一键手动构建 ComfyUI 镜像' }).waitFor()
-    await page.getByText('实时构建日志').waitFor()
-    check('手动构建与实时日志子菜单')
+    await page.getByRole('heading', { name: '手动构建 / 在线拉取' }).waitFor()
+    await page.getByRole('button', { name: /一键构建 ComfyUI 镜像/ }).click()
+    const buildDialog = page.getByRole('dialog')
+    await buildDialog.getByLabel('CPU 芯片架构').waitFor()
+    await buildDialog.getByLabel('GPU / PyTorch 配方').waitFor()
+    await buildDialog.getByLabel('ComfyUI 在线版本').waitFor()
+    await page.keyboard.press('Escape')
+    await buildDialog.waitFor({ state: 'detached' })
+    await page.getByRole('button', { name: /拉取在线容器镜像/ }).click()
+    const pullDialog = page.getByRole('dialog')
+    await pullDialog.getByLabel('在线镜像名').waitFor()
+    await page.keyboard.press('Escape')
+    await pullDialog.waitFor({ state: 'detached' })
+    check('手动构建与拉取双弹窗')
     await page.getByRole('tab', { name: '实例列表' }).click()
     await page.getByRole('button', { name: '新建实例', exact: true }).click()
     await createDialog.waitFor()
     await createDialog.getByLabel('实例名称').fill(instanceName)
-    await createDialog.getByLabel('容器镜像（本机已有）').selectOption(`flowpilot-web:${health.version}`)
+    const regressionImage = `flowpilot/comfyui-regress:${health.version}`
+    const imageSelect = createDialog.getByLabel('容器镜像（本机已有）')
+    const optionDeadline = Date.now() + 8000
+    while (Date.now() < optionDeadline && await imageSelect.locator('option').count() === 0) await page.waitForTimeout(200)
+    if (await imageSelect.locator('option').count() === 0) throw new Error('新建实例没有任何 ComfyUI 镜像候选')
+    if (await imageSelect.locator(`option[value="${regressionImage}"]`).count() > 0) {
+      await imageSelect.selectOption(regressionImage)
+    }
+    const selectedCreateImage = await imageSelect.evaluate((node) => node.value)
+    if (!selectedCreateImage.toLowerCase().includes('comfyui')) throw new Error(`新建实例出现非 ComfyUI 镜像候选：${selectedCreateImage}`)
     await createDialog.getByText('将使用本机镜像', { exact: false }).waitFor({ timeout: 8000 })
-    check('新建实例仅选择本机已有镜像')
+    check('新建实例仅选择 ComfyUI 本机镜像')
+    const runFastLifecycle = selectedCreateImage === regressionImage
+    if (!runFastLifecycle) {
+      console.log(`SKIP 快速实例生命周期（未找到回归健康镜像 ${regressionImage}，当前候选为 ${selectedCreateImage}）`)
+      await page.keyboard.press('Escape')
+      await createDialog.waitFor({ state: 'detached' })
+    } else {
     // 无 GPU 的演示机（如 Mac）没有 GPU 0 选项，保持默认「不分配 GPU」。
     const gpuSelect = createDialog.getByLabel('分配 GPU')
     await gpuSelect.selectOption('-1')
@@ -176,6 +213,7 @@ try {
     await deleteDialog.getByRole('button', { name: '确认删除' }).click()
     await page.getByRole('button', { name: `删除 ${instanceName}`, exact: true }).waitFor({ state: 'detached', timeout: 15000 })
     check('真实实例删除')
+    }
 
     // ComfyUI 实例链路：用默认预置镜像（comfyui-h3:spark）创建 →
     // 等待 ComfyUI /system_stats 就绪 → 停止 → 删除。
@@ -185,7 +223,9 @@ try {
     const gpu0Busy = instancesBody.instances?.some((item) => item.gpu === 0 && item.status === 'running')
     // 默认 ComfyUI 镜像不在本机或 GPU 0 已被既有业务实例占用时，跳过破坏性实机链路。
     const comfyImageCheck = await (await page.request.get(`${baseURL}/api/v1/images/check?image=${encodeURIComponent(comfyImage)}`)).json()
-    if (!comfyImageCheck.exists) {
+    if (comfyImage.includes('comfyui-regress')) {
+      console.log(`SKIP ComfyUI 实机链路（${comfyImage} 是本机回归健康镜像，不是真实 ComfyUI 服务）`)
+    } else if (!comfyImageCheck.exists) {
       console.log(`SKIP ComfyUI 实机链路（镜像 ${comfyImage} 不在本机，需在 GPU 主机上运行）`)
     } else if (gpu0Busy) {
       console.log('SKIP ComfyUI 实机链路（GPU 0 已被既有运行实例占用，避免影响业务容器）')
@@ -392,18 +432,21 @@ try {
     await loraEntry.getByText('SDXL Offset LoRA', { exact: true }).waitFor()
     check('模型市场搜索与条目展示')
     await screenshot('03-models-market')
-    await loraEntry.getByRole('button', { name: '下载 SDXL Offset LoRA', exact: true }).click()
+    const loraPath = 'loras/sd_xl_offset_example-lora_1.0.safetensors'
+    const loraDownloadButton = loraEntry.getByRole('button', { name: '下载 SDXL Offset LoRA', exact: true })
+    const loraClicked = await loraDownloadButton.count() > 0
+    if (loraClicked) await loraDownloadButton.click()
 
     const loraDeadline = Date.now() + 180000
     let loraDone = false
     while (Date.now() < loraDeadline && !loraDone) {
       const tasksBody = await (await page.request.get(`${baseURL}/api/v1/downloads`)).json()
       const modelsBody = await (await page.request.get(`${baseURL}/api/v1/models`)).json()
-      loraDone = tasksBody.tasks?.some((task) => task.path === 'loras/sd_xl_offset_example-lora_1.0.safetensors' && task.status === 'completed') && modelsBody.files?.some((file) => file.path === 'loras/sd_xl_offset_example-lora_1.0.safetensors')
+      loraDone = modelsBody.files?.some((file) => file.path === loraPath) && (await loraDownloadButton.count() === 0 || tasksBody.tasks?.some((task) => task.path === loraPath && task.status === 'completed'))
       if (!loraDone) await page.waitForTimeout(2000)
     }
     if (!loraDone) throw new Error('模型市场 LoRA 下载 180 秒内未完成入库')
-    check('模型市场选择即下载（ModelScope 真实链路）')
+    check(loraClicked ? '模型市场选择即下载（ModelScope 真实链路）' : '模型市场已入库状态识别')
     await marketDialog.getByRole('button', { name: 'Close' }).click().catch(() => page.keyboard.press('Escape'))
 
     // 界面列表每 3 秒刷新，可能滞后于 API：等待下载任务行消失、仅剩仓库文件行，

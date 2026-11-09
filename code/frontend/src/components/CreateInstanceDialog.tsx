@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, ArrowRight, Check, ChevronDown, LoaderCircle, Server } from 'lucide-react'
-import { formatBytes, getLocalImages, type LocalImage } from '@/api'
+import { formatBytes, getLocalImages, isComfyImage, type LocalImage } from '@/api'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { CreateInstanceInput, Instance, ModelItem } from '@/types'
 
@@ -27,7 +27,7 @@ interface Props {
 export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, instances, gpuNames, defaultImage, defaultContainerPort, dataDir, defaultModelsTarget, defaultOutputsTarget, defaultWorkflowsTarget }: Props) {
   const [step, setStep] = useState(1)
   const [name, setName] = useState(`comfy-${String(instances.length + 1).padStart(2, '0')}`)
-  // 0.0.7.2：新建实例只允许选择本机已构建/已导入/已拉取镜像；构建与拉取移到实例页子菜单。
+  // 0.0.7.3：新建实例只允许选择本机 ComfyUI 镜像；构建、拉取和导入移到实例页镜像子菜单。
   const [localTag, setLocalTag] = useState('')
   const [localImages, setLocalImages] = useState<LocalImage[] | null>(null)
   const [loadingImages, setLoadingImages] = useState(false)
@@ -50,7 +50,7 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
     getLocalImages()
       .then((images) => {
         setLocalImages(images)
-        const tags = images.flatMap((item) => item.RepoTags).filter((tag) => tag && tag !== '<none>:<none>')
+        const tags = images.flatMap((item) => item.RepoTags.map((tag) => ({ tag, image: item }))).filter((item) => item.tag && item.tag !== '<none>:<none>' && isComfyImage(item.tag, item.image)).map((item) => item.tag)
         if (tags.length > 0) {
           const preferred = defaultImage && tags.includes(defaultImage) ? defaultImage : tags[0]
           setLocalTag((current) => current && tags.includes(current) ? current : preferred)
@@ -71,7 +71,7 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
     loadImages()
   }, [open, loadImages])
 
-  const localTags = useMemo(() => (localImages ?? []).flatMap((item) => item.RepoTags).filter((tag) => tag && tag !== '<none>:<none>'), [localImages])
+  const localTags = useMemo(() => (localImages ?? []).flatMap((item) => item.RepoTags.map((tag) => ({ tag, image: item }))).filter((item) => item.tag && item.tag !== '<none>:<none>' && isComfyImage(item.tag, item.image)).map((item) => item.tag), [localImages])
   const image = localTag
 
   function next() {

@@ -24,7 +24,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/model"
 )
 
-const Version = "0.0.7.2"
+const Version = "0.0.7.3"
 
 type Handler struct {
 	docker       *docker.Client
@@ -77,6 +77,8 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("GET /api/v1/images/export", handler.exportLocalImage)
 	mux.HandleFunc("POST /api/v1/images/import", handler.importLocalImage)
 	mux.HandleFunc("GET /api/v1/images/catalog", handler.imageCatalog)
+	mux.HandleFunc("GET /api/v1/images/comfyui-refs", handler.comfyUIRefs)
+	mux.HandleFunc("GET /api/v1/images/build-script", handler.buildScript)
 	mux.HandleFunc("GET /api/v1/images/install-script", handler.installScript)
 	mux.HandleFunc("GET /api/v1/images/pull", handler.pullStatus)
 	mux.HandleFunc("POST /api/v1/images/pull", handler.startPull)
@@ -509,6 +511,39 @@ func (h *Handler) importLocalImage(w http.ResponseWriter, r *http.Request) {
 // imageCatalog 返回预置镜像构建配方（按显卡类型区分）。
 func (h *Handler) imageCatalog(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"recipes": image.Recipes()})
+}
+
+// comfyUIRefs 返回可选 ComfyUI 源码分支/标签，网络失败时由 image 包兜底 master。
+func (h *Handler) comfyUIRefs(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"refs": image.ComfyUIRefs(r.Context())})
+}
+
+// buildScript 按构建弹窗参数生成仅构建镜像的一键脚本。
+func (h *Handler) buildScript(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	params := image.BuildParams{
+		Variant:     query.Get("variant"),
+		ImageName:   query.Get("image"),
+		ComfyUIRef:  query.Get("ref"),
+		PipIndexURL: query.Get("pip"),
+		WithManager: query.Get("manager"),
+		Platform:    query.Get("platform"),
+	}
+	script, err := image.BuildScript(params)
+	if err != nil {
+		var validationError *image.ValidationError
+		if errors.As(err, &validationError) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationError.Message})
+			return
+		}
+		slog.Warn("render build script failed", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "生成构建脚本失败", "detail": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename=build-comfyui-image.sh")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, script)
 }
 
 // installScript 按向导参数渲染一键安装脚本并以下载形式返回。

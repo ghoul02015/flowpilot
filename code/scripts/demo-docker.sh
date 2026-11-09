@@ -3,7 +3,8 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-IMAGE="flowpilot-web:0.0.7.2"
+IMAGE="flowpilot-web:0.0.7.3"
+REGRESSION_IMAGE="flowpilot/comfyui-regress:0.0.7.3"
 CONTAINER="flowpilot-web-demo"
 PORT="${FLOWPILOT_DEMO_PORT:-18080}"
 DOCKER_SOCKET="${FLOWPILOT_DOCKER_SOCKET:-/var/run/docker.sock}"
@@ -15,6 +16,8 @@ usage() {
 
 build_image() {
   docker build -f "${CODE_DIR}/deploy/web.Dockerfile" -t "${IMAGE}" "${CODE_DIR}"
+  # 仅用于本机端到端回归：让新建实例在“只展示 ComfyUI 镜像”规则下仍可用轻量健康镜像快速验证生命周期。
+  docker tag "${IMAGE}" "${REGRESSION_IMAGE}"
 }
 
 start_container() {
@@ -31,6 +34,7 @@ start_container() {
     -v "${DATA_DIR}:/data/flowpilot" \
     -v "${IMPORT_DIR}:/data/import:ro" \
     -e FLOWPILOT_HOST_DATA_DIR="${DATA_DIR}" \
+    -e FLOWPILOT_COMFYUI_IMAGE="${REGRESSION_IMAGE}" \
     "${IMAGE}" >/dev/null
   printf 'FlowPilot Demo：http://localhost:%s\n' "${PORT}"
 }

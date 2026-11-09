@@ -199,6 +199,7 @@ export interface LocalImage {
   RepoTags: string[]
   Size: number
   Created: number
+  Labels?: Record<string, string>
 }
 
 export async function getLocalImages(): Promise<LocalImage[]> {
@@ -245,11 +246,19 @@ export function exportLocalImageURL(image: string): string {
   return `/api/v1/images/export?image=${encodeURIComponent(image)}`
 }
 
+export interface ImageBuildSummary {
+  label: string
+  value: string
+  description?: string
+}
+
 export interface ImageBuildStatus {
   image: string
   variant: string
   state: 'idle' | 'building' | 'done' | 'error'
   message: string
+  progress: number
+  summary: ImageBuildSummary[]
   logs: string[]
   updatedAt: string
 }
@@ -260,6 +269,7 @@ export interface ImageBuildSpec {
   ref: string
   pip: string
   manager: string
+  platform: string
 }
 
 export async function startImageBuild(spec: ImageBuildSpec): Promise<ImageBuildStatus> {
@@ -268,6 +278,48 @@ export async function startImageBuild(spec: ImageBuildSpec): Promise<ImageBuildS
 
 export async function getImageBuildStatus(): Promise<ImageBuildStatus> {
   return getJSON<ImageBuildStatus>('/api/v1/images/build', AbortSignal.timeout(5000))
+}
+
+export interface ComfyRef {
+  name: string
+  type: 'branch' | 'tag'
+}
+
+export async function getComfyUIRefs(): Promise<ComfyRef[]> {
+  const body = await getJSON<{ refs: ComfyRef[] }>('/api/v1/images/comfyui-refs', AbortSignal.timeout(8000))
+  return body.refs
+}
+
+export function buildScriptURL(params: ImageBuildSpec): string {
+  const query = new URLSearchParams()
+  query.set('variant', params.variant)
+  query.set('image', params.image)
+  query.set('ref', params.ref)
+  query.set('pip', params.pip)
+  query.set('manager', params.manager)
+  query.set('platform', params.platform)
+  return `/api/v1/images/build-script?${query.toString()}`
+}
+
+export function isComfyImage(tag: string, image?: LocalImage): boolean {
+  const normalized = tag.toLowerCase()
+  return image?.Labels?.['flowpilot.kind'] === 'comfyui' || normalized.includes('comfyui') || normalized.includes('comfy-ui')
+}
+
+export function imageBuildSummary(image?: LocalImage): ImageBuildSummary[] {
+  if (!image?.Labels) return []
+  const labels = image.Labels
+  const summary = labels['flowpilot.build.summary']
+  if (summary) return summary.split('；').filter(Boolean).map((part) => {
+    const [label, ...rest] = part.split('=')
+    return { label, value: rest.join('=') }
+  })
+  if (labels['flowpilot.kind'] !== 'comfyui') return []
+  return [
+    { label: 'GPU 配方', value: labels['flowpilot.build.variant'] ?? '—' },
+    { label: 'CPU 架构', value: labels['flowpilot.build.platform'] ?? '—' },
+    { label: 'ComfyUI 版本', value: labels['flowpilot.comfyui.ref'] ?? '—' },
+  ]
 }
 
 // installScriptURL 生成一键安装脚本的下载地址（参数同向导可选安装项）。

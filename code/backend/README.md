@@ -1,6 +1,6 @@
 # FlowPilot 后端
 
-当前版本：`0.0.7.2`。
+当前版本：`0.0.7.3`。
 
 轻量 Go 服务同时提供前端静态页面和 Docker API。仅使用 Go 标准库，通过 `/var/run/docker.sock` 访问 Docker Engine，不引入第三方 Docker SDK。
 
@@ -61,17 +61,19 @@
 - `GET /api/v1/models/online/search?source=modelscope|hf&q=<关键词>`：归一化仓库结果 `{results[], attempts[]}`（repo／下载量／更新时间；attempts 记录实际尝试过的关键词，空结果自动退避重试 2 次并尝试模糊变体）。输入为 `org/name` 或源站链接时前端直达文件列表（`catalog.ParseRepoRef`）。
 - `GET /api/v1/models/online/files?source=...&repo=<org/name>`：权重文件列表 `{files[]}`（真实大小降序、推断类别、直链地址，上限 100 条）。
 
-### 容器镜像管理与构建（0.0.7.2）
+### 容器镜像管理与构建（0.0.7.3）
 
 - `GET /api/v1/images/check?image=<镜像>`：本地是否存在。
-- `GET /api/v1/images/local`：本机 Docker 镜像列表，用于新建实例镜像候选。
+- `GET /api/v1/images/local`：本机 Docker 镜像列表，返回 Docker 标签与 Labels；前端按 `flowpilot.kind=comfyui` 或标签名将其分为 ComfyUI 镜像和其他镜像。
 - `DELETE /api/v1/images/local?image=<镜像>[&force=1]`：删除本机镜像标签；镜像被容器使用时由 Docker 拒绝，除非显式 `force=1`。
 - `POST /api/v1/images/tag` `{source, target}`：给已有镜像增加/修改标签。
 - `GET /api/v1/images/export?image=<镜像>`：以 `docker save` tar 流导出镜像。
 - `POST /api/v1/images/import`：multipart 上传 `file`，以 `docker load` 导入镜像 tar。
 - `GET /api/v1/images/catalog`：六套 ComfyUI 构建配方（NVIDIA cu130/cu128/cu126/cu121、AMD ROCm、CPU）。
-- `POST /api/v1/images/build` `{variant,image,ref,pip,manager}`：按配方后台构建 ComfyUI 镜像，同一时刻仅一个构建任务。
-- `GET /api/v1/images/build`：构建状态与最近日志 `{image, variant, state, message, logs[], updatedAt}`。
+- `GET /api/v1/images/comfyui-refs`：在线获取 ComfyUI `master` 与最近标签；网络失败时兜底 `master`。
+- `GET /api/v1/images/build-script?variant=&image=&ref=&pip=&manager=&platform=`：下载同参数一键构建脚本，仅构建镜像，不安装 FlowPilot、不下载模型。
+- `POST /api/v1/images/build` `{variant,image,ref,pip,manager,platform}`：按配方后台构建 ComfyUI 镜像，同一时刻仅一个构建任务；`platform` 支持 `host`、`linux/arm64`、`linux/amd64`、`linux/arm/v7`。
+- `GET /api/v1/images/build`：构建状态、进度、参数简述与最近日志 `{image, variant, state, message, progress, summary[], logs[], updatedAt}`。
 - `POST /api/v1/images/pull` `{image}`：后台流式拉取，同一时刻仅一个拉取任务（重复提交返回 409）。
 - `GET /api/v1/images/pull`：拉取状态 `{image, state: idle|pulling|done|error, message, updatedAt}`。
 - `GET /api/v1/images/install-script`：保留独立分发的一键安装脚本下载；Web 新建实例向导不再承载构建/拉取入口。
