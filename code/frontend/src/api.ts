@@ -223,6 +223,53 @@ export async function getImageCatalog(): Promise<ImageRecipe[]> {
   return body.recipes
 }
 
+export async function deleteLocalImageApi(image: string, force = false): Promise<void> {
+  await sendJSON<{ status: string }>('DELETE', `/api/v1/images/local?image=${encodeURIComponent(image)}${force ? '&force=1' : ''}`)
+}
+
+export async function tagLocalImageApi(source: string, target: string): Promise<void> {
+  await sendJSON<{ status: string }>('POST', '/api/v1/images/tag', { source, target })
+}
+
+export async function importLocalImageApi(file: File): Promise<void> {
+  const data = new FormData()
+  data.set('file', file)
+  const response = await fetch('/api/v1/images/import', { method: 'POST', body: data, headers: { Accept: 'application/json' } })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { detail?: string; error?: string } | null
+    throw new Error(body?.detail ?? body?.error ?? `请求失败：HTTP ${response.status}`)
+  }
+}
+
+export function exportLocalImageURL(image: string): string {
+  return `/api/v1/images/export?image=${encodeURIComponent(image)}`
+}
+
+export interface ImageBuildStatus {
+  image: string
+  variant: string
+  state: 'idle' | 'building' | 'done' | 'error'
+  message: string
+  logs: string[]
+  updatedAt: string
+}
+
+export interface ImageBuildSpec {
+  variant: string
+  image: string
+  ref: string
+  pip: string
+  manager: string
+}
+
+export async function startImageBuild(spec: ImageBuildSpec): Promise<ImageBuildStatus> {
+  return sendJSON<ImageBuildStatus>('POST', '/api/v1/images/build', spec)
+}
+
+export async function getImageBuildStatus(): Promise<ImageBuildStatus> {
+  return getJSON<ImageBuildStatus>('/api/v1/images/build', AbortSignal.timeout(5000))
+}
+
 // installScriptURL 生成一键安装脚本的下载地址（参数同向导可选安装项）。
 export function installScriptURL(params: { variant?: string; image?: string; ref?: string; pip?: string; manager?: string }): string {
   const query = new URLSearchParams()

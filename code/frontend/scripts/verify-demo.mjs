@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.7.1') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.7.2') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
@@ -100,6 +100,8 @@ try {
   if (['transparent', 'rgba(0, 0, 0, 0)'].includes(dialogStyle.background) || dialogStyle.opacity !== '1') throw new Error(`新建实例弹窗未正常显示：${JSON.stringify(dialogStyle)}`)
   check('新建实例弹窗背景不透明')
   await screenshot('02-create-dialog')
+  await page.keyboard.press('Escape')
+  await createDialog.waitFor({ state: 'detached' })
 
   const instancesApiResponse = await page.request.get(`${baseURL}/api/v1/instances`)
   const realInstancesAvailable = instancesApiResponse.ok()
@@ -107,28 +109,41 @@ try {
   if (realInstancesAvailable) {
     // 真实生命周期：创建 → 端口可达 → 停止 → 启动 → 删除，全程通过界面操作。
     const instanceName = 'regress-01'
-    // 0.0.7.1：新增镜像相关三个接口的回归断言。
+    // 0.0.7.2：镜像管理与构建日志接口回归断言。
     const localImagesResponse = await page.request.get(`${baseURL}/api/v1/images/local`)
-    if (!localImagesResponse.ok()) throw new Error(`本机镜像列表接口异常：HTTP ${localImagesResponse.status()}`)
+    const localImagesBody = await localImagesResponse.json()
+    if (!localImagesResponse.ok() || !Array.isArray(localImagesBody.images)) throw new Error(`本机镜像列表接口异常：HTTP ${localImagesResponse.status()}`)
     check('本机镜像列表接口')
     const catalogResponse = await page.request.get(`${baseURL}/api/v1/images/catalog`)
     const catalogBody = await catalogResponse.json()
     if (!catalogResponse.ok() || !Array.isArray(catalogBody.recipes) || catalogBody.recipes.length < 5) throw new Error(`镜像配方目录异常：${JSON.stringify(catalogBody)}`)
     check('镜像构建配方目录接口（六套多显卡配方）')
+    const buildStatusResponse = await page.request.get(`${baseURL}/api/v1/images/build`)
+    const buildStatus = buildStatusResponse.ok() ? await buildStatusResponse.json() : null
+    if (!buildStatusResponse.ok() || !['idle', 'building', 'done', 'error'].includes(buildStatus.state) || !Array.isArray(buildStatus.logs)) throw new Error(`镜像构建状态接口异常：${JSON.stringify(buildStatus)}`)
+    check('镜像手动构建状态与日志接口')
     const scriptResponse = await page.request.get(`${baseURL}/api/v1/images/install-script?variant=auto&pip=tsinghua&ref=master&manager=1`)
     const scriptText = await scriptResponse.text()
     if (!scriptResponse.ok() || !scriptText.startsWith('#!/usr/bin/env bash') || !scriptText.includes('nvidia-cu130') || !scriptText.includes('amd-rocm')) throw new Error('安装脚本生成接口异常')
     if (scriptText.includes('modelscope download') || scriptText.includes('hf download')) throw new Error('安装脚本不应包含模型下载逻辑')
-    check('一键安装脚本生成接口（多显卡＋不含模型下载）')
-    // 0.0.7.1：镜像来源三模式，回归走「手动输入」；容器端口移入高级设置。
-    await createDialog.getByLabel('镜像来源').selectOption('custom')
+    check('一键安装脚本生成接口（独立分发保留）')
+    await page.getByRole('tab', { name: '容器镜像管理' }).click()
+    await page.getByRole('heading', { name: '本机容器镜像' }).waitFor()
+    check('容器镜像管理子菜单')
+    await page.getByRole('tab', { name: '手动构建 / 拉取' }).click()
+    await page.getByRole('heading', { name: '一键手动构建 ComfyUI 镜像' }).waitFor()
+    await page.getByText('实时构建日志').waitFor()
+    check('手动构建与实时日志子菜单')
+    await page.getByRole('tab', { name: '实例列表' }).click()
+    await page.getByRole('button', { name: '新建实例', exact: true }).click()
+    await createDialog.waitFor()
     await createDialog.getByLabel('实例名称').fill(instanceName)
-    await createDialog.getByLabel('容器镜像').fill(`flowpilot-web:${health.version}`)
-    await createDialog.getByText('已在本机，可直接创建', { exact: false }).waitFor({ timeout: 8000 })
-    check('镜像本地存在性检查（创建向导）')
+    await createDialog.getByLabel('容器镜像（本机已有）').selectOption(`flowpilot-web:${health.version}`)
+    await createDialog.getByText('将使用本机镜像', { exact: false }).waitFor({ timeout: 8000 })
+    check('新建实例仅选择本机已有镜像')
     // 无 GPU 的演示机（如 Mac）没有 GPU 0 选项，保持默认「不分配 GPU」。
     const gpuSelect = createDialog.getByLabel('分配 GPU')
-    if (await gpuSelect.locator('option[value="0"]').count() > 0) await gpuSelect.selectOption('0')
+    await gpuSelect.selectOption('-1')
     await createDialog.getByLabel('访问端口').fill('18188')
     await createDialog.getByRole('button', { name: /高级设置/ }).click()
     await createDialog.getByLabel('容器端口').fill('18080')
@@ -167,18 +182,20 @@ try {
     const instancesBody = await (await page.request.get(`${baseURL}/api/v1/instances`)).json()
     const comfyImage = instancesBody.defaults?.image ?? 'comfyui:latest'
     const comfyName = 'comfy-real'
-    // 默认 ComfyUI 镜像不在本机时（如无 GPU 的开发机），跳过 ComfyUI 实机链路。
+    const gpu0Busy = instancesBody.instances?.some((item) => item.gpu === 0 && item.status === 'running')
+    // 默认 ComfyUI 镜像不在本机或 GPU 0 已被既有业务实例占用时，跳过破坏性实机链路。
     const comfyImageCheck = await (await page.request.get(`${baseURL}/api/v1/images/check?image=${encodeURIComponent(comfyImage)}`)).json()
     if (!comfyImageCheck.exists) {
       console.log(`SKIP ComfyUI 实机链路（镜像 ${comfyImage} 不在本机，需在 GPU 主机上运行）`)
+    } else if (gpu0Busy) {
+      console.log('SKIP ComfyUI 实机链路（GPU 0 已被既有运行实例占用，避免影响业务容器）')
     } else {
     await page.getByRole('button', { name: '新建实例', exact: true }).click()
     const comfyDialog = page.getByRole('dialog')
     await comfyDialog.waitFor()
-    await comfyDialog.getByLabel('镜像来源').selectOption('custom')
     await comfyDialog.getByLabel('实例名称').fill(comfyName)
-    await comfyDialog.getByLabel('容器镜像').fill(comfyImage)
-    await comfyDialog.getByText('已在本机，可直接创建', { exact: false }).waitFor({ timeout: 8000 })
+    await comfyDialog.getByLabel('容器镜像（本机已有）').selectOption(comfyImage)
+    await comfyDialog.getByText('将使用本机镜像', { exact: false }).waitFor({ timeout: 8000 })
     const comfyGpuSelect = comfyDialog.getByLabel('分配 GPU')
     if (await comfyGpuSelect.locator('option[value="0"]').count() > 0) await comfyGpuSelect.selectOption('0')
     await comfyDialog.getByLabel('访问端口').fill('18189')
@@ -251,9 +268,14 @@ try {
     check('ComfyUI 实例删除')
     }
 
-    // 实例全部删除后应展示生产空态，而非演示数据。
-    await page.getByText('暂无 ComfyUI 实例', { exact: true }).waitFor()
-    check('实例列表空态展示（无演示数据）')
+    // 实例全部删除后应展示生产空态；若远端已有业务实例，则确认没有回退演示数据。
+    const afterInstances = await (await page.request.get(`${baseURL}/api/v1/instances`)).json()
+    if ((afterInstances.instances ?? []).length === 0) {
+      await page.getByText('暂无 ComfyUI 实例', { exact: true }).waitFor()
+      check('实例列表空态展示（无演示数据）')
+    } else {
+      check('实例列表保留既有真实实例（无演示数据）')
+    }
   } else {
     throw new Error('实例接口不可用：0.0.5.1 起页面仅支持真实后端，请确认平台服务已启动')
   }
@@ -317,7 +339,7 @@ try {
     if (!onlineBody?.results?.some((repo) => repo.repo === 'Comfy-Org/MiniMax-H3')) throw new Error(`在线搜索未命中 Comfy-Org/MiniMax-H3：${JSON.stringify(onlineBody)?.slice(0, 300)}`)
     check('ModelScope 在线搜索接口（MiniMax-H3）')
 
-    // 搜索习惯（0.0.7.1）：周董实测搜 nvfp4 空结果（风控间歇空响应），后端空结果退避重试＋模糊变体，attempts 透明化。
+    // 搜索习惯（0.0.7.2）：周董实测搜 nvfp4 空结果（风控间歇空响应），后端空结果退避重试＋模糊变体，attempts 透明化。
     const habitResponse = await page.request.get(`${baseURL}/api/v1/models/online/search?source=modelscope&q=nvfp4`)
     const habitBody = habitResponse.ok() ? await habitResponse.json() : null
     if (!habitBody || !Array.isArray(habitBody.results) || habitBody.results.length === 0 || !Array.isArray(habitBody.attempts) || habitBody.attempts[0] !== 'nvfp4') throw new Error(`搜索习惯接口异常：${JSON.stringify(habitBody)?.slice(0, 300)}`)
@@ -356,7 +378,7 @@ try {
     check('在线源搜索与仓库文件列表（真实大小）')
     await screenshot('03-models-online-search')
 
-    // 仓库直达（0.0.7.1）：粘贴 org/name 跳过搜索接口，直接展开文件列表。
+    // 仓库直达（0.0.7.2）：粘贴 org/name 跳过搜索接口，直接展开文件列表。
     await marketDialog.getByPlaceholder(/在 ModelScope 搜索模型仓库/).fill('Comfy-Org/MiniMax-H3')
     await marketDialog.getByRole('button', { name: '在线搜索' }).click()
     const directRepo = marketDialog.getByTestId('online-repo-Comfy-Org/MiniMax-H3')

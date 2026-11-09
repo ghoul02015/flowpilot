@@ -20,16 +20,16 @@ const (
 	// LabelInstance 标记 ComfyUI 实例容器。
 	LabelInstance = "flowpilot.instance"
 	// LabelManaged 与平台卸载保护共用的管理标签。
-	LabelManaged      = "flowpilot.managed"
-	labelName         = "flowpilot.instance.name"
-	labelGPU          = "flowpilot.instance.gpu"
-	labelPort         = "flowpilot.instance.port"
-	labelAutoStart    = "flowpilot.instance.autostart"
-	labelModelsTarget = "flowpilot.instance.models-target"
-	labelOutputsTarget = "flowpilot.instance.outputs-target"
+	LabelManaged         = "flowpilot.managed"
+	labelName            = "flowpilot.instance.name"
+	labelGPU             = "flowpilot.instance.gpu"
+	labelPort            = "flowpilot.instance.port"
+	labelAutoStart       = "flowpilot.instance.autostart"
+	labelModelsTarget    = "flowpilot.instance.models-target"
+	labelOutputsTarget   = "flowpilot.instance.outputs-target"
 	labelWorkflowsTarget = "flowpilot.instance.workflows-target"
-	containerPrefix   = "flowpilot-comfyui-"
-	stopTimeoutSecond = 10
+	containerPrefix      = "flowpilot-comfyui-"
+	stopTimeoutSecond    = 10
 )
 
 var (
@@ -53,18 +53,18 @@ type Spec struct {
 
 // Instance 是实例的对外视图。
 type Instance struct {
-	Name          string    `json:"name"`
-	ContainerID   string    `json:"containerId"`
-	ContainerName string    `json:"containerName"`
-	Image         string    `json:"image"`
-	Status        string    `json:"status"` // running | stopped | error
-	GPU           int       `json:"gpu"`
-	Port          int       `json:"port"`
-	AutoStart     bool      `json:"autoStart"`
-	ModelsTarget  string    `json:"modelsTarget"`
-	OutputsTarget string    `json:"outputsTarget"`
-	WorkflowsTarget string `json:"workflowsTarget"`
-	CreatedAt     time.Time `json:"createdAt"`
+	Name            string    `json:"name"`
+	ContainerID     string    `json:"containerId"`
+	ContainerName   string    `json:"containerName"`
+	Image           string    `json:"image"`
+	Status          string    `json:"status"` // running | stopped | error
+	GPU             int       `json:"gpu"`
+	Port            int       `json:"port"`
+	AutoStart       bool      `json:"autoStart"`
+	ModelsTarget    string    `json:"modelsTarget"`
+	OutputsTarget   string    `json:"outputsTarget"`
+	WorkflowsTarget string    `json:"workflowsTarget"`
+	CreatedAt       time.Time `json:"createdAt"`
 }
 
 // Defaults 是创建实例时的推荐默认值，随列表接口返回。
@@ -194,14 +194,14 @@ func (m *Manager) Create(ctx context.Context, spec Spec) (Instance, error) {
 	}
 
 	labels := map[string]string{
-		LabelManaged:      "true",
-		LabelInstance:     "true",
-		labelName:         spec.Name,
-		labelGPU:          strconv.Itoa(spec.GPU),
-		labelPort:         strconv.Itoa(spec.Port),
-		labelAutoStart:    strconv.FormatBool(spec.AutoStart),
-		labelModelsTarget: spec.ModelsTarget,
-		labelOutputsTarget: spec.OutputsTarget,
+		LabelManaged:         "true",
+		LabelInstance:        "true",
+		labelName:            spec.Name,
+		labelGPU:             strconv.Itoa(spec.GPU),
+		labelPort:            strconv.Itoa(spec.Port),
+		labelAutoStart:       strconv.FormatBool(spec.AutoStart),
+		labelModelsTarget:    spec.ModelsTarget,
+		labelOutputsTarget:   spec.OutputsTarget,
 		labelWorkflowsTarget: spec.WorkflowsTarget,
 	}
 	portKey := fmt.Sprintf("%d/tcp", spec.ContainerPort)
@@ -359,18 +359,18 @@ func fromContainer(container docker.Container) Instance {
 	gpuIndex, _ := strconv.Atoi(container.Labels[labelGPU])
 	port, _ := strconv.Atoi(container.Labels[labelPort])
 	return Instance{
-		Name:          container.Labels[labelName],
-		ContainerID:   shortID(container.ID),
-		ContainerName: strings.TrimPrefix(firstName(container.Names), "/"),
-		Image:         container.Image,
-		Status:        mapStatus(container.State),
-		GPU:           gpuIndex,
-		Port:          port,
-		AutoStart:     container.Labels[labelAutoStart] == "true",
-		ModelsTarget:  container.Labels[labelModelsTarget],
-		OutputsTarget: container.Labels[labelOutputsTarget],
+		Name:            container.Labels[labelName],
+		ContainerID:     shortID(container.ID),
+		ContainerName:   strings.TrimPrefix(firstName(container.Names), "/"),
+		Image:           container.Image,
+		Status:          mapStatus(container.State),
+		GPU:             gpuIndex,
+		Port:            port,
+		AutoStart:       container.Labels[labelAutoStart] == "true",
+		ModelsTarget:    container.Labels[labelModelsTarget],
+		OutputsTarget:   container.Labels[labelOutputsTarget],
 		WorkflowsTarget: container.Labels[labelWorkflowsTarget],
-		CreatedAt:     time.Unix(container.Created, 0),
+		CreatedAt:       time.Unix(container.Created, 0),
 	}
 }
 

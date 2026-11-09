@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, ChevronDown, CloudDownload, Download, LoaderCircle, Server } from 'lucide-react'
-import { checkImage, formatBytes, getImageCatalog, getImagePullStatus, getLocalImages, startImagePull, type ImagePullStatus, type ImageRecipe, type LocalImage } from '@/api'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ArrowLeft, ArrowRight, Check, ChevronDown, LoaderCircle, Server } from 'lucide-react'
+import { formatBytes, getLocalImages, type LocalImage } from '@/api'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { CreateInstanceInput, Instance, ModelItem } from '@/types'
 
@@ -24,18 +24,13 @@ interface Props {
   defaultWorkflowsTarget?: string
 }
 
-type ImageMode = 'local' | 'recipe' | 'custom'
-
 export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, instances, gpuNames, defaultImage, defaultContainerPort, dataDir, defaultModelsTarget, defaultOutputsTarget, defaultWorkflowsTarget }: Props) {
   const [step, setStep] = useState(1)
   const [name, setName] = useState(`comfy-${String(instances.length + 1).padStart(2, '0')}`)
-  // 镜像选择：本机已有镜像 / 预置构建配方 / 手动输入。
-  const [imageMode, setImageMode] = useState<ImageMode>('local')
+  // 0.0.7.2：新建实例只允许选择本机已构建/已导入/已拉取镜像；构建与拉取移到实例页子菜单。
   const [localTag, setLocalTag] = useState('')
-  const [recipeId, setRecipeId] = useState('')
-  const [customImage, setCustomImage] = useState(defaultImage ?? 'comfyui:latest')
   const [localImages, setLocalImages] = useState<LocalImage[] | null>(null)
-  const [recipes, setRecipes] = useState<ImageRecipe[]>([])
+  const [loadingImages, setLoadingImages] = useState(false)
   const [containerPort, setContainerPort] = useState(defaultContainerPort ?? 8188)
   const [gpu, setGpu] = useState(gpuNames.length > 0 ? 0 : -1)
   const [port, setPort] = useState(8188 + instances.length)
@@ -47,85 +42,37 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
   const [modelsTarget, setModelsTarget] = useState(defaultModelsTarget ?? '/data/models')
   const [outputsTarget, setOutputsTarget] = useState(defaultOutputsTarget ?? '/data/outputs')
   const [workflowsTarget, setWorkflowsTarget] = useState(defaultWorkflowsTarget ?? '/data/workflows')
-  // 镜像本地存在性检查与后台拉取状态。
-  const [imageState, setImageState] = useState<'unknown' | 'checking' | 'exists' | 'missing'>('unknown')
-  const [pull, setPull] = useState<ImagePullStatus | null>(null)
-  // 一键安装脚本向导参数（镜像缺失时可见）。
-  const [installRef, setInstallRef] = useState('master')
-  const [installPip, setInstallPip] = useState('tsinghua')
-  const [installManager, setInstallManager] = useState(true)
 
   const readyModels = models.filter((model) => model.status === 'ready')
 
-  // 打开向导时加载本机镜像列表与预置配方目录。
-  useEffect(() => {
-    if (!open) return
+  const loadImages = useCallback(() => {
+    setLoadingImages(true)
     getLocalImages()
       .then((images) => {
         setLocalImages(images)
         const tags = images.flatMap((item) => item.RepoTags).filter((tag) => tag && tag !== '<none>:<none>')
         if (tags.length > 0) {
           const preferred = defaultImage && tags.includes(defaultImage) ? defaultImage : tags[0]
-          setLocalTag(preferred)
+          setLocalTag((current) => current && tags.includes(current) ? current : preferred)
         } else {
-          setImageMode('recipe')
+          setLocalTag('')
         }
       })
-      .catch(() => setLocalImages([]))
-    getImageCatalog()
-      .then((list) => {
-        setRecipes(list)
-        if (list.length > 0) setRecipeId((current) => current || list[0].id)
+      .catch(() => {
+        setLocalImages([])
+        setLocalTag('')
       })
-      .catch(() => {})
-  }, [open, defaultImage])
+      .finally(() => setLoadingImages(false))
+  }, [defaultImage])
+
+  // 打开向导时加载本机镜像列表。
+  useEffect(() => {
+    if (!open) return
+    loadImages()
+  }, [open, loadImages])
 
   const localTags = useMemo(() => (localImages ?? []).flatMap((item) => item.RepoTags).filter((tag) => tag && tag !== '<none>:<none>'), [localImages])
-  const selectedRecipe = recipes.find((item) => item.id === recipeId)
-  const image = imageMode === 'local' ? localTag : imageMode === 'recipe' ? selectedRecipe?.image ?? '' : customImage
-
-  // 镜像名输入后延迟检查本地是否存在。
-  useEffect(() => {
-    if (!image.trim()) {
-      setImageState('unknown')
-      return
-    }
-    setImageState('checking')
-    const timer = window.setTimeout(() => {
-      checkImage(image.trim())
-        .then((result) => setImageState(result.exists ? 'exists' : 'missing'))
-        .catch(() => setImageState('unknown'))
-    }, 500)
-    return () => window.clearTimeout(timer)
-  }, [image])
-
-  // 拉取进行中每 2 秒轮询进度。
-  useEffect(() => {
-    if (pull?.state !== 'pulling') return
-    const timer = window.setInterval(() => {
-      getImagePullStatus()
-        .then((status) => {
-          setPull(status)
-          if (status.state === 'done') setImageState('exists')
-        })
-        .catch(() => {})
-    }, 2000)
-    return () => window.clearInterval(timer)
-  }, [pull])
-
-  function pullImage() {
-    startImagePull(image.trim())
-      .then(setPull)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : '启动拉取失败'))
-  }
-
-  function downloadInstallScript() {
-    // 配方模式直接固化对应显卡配方；其余由目标机器自动检测显卡。
-    const variant = imageMode === 'recipe' && selectedRecipe ? selectedRecipe.id : 'auto'
-    const params = new URLSearchParams({ variant, ref: installRef.trim() || 'master', pip: installPip, manager: installManager ? '1' : '0' })
-    if (image.trim()) params.set('image', image.trim())
-    window.open(`/api/v1/images/install-script?${params.toString()}`, '_blank', 'noopener')
-  }
+  const image = localTag
 
   function next() {
     if (!name.trim()) {
@@ -137,7 +84,7 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
       return
     }
     if (!image.trim()) {
-      setError('请选择或输入容器镜像。')
+      setError('请选择一个本机已有镜像；如暂无镜像，请先到「手动构建 / 拉取」或「容器镜像管理」中准备镜像。')
       return
     }
     if (instances.some((item) => item.name === name.trim())) {
@@ -179,7 +126,7 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Server className="size-5 text-teal-700" />新建 ComfyUI 实例</DialogTitle>
-          <DialogDescription>创建独立 Docker 容器，共享模型仓库自动挂载，业务数据持久化保存。</DialogDescription>
+          <DialogDescription>创建独立 Docker 容器；仅可选择本机已准备好的镜像，构建、拉取和导入请先在实例页镜像子菜单完成。</DialogDescription>
         </DialogHeader>
         <div className="flex items-center gap-2 py-2" aria-label={`当前第 ${step} 步，共 3 步`}>
           {['镜像与资源', '模型可见性', '确认部署'].map((label, index) => (
@@ -192,60 +139,17 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
         </div>
 
         {step === 1 && <div className="grid gap-4 py-2">
-          <label className="field-label">镜像来源
-            <select className="field-input" value={imageMode} onChange={(event) => setImageMode(event.target.value as ImageMode)}>
-              <option value="local" disabled={localTags.length === 0}>本机已有镜像{localTags.length === 0 ? '（暂无）' : `（${localTags.length} 个）`}</option>
-              <option value="recipe">预置构建配方（按显卡选择）</option>
-              <option value="custom">手动输入镜像名</option>
-            </select>
-          </label>
-          {imageMode === 'local' && <label className="field-label">容器镜像
-            <select className="field-input font-mono text-sm" value={localTag} onChange={(event) => setLocalTag(event.target.value)}>
+          <label className="field-label">容器镜像（本机已有）
+            <select className="field-input font-mono text-sm" value={localTag} disabled={loadingImages || localTags.length === 0} onChange={(event) => setLocalTag(event.target.value)}>
               {localTags.map((tag) => {
                 const meta = (localImages ?? []).find((item) => item.RepoTags.includes(tag))
                 return <option key={tag} value={tag}>{tag}{meta ? `（${formatBytes(meta.Size)}）` : ''}</option>
               })}
             </select>
-          </label>}
-          {imageMode === 'recipe' && <div className="grid gap-2">
-            <label className="field-label">显卡配方
-              <select className="field-input" value={recipeId} onChange={(event) => setRecipeId(event.target.value)}>
-                {recipes.map((recipe) => <option key={recipe.id} value={recipe.id}>{recipe.label}</option>)}
-              </select>
-            </label>
-            {selectedRecipe && <p className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-600">{selectedRecipe.description}；构建后本地镜像名为 <span className="font-mono">{selectedRecipe.image}</span>。</p>}
-          </div>}
-          {imageMode === 'custom' && <label className="field-label">容器镜像
-            <input className="field-input font-mono text-sm" value={customImage} onChange={(event) => setCustomImage(event.target.value)} placeholder="comfyui:latest" autoComplete="off" />
-          </label>}
-          <div className={`rounded-lg border p-3 text-sm leading-6 ${imageState === 'exists' ? 'border-teal-200 bg-teal-50 text-teal-950' : imageState === 'missing' ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-slate-200 bg-slate-50 text-slate-600'}`} aria-live="polite">
-            {imageState === 'checking' && '正在检查本机镜像…'}
-            {imageState === 'exists' && <>镜像 <span className="font-mono">{image.trim()}</span> 已在本机，可直接创建。</>}
-            {imageState === 'missing' && <>镜像 <span className="font-mono">{image.trim()}</span> 不在本机，可在线拉取，或用一键安装脚本在本机构建。</>}
-            {imageState === 'unknown' && '将创建真实 Docker 容器；镜像必须已存在于本机，离线环境请先导入或用安装脚本构建。'}
-            {imageState === 'missing' && pull?.state !== 'pulling' && <div className="mt-2 grid gap-2">
-              <button type="button" className="btn-secondary w-full" onClick={pullImage}><CloudDownload className="size-4" />在线拉取镜像</button>
-              <details className="rounded-lg border border-amber-200 bg-white/60 p-3">
-                <summary className="cursor-pointer text-sm font-medium text-amber-900">一键安装脚本参数（纯净机器适用）</summary>
-                <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                  <label className="field-label">ComfyUI 版本
-                    <input className="field-input font-mono text-sm" value={installRef} onChange={(event) => setInstallRef(event.target.value)} placeholder="master 或 v0.3.x" autoComplete="off" />
-                  </label>
-                  <label className="field-label">pip 源
-                    <select className="field-input" value={installPip} onChange={(event) => setInstallPip(event.target.value)}>
-                      <option value="tsinghua">清华镜像</option>
-                      <option value="aliyun">阿里云镜像</option>
-                      <option value="pypi">PyPI 官方</option>
-                    </select>
-                  </label>
-                  <label className="flex min-h-11 cursor-pointer items-end gap-2 pb-2 text-sm text-slate-700"><input type="checkbox" className="size-4 accent-teal-700" checked={installManager} onChange={(event) => setInstallManager(event.target.checked)} />内置 ComfyUI-Manager</label>
-                </div>
-                <button type="button" className="btn-secondary mt-3 w-full" onClick={downloadInstallScript}><Download className="size-4" />下载一键安装脚本（自动识别 NVIDIA / AMD / CPU）</button>
-                <p className="mt-2 text-xs leading-5 text-slate-500">将脚本拷到目标服务器执行 <span className="font-mono">bash install-comfyui-image.sh</span>：自动安装 Docker、按显卡选择 PyTorch 轮子并构建镜像；模型由模型中心统一分发，脚本不下载模型。</p>
-              </details>
-            </div>}
-            {pull?.state === 'pulling' && <span className="mt-1 flex items-center gap-2 text-xs"><LoaderCircle className="size-3.5 animate-spin" />{pull.message || '正在拉取镜像…'}</span>}
-            {pull?.state === 'error' && <span className="mt-1 block text-xs text-rose-700">拉取失败：{pull.message}</span>}
+          </label>
+          <div className={`rounded-lg border p-3 text-sm leading-6 ${localTags.length > 0 ? 'border-teal-200 bg-teal-50 text-teal-950' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
+            {loadingImages ? '正在读取本机镜像列表…' : localTags.length > 0 ? <>将使用本机镜像 <span className="font-mono">{image}</span> 创建实例。</> : '当前本机暂无可选镜像；请先在「容器镜像管理」导入 tar，或在「手动构建 / 拉取」中构建/拉取镜像。'}
+            <button type="button" className="btn-secondary mt-2 w-full" onClick={loadImages} disabled={loadingImages}>刷新本机镜像列表</button>
           </div>
           <label className="field-label">实例名称
             <input className="field-input" value={name} onChange={(event) => setName(event.target.value)} maxLength={32} autoComplete="off" />

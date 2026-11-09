@@ -2,8 +2,8 @@
 
 面向 GPU 服务器的轻量化 ComfyUI 一体化部署与管理平台。
 
-- 当前版本：`0.0.7.1`
-- 当前阶段：实例管理（真实 Docker 生命周期＋GPU 分配）、模型中心（真实仓库扫描／删除）、镜像预置（检查＋一键拉取＋默认镜像自动探测与挂载自适应）、下载引擎（URL 下载＋本地导入＋断点续传＋SHA256 校验）已落地，任务持久化（重启恢复＋续传）与 ComfyUI 制图状态代理（队列进度＋一键跳转真实应用）上线；界面无演示数据、完全由真实后端驱动；0.0.6.x 上线模型市场（19 条主流模型推荐目录＋ModelScope／HF 双源在线搜索，源站更新即所见，选中即下载）；DGX Spark 实测完成"安装→建实例→下模型→出图"全闭环，真实硬件采集、离线安装包与一键卸载可用；0.0.7.1 升级实例模块：新建实例可选本机镜像或预置构建配方（NVIDIA cu130/cu128/cu126/cu121、AMD ROCm、CPU 六套），一键安装脚本按向导参数（ComfyUI 版本／pip 源／Manager 开关）生成下载，纯净机器自动识别显卡完成 Docker 与镜像构建（不含模型下载，模型由模型中心负责），模型仓库／导出资产／工作流挂载路径全部向导化并随实例标签回显
+- 当前版本：`0.0.7.2`
+- 当前阶段：实例管理（真实 Docker 生命周期＋GPU 分配）、模型中心（真实仓库扫描／删除）、镜像预置（检查＋一键拉取＋默认镜像自动探测与挂载自适应）、下载引擎（URL 下载＋本地导入＋断点续传＋SHA256 校验）已落地，任务持久化（重启恢复＋续传）与 ComfyUI 制图状态代理（队列进度＋一键跳转真实应用）上线；界面无演示数据、完全由真实后端驱动；模型市场已支持 19 条主流推荐目录＋ModelScope／HF 双源在线搜索；DGX Spark 实测完成"安装→建实例→下模型→出图"全闭环；0.0.7.2 升级实例模块：新增「容器镜像管理」子菜单，可管理本机 Docker 镜像的列表、改标签、删除、tar 导入和 tar 导出；新增「手动构建／拉取」子菜单，可按 NVIDIA cu130/cu128/cu126/cu121、AMD ROCm、CPU 六套配方在界面一键构建 ComfyUI 镜像并轮询实时构建日志；新建实例向导收敛为只能选择本机已构建／已导入／已拉取镜像，环境准备统一前置到镜像管理模块。
 - 核心目标：一次安装、Web 管理、Docker 部署、模型共享、数据持久化。
 
 ## 运行本机 Demo
@@ -13,7 +13,7 @@ cd code
 ./scripts/demo-docker.sh up
 ```
 
-访问 `http://localhost:18080`。容器名为 `flowpilot-web-demo`，镜像为 `flowpilot-web:0.0.7.1`。
+访问 `http://localhost:18080`。容器名为 `flowpilot-web-demo`，镜像为 `flowpilot-web:0.0.7.2`。
 
 ## 离线安装与一键卸载（生产交付）
 
@@ -22,7 +22,7 @@ cd code
 code/scripts/package-release.sh
 
 # 目标服务器上安装（用户目录、无需 sudo、不修改系统包）
-tar -xzf flowpilot-0.0.7.1-arm64.tar.gz -C /tmp/flowpilot-install --strip-components=1
+tar -xzf flowpilot-0.0.7.2-arm64.tar.gz -C /tmp/flowpilot-install --strip-components=1
 /tmp/flowpilot-install/scripts/install.sh
 
 # 一键卸载（只删除 FlowPilot 容器、镜像和用户目录，不碰其他业务容器）
@@ -31,7 +31,7 @@ tar -xzf flowpilot-0.0.7.1-arm64.tar.gz -C /tmp/flowpilot-install --strip-compon
 
 远程部署辅助：`code/scripts/deploy-remote.sh <user@host> <发布包路径> [端口]`。卸载脚本通过 `flowpilot.managed=true` 容器标签判断镜像是否仍被其他 FlowPilot 实例使用，避免误删共享镜像。已在 DGX Spark（Ubuntu 24.04 arm64、NVIDIA GB10、Docker 29.2.1）实测通过。
 
-Go 服务统一提供前端页面和 `/api/v1/` 接口。系统管理页读取真实 Docker Engine 与容器信息；实例管理已走真实 Docker API（实例即带 `flowpilot.instance=true` 标签的容器，配置存标签，无需数据库），支持真实 GPU 分配、端口映射与共享数据目录挂载；安装时自动探测默认 ComfyUI 镜像（`comfyui-h3:spark` 优先）并按镜像 WorkingDir 适配挂载目标，新实例开箱即见平台模型库；模型中心实时扫描共享仓库并支持界面删除，URL 下载与本地导入（`/data/import` 白名单目录）走同一任务引擎（断点续传＋可选 SHA256 校验）；任务中心展示真实下载／导入任务；创建向导可检查并一键拉取实例镜像；硬件／GPU 数据为实时采集。
+Go 服务统一提供前端页面和 `/api/v1/` 接口。系统管理页读取真实 Docker Engine 与容器信息；实例管理已走真实 Docker API（实例即带 `flowpilot.instance=true` 标签的容器，配置存标签，无需数据库），支持真实 GPU 分配、端口映射与共享数据目录挂载；安装时自动探测默认 ComfyUI 镜像（`comfyui-h3:spark` 优先）并按镜像 WorkingDir 适配挂载目标，新实例开箱即见平台模型库；模型中心实时扫描共享仓库并支持界面删除，URL 下载与本地导入（`/data/import` 白名单目录）走同一任务引擎（断点续传＋可选 SHA256 校验）；任务中心展示真实下载／导入任务；实例页提供本机镜像管理、在线拉取和手动构建日志，新建实例只从本机已有镜像中选择；硬件／GPU 数据为实时采集。
 
 启动脚本会挂载 `/var/run/docker.sock`，仅限受信任的本机或管理网络使用。当前版本没有认证，不应直接暴露到公网。详细操作见 [Web Demo 说明](code/frontend/README.md) 和 [后端说明](code/backend/README.md)。
 
@@ -58,7 +58,7 @@ Go 服务统一提供前端页面和 `/api/v1/` 接口。系统管理页读取�
 - [MVP 产品需求文档](docs/mvp/FlowPilot_MVP_PRD.md)
 - [项目协作与版本管理规则](PROJECT_RULES.md)
 - [版本变更日志](CHANGELOG.md)
-- [最新对话上下文](context/conversations/2026-11-08-019-实例镜像可选与多显卡一键安装.md)
+- [最新对话上下文](context/conversations/2026-11-09-020-实例镜像管理与手动构建.md)
 
 ## 修改要求
 

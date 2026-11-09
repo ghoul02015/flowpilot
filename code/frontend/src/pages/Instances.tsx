@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { ExternalLink, Play, Plus, RefreshCw, Search, Settings2, Square, Trash2 } from 'lucide-react'
 import { EmptyState, PageHeader, Panel, StatusBadge } from '@/components/common'
+import { ImageManager } from '@/components/ImageManager'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { Instance } from '@/types'
 
@@ -13,7 +14,10 @@ interface Props {
   onDelete: (id: string) => void
 }
 
+type InstanceTab = 'instances' | 'images' | 'build'
+
 export function Instances({ instances, gpuNames, realMode, onCreate, onAction, onDelete }: Props) {
+  const [tab, setTab] = useState<InstanceTab>('instances')
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all')
   const [detailId, setDetailId] = useState<string | null>(null)
@@ -28,9 +32,14 @@ export function Instances({ instances, gpuNames, realMode, onCreate, onAction, o
     setConfirmName('')
   }
 
+  const tabs: { key: InstanceTab; label: string }[] = [{ key: 'instances', label: '实例列表' }, { key: 'images', label: '容器镜像管理' }, { key: 'build', label: '手动构建 / 拉取' }]
+
   return <>
-    <PageHeader eyebrow="COMFYUI" title="实例管理" description="创建独立 ComfyUI 容器，管理 GPU、端口、运行状态和持久化数据。" action={<button type="button" className="btn-primary" onClick={onCreate}><Plus className="size-4" />新建实例</button>} />
-    <Panel>
+    <PageHeader eyebrow="COMFYUI" title="实例管理" description="创建独立 ComfyUI 容器，统一管理本机镜像、手动构建、在线拉取与实例生命周期。" action={tab === 'instances' ? <button type="button" className="btn-primary" onClick={onCreate}><Plus className="size-4" />新建实例</button> : undefined} />
+    <div className="mb-5 flex gap-1 overflow-x-auto rounded-lg border border-slate-200 bg-white p-1" role="tablist" aria-label="实例管理子菜单">{tabs.map((item) => <button type="button" role="tab" aria-selected={tab === item.key} key={item.key} className={`min-h-11 flex-1 cursor-pointer rounded-md px-4 text-sm font-medium whitespace-nowrap transition-colors ${tab === item.key ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`} onClick={() => setTab(item.key)}>{item.label}</button>)}</div>
+    {tab === 'images' && <ImageManager mode="manage" />}
+    {tab === 'build' && <ImageManager mode="build" />}
+    {tab === 'instances' && <Panel>
       <div className="flex flex-col gap-3 border-b border-slate-200 p-4 sm:flex-row sm:items-center">
         <label className="relative flex-1"><span className="sr-only">搜索实例</span><Search className="absolute top-3.5 left-3 size-4 text-slate-400" /><input className="field-input pl-9" placeholder="搜索实例名称" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
         <select className="field-input sm:w-44" aria-label="按状态筛选" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">全部状态</option><option value="running">运行中</option><option value="stopped">已停止</option><option value="error">异常</option></select>
@@ -55,7 +64,7 @@ export function Instances({ instances, gpuNames, realMode, onCreate, onAction, o
         </tr>})}
       </tbody></table></div>
       {filtered.length === 0 && <EmptyState title={instances.length === 0 ? '暂无 ComfyUI 实例' : '没有匹配的实例'} description={instances.length === 0 ? '点击右上角「新建实例」开始部署。' : '请调整搜索词或状态筛选。'} />}
-    </Panel>
+    </Panel>}
 
     <Dialog open={Boolean(detail)} onOpenChange={(open) => !open && setDetailId(null)}>
       <DialogContent className="sm:max-w-xl">{detail && <>

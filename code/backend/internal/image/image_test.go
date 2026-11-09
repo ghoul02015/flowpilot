@@ -3,6 +3,8 @@ package image
 import (
 	"context"
 	"errors"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,10 +12,12 @@ import (
 )
 
 type fakeImages struct {
-	exists   bool
-	pullErr  error
-	onPull   func()
-	pullWait chan struct{}
+	exists    bool
+	pullErr   error
+	buildErr  error
+	onPull    func()
+	pullWait  chan struct{}
+	buildWait chan struct{}
 }
 
 func (f *fakeImages) ImageExists(_ context.Context, _ string) (bool, error) {
@@ -31,6 +35,19 @@ func (f *fakeImages) PullImage(_ context.Context, _ string, onEvent func(docker.
 	return f.pullErr
 }
 
+func (f *fakeImages) BuildImage(_ context.Context, reader io.Reader, _ docker.BuildOptions, onEvent func(docker.BuildEvent)) error {
+	body, _ := io.ReadAll(reader)
+	if !strings.Contains(string(body), "Dockerfile") {
+		return errors.New("missing Dockerfile")
+	}
+	if f.buildWait != nil {
+		<-f.buildWait
+	}
+	onEvent(docker.BuildEvent{Stream: "Step 1/3 : FROM ubuntu\n"})
+	onEvent(docker.BuildEvent{Stream: "Successfully tagged flowpilot/comfyui:test\n"})
+	return f.buildErr
+}
+
 func waitForState(t *testing.T, puller *Puller, want string) Status {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -42,6 +59,19 @@ func waitForState(t *testing.T, puller *Puller, want string) Status {
 	}
 	t.Fatalf("状态未变为 %s，当前：%+v", want, puller.Status())
 	return Status{}
+}
+
+func waitForBuildState(t *testing.T, puller *Puller, want string) BuildStatus {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if status := puller.BuildStatus(); status.State == want {
+			return status
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("构建状态未变为 %s，当前：%+v", want, puller.BuildStatus())
+	return BuildStatus{}
 }
 
 func TestExistsValidatesImageName(t *testing.T) {
@@ -87,5 +117,37 @@ func TestPullFailureRecorded(t *testing.T) {
 	status := waitForState(t, puller, "error")
 	if status.Message != "manifest unknown" {
 		t.Fatalf("错误信息未记录：%s", status.Message)
+	}
+}
+
+func TestBuildLifecycleAndLogs(t *testing.T) {
+	release := make(chan struct{})
+	puller := NewPuller(&fakeImages{buildWait: release})
+	params := BuildParams{Variant: "nvidia-cu130", ImageName: "flowpilot/comfyui:test", ComfyUIRef: "master", PipIndexURL: "tsinghua", WithManager: "1"}
+	if err := puller.StartBuild(params); err != nil {
+		t.Fatal(err)
+	}
+	var conflict *ConflictError
+	if err := puller.StartBuild(params); !errors.As(err, &conflict) {
+		t.Fatalf("重复构建应返回 ConflictError：%v", err)
+	}
+	close(release)
+	status := waitForBuildState(t, puller, "done")
+	if status.Image != "flowpilot/comfyui:test" || status.Variant != "nvidia-cu130" {
+		t.Fatalf("构建状态元数据错误：%+v", status)
+	}
+	if len(status.Logs) < 2 || !strings.Contains(strings.Join(status.Logs, "\n"), "Successfully tagged") {
+		t.Fatalf("构建日志未记录：%+v", status.Logs)
+	}
+}
+
+func TestBuildFailureRecorded(t *testing.T) {
+	puller := NewPuller(&fakeImages{buildErr: errors.New("build failed")})
+	if err := puller.StartBuild(BuildParams{Variant: "cpu", ImageName: "flowpilot/comfyui:cpu-test"}); err != nil {
+		t.Fatal(err)
+	}
+	status := waitForBuildState(t, puller, "error")
+	if status.Message != "build failed" {
+		t.Fatalf("构建错误信息未记录：%s", status.Message)
 	}
 }

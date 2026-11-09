@@ -24,7 +24,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/model"
 )
 
-const Version = "0.0.7.1"
+const Version = "0.0.7.2"
 
 type Handler struct {
 	docker       *docker.Client
@@ -72,10 +72,16 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("GET /api/v1/models/online/files", handler.onlineFiles)
 	mux.HandleFunc("GET /api/v1/images/check", handler.checkImage)
 	mux.HandleFunc("GET /api/v1/images/local", handler.localImages)
+	mux.HandleFunc("DELETE /api/v1/images/local", handler.deleteLocalImage)
+	mux.HandleFunc("POST /api/v1/images/tag", handler.tagLocalImage)
+	mux.HandleFunc("GET /api/v1/images/export", handler.exportLocalImage)
+	mux.HandleFunc("POST /api/v1/images/import", handler.importLocalImage)
 	mux.HandleFunc("GET /api/v1/images/catalog", handler.imageCatalog)
 	mux.HandleFunc("GET /api/v1/images/install-script", handler.installScript)
 	mux.HandleFunc("GET /api/v1/images/pull", handler.pullStatus)
 	mux.HandleFunc("POST /api/v1/images/pull", handler.startPull)
+	mux.HandleFunc("GET /api/v1/images/build", handler.buildStatus)
+	mux.HandleFunc("POST /api/v1/images/build", handler.startBuild)
 	mux.HandleFunc("GET /api/v1/downloads", handler.listDownloads)
 	mux.HandleFunc("POST /api/v1/downloads", handler.createDownload)
 	mux.HandleFunc("POST /api/v1/imports", handler.createImport)
@@ -407,6 +413,99 @@ func (h *Handler) localImages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"images": images})
 }
 
+func (h *Handler) deleteLocalImage(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("image")
+	if _, err := h.images.Exists(r.Context(), name); err != nil {
+		var validationError *image.ValidationError
+		if errors.As(err, &validationError) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationError.Message})
+			return
+		}
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "检查镜像失败", "detail": err.Error()})
+		return
+	}
+	force := r.URL.Query().Get("force") == "1"
+	if err := h.docker.RemoveImage(r.Context(), name, force); err != nil {
+		slog.Warn("delete local image failed", "image", name, "error", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "删除镜像失败", "detail": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (h *Handler) tagLocalImage(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Source string `json:"source"`
+		Target string `json:"target"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&request); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误", "detail": err.Error()})
+		return
+	}
+	if exists, err := h.images.Exists(r.Context(), request.Source); err != nil {
+		var validationError *image.ValidationError
+		if errors.As(err, &validationError) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationError.Message})
+			return
+		}
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "检查源镜像失败", "detail": err.Error()})
+		return
+	} else if !exists {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "源镜像不存在"})
+		return
+	}
+	if _, err := h.images.Exists(r.Context(), request.Target); err != nil {
+		var validationError *image.ValidationError
+		if errors.As(err, &validationError) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationError.Message})
+			return
+		}
+	}
+	if err := h.docker.TagImage(r.Context(), request.Source, request.Target); err != nil {
+		slog.Warn("tag local image failed", "source", request.Source, "target", request.Target, "error", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "修改镜像标签失败", "detail": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "tagged"})
+}
+
+func (h *Handler) exportLocalImage(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("image")
+	if exists, err := h.images.Exists(r.Context(), name); err != nil {
+		var validationError *image.ValidationError
+		if errors.As(err, &validationError) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationError.Message})
+			return
+		}
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "检查镜像失败", "detail": err.Error()})
+		return
+	} else if !exists {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "镜像不存在"})
+		return
+	}
+	fileName := strings.NewReplacer("/", "_", ":", "_", "@", "_").Replace(name) + ".tar"
+	w.Header().Set("Content-Type", "application/x-tar")
+	w.Header().Set("Content-Disposition", "attachment; filename="+fileName)
+	if err := h.docker.SaveImage(r.Context(), name, w); err != nil {
+		slog.Warn("export local image failed", "image", name, "error", err)
+	}
+}
+
+func (h *Handler) importLocalImage(w http.ResponseWriter, r *http.Request) {
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请上传 Docker 镜像 tar 文件", "detail": err.Error()})
+		return
+	}
+	defer file.Close()
+	if err := h.docker.LoadImage(r.Context(), file); err != nil {
+		slog.Warn("import local image failed", "error", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "导入镜像失败", "detail": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "imported"})
+}
+
 // imageCatalog 返回预置镜像构建配方（按显卡类型区分）。
 func (h *Handler) imageCatalog(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"recipes": image.Recipes()})
@@ -471,6 +570,41 @@ func (h *Handler) startPull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, h.images.Status())
+}
+
+func (h *Handler) buildStatus(w http.ResponseWriter, _ *http.Request) {
+	if h.images == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "镜像管理未启用"})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.images.BuildStatus())
+}
+
+func (h *Handler) startBuild(w http.ResponseWriter, r *http.Request) {
+	if h.images == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "镜像管理未启用"})
+		return
+	}
+	var request image.BuildParams
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&request); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误", "detail": err.Error()})
+		return
+	}
+	if err := h.images.StartBuild(request); err != nil {
+		var validationError *image.ValidationError
+		var conflictError *image.ConflictError
+		switch {
+		case errors.As(err, &validationError):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationError.Message})
+		case errors.As(err, &conflictError):
+			writeJSON(w, http.StatusConflict, map[string]string{"error": conflictError.Error()})
+		default:
+			slog.Warn("start image build failed", "error", err)
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "启动镜像构建失败", "detail": err.Error()})
+		}
+		return
+	}
+	writeJSON(w, http.StatusAccepted, h.images.BuildStatus())
 }
 
 func (h *Handler) listDownloads(w http.ResponseWriter, _ *http.Request) {

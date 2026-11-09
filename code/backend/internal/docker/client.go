@@ -217,6 +217,146 @@ func splitImageTag(image string) (string, string) {
 	return image, "latest"
 }
 
+// RemoveImage 删除本机镜像或标签；force 为 true 时允许强制删除。
+func (c *Client) RemoveImage(ctx context.Context, image string, force bool) error {
+	path := "/images/" + image
+	if force {
+		path += "?force=1"
+	}
+	_, err := c.do(ctx, http.MethodDelete, path, nil)
+	return err
+}
+
+// TagImage 为已有镜像增加一个新标签。
+func (c *Client) TagImage(ctx context.Context, source, target string) error {
+	repo, tag := splitImageTag(target)
+	path := "/images/" + source + "/tag?repo=" + url.QueryEscape(repo) + "&tag=" + url.QueryEscape(tag)
+	_, err := c.do(ctx, http.MethodPost, path, nil)
+	return err
+}
+
+// SaveImage 将镜像导出为 tar 流。
+func (c *Client) SaveImage(ctx context.Context, image string, writer io.Writer) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/images/"+image+"/get", nil)
+	if err != nil {
+		return err
+	}
+	response, err := c.streamClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBody))
+		return &StatusError{StatusCode: response.StatusCode, Message: strings.TrimSpace(string(body))}
+	}
+	_, err = io.Copy(writer, response.Body)
+	return err
+}
+
+// LoadImage 从 tar 流导入镜像。
+func (c *Client) LoadImage(ctx context.Context, reader io.Reader) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/images/load?quiet=0", reader)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/x-tar")
+	response, err := c.streamClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBody))
+		return &StatusError{StatusCode: response.StatusCode, Message: strings.TrimSpace(string(body))}
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	return nil
+}
+
+// BuildOptions 是 Docker 镜像构建参数。
+type BuildOptions struct {
+	Tag         string
+	Dockerfile  string
+	NetworkMode string
+	BuildArgs   map[string]string
+}
+
+// BuildEvent 是 Docker 构建流中的一条日志事件。
+type BuildEvent struct {
+	Stream   string `json:"stream"`
+	Status   string `json:"status"`
+	Progress string `json:"progress"`
+	Error    string `json:"error"`
+}
+
+// Message 返回适合界面展示的构建日志文本。
+func (e BuildEvent) Message() string {
+	if e.Stream != "" {
+		return e.Stream
+	}
+	if e.Status != "" && e.Progress != "" {
+		return e.Status + " " + e.Progress
+	}
+	if e.Status != "" {
+		return e.Status
+	}
+	return e.Error
+}
+
+// BuildImage 使用 Docker API 构建镜像并逐条回调日志事件。
+func (c *Client) BuildImage(ctx context.Context, tarContext io.Reader, options BuildOptions, onEvent func(BuildEvent)) error {
+	query := url.Values{}
+	if options.Tag != "" {
+		query.Set("t", options.Tag)
+	}
+	if options.Dockerfile != "" {
+		query.Set("dockerfile", options.Dockerfile)
+	}
+	if options.NetworkMode != "" {
+		query.Set("networkmode", options.NetworkMode)
+	}
+	if len(options.BuildArgs) > 0 {
+		encoded, err := json.Marshal(options.BuildArgs)
+		if err != nil {
+			return err
+		}
+		query.Set("buildargs", string(encoded))
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/build?"+query.Encode(), tarContext)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/x-tar")
+	response, err := c.streamClient.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBody))
+		return &StatusError{StatusCode: response.StatusCode, Message: strings.TrimSpace(string(body))}
+	}
+	scanner := bufio.NewScanner(response.Body)
+	scanner.Buffer(make([]byte, 64<<10), 1<<20)
+	for scanner.Scan() {
+		var event BuildEvent
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			continue
+		}
+		if event.Error != "" {
+			return errors.New(event.Error)
+		}
+		if onEvent != nil {
+			onEvent(event)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("读取构建日志失败：%w", err)
+	}
+	return nil
+}
+
 // CreateContainer 创建容器并返回容器 ID。
 func (c *Client) CreateContainer(ctx context.Context, name string, config any) (string, error) {
 	body, err := c.do(ctx, http.MethodPost, "/containers/create?name="+url.QueryEscape(name), config)

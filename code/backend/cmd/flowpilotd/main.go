@@ -52,11 +52,10 @@ func main() {
 	catalogManager := catalog.NewManager(filepath.Join(dataDir, "catalog.json"))
 
 	httpServer := &http.Server{
-		Addr:              address,
-		Handler:           server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imagePuller, downloadManager, environment("FLOWPILOT_HOST_GATEWAY", "host.docker.internal"), catalogManager),
+		Addr:    address,
+		Handler: server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imagePuller, downloadManager, environment("FLOWPILOT_HOST_GATEWAY", "host.docker.internal"), catalogManager),
+		// 镜像导入/导出可能是 GB 级长连接；保留请求头超时，正文与响应不设置固定上限。
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 
