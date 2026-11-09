@@ -67,6 +67,14 @@ need_sudo() {
   if [ "$(id -u)" -ne 0 ]; then
     command -v sudo >/dev/null 2>&1 || die "需要 sudo 权限，请用普通用户 + sudo 运行"
     SUDO="sudo"
+    # 预检 sudo 凭据：交互模式先 sudo -v 缓存凭据，避免后续步骤在
+    # 下载/构建中途卡在密码提示；非交互模式要求免密 sudo 或先交互跑一次。
+    if ! sudo -n true 2>/dev/null; then
+      if [ "${NONINTERACTIVE:-0}" = "1" ]; then
+        die "当前用户 sudo 需要密码，NONINTERACTIVE 模式无法继续；请先交互执行一次本脚本（sudo 凭据会缓存），或配置 NOPASSWD 后重试"
+      fi
+      sudo -v || die "sudo 认证失败"
+    fi
   else
     SUDO=""
   fi

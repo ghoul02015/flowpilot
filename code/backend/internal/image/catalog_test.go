@@ -32,7 +32,7 @@ func TestInstallScriptDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("渲染失败：%v", err)
 	}
-	for _, fragment := range []string{"VARIANT:-auto", "master", "pypi.tuna.tsinghua.edu.cn", "flowpilot/comfyui:local", "nvidia-cu130", "amd-rocm", "MODEL", "#!/usr/bin/env bash"} {
+	for _, fragment := range []string{"VARIANT:-auto", "master", "pypi.tuna.tsinghua.edu.cn", "flowpilot/comfyui:local", "nvidia-cu130", "amd-rocm", "MODEL", "#!/usr/bin/env bash", "sudo -n true"} {
 		if !strings.Contains(script, fragment) && fragment != "MODEL" {
 			t.Fatalf("脚本缺少片段 %q", fragment)
 		}

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 ###############################################################################
 # FlowPilot ComfyUI 镜像一键安装脚本（多显卡自适应）
-# 由 FlowPilot 平台生成（2026-11-08 13:13），也可独立分发使用。
+# 由 FlowPilot 平台生成（2026-11-09 03:09），也可独立分发使用。
 #
 # 适用：纯净 Linux 主机（x86_64 / aarch64），自动检测显卡并选择对应构建配方：
 #   - NVIDIA Blackwell GB10（sm_121，如 DGX Spark）→ PyTorch cu130
@@ -67,6 +67,14 @@ need_sudo() {
   if [ "$(id -u)" -ne 0 ]; then
     command -v sudo >/dev/null 2>&1 || die "需要 sudo 权限，请用普通用户 + sudo 运行"
     SUDO="sudo"
+    # 预检 sudo 凭据：交互模式先 sudo -v 缓存凭据，避免后续步骤在
+    # 下载/构建中途卡在密码提示；非交互模式要求免密 sudo 或先交互跑一次。
+    if ! sudo -n true 2>/dev/null; then
+      if [ "${NONINTERACTIVE:-0}" = "1" ]; then
+        die "当前用户 sudo 需要密码，NONINTERACTIVE 模式无法继续；请先交互执行一次本脚本（sudo 凭据会缓存），或配置 NOPASSWD 后重试"
+      fi
+      sudo -v || die "sudo 认证失败"
+    fi
   else
     SUDO=""
   fi

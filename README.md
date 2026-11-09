@@ -2,8 +2,8 @@
 
 面向 GPU 服务器的轻量化 ComfyUI 一体化部署与管理平台。
 
-- 当前版本：`0.0.7.0`
-- 当前阶段：实例管理（真实 Docker 生命周期＋GPU 分配）、模型中心（真实仓库扫描／删除）、镜像预置（检查＋一键拉取＋默认镜像自动探测与挂载自适应）、下载引擎（URL 下载＋本地导入＋断点续传＋SHA256 校验）已落地，任务持久化（重启恢复＋续传）与 ComfyUI 制图状态代理（队列进度＋一键跳转真实应用）上线；界面无演示数据、完全由真实后端驱动；0.0.6.x 上线模型市场（19 条主流模型推荐目录＋ModelScope／HF 双源在线搜索，源站更新即所见，选中即下载）；DGX Spark 实测完成"安装→建实例→下模型→出图"全闭环，真实硬件采集、离线安装包与一键卸载可用；0.0.7.0 升级实例模块：新建实例可选本机镜像或预置构建配方（NVIDIA cu130/cu128/cu126/cu121、AMD ROCm、CPU 六套），一键安装脚本按向导参数（ComfyUI 版本／pip 源／Manager 开关）生成下载，纯净机器自动识别显卡完成 Docker 与镜像构建（不含模型下载，模型由模型中心负责），模型仓库／导出资产／工作流挂载路径全部向导化并随实例标签回显
+- 当前版本：`0.0.7.1`
+- 当前阶段：实例管理（真实 Docker 生命周期＋GPU 分配）、模型中心（真实仓库扫描／删除）、镜像预置（检查＋一键拉取＋默认镜像自动探测与挂载自适应）、下载引擎（URL 下载＋本地导入＋断点续传＋SHA256 校验）已落地，任务持久化（重启恢复＋续传）与 ComfyUI 制图状态代理（队列进度＋一键跳转真实应用）上线；界面无演示数据、完全由真实后端驱动；0.0.6.x 上线模型市场（19 条主流模型推荐目录＋ModelScope／HF 双源在线搜索，源站更新即所见，选中即下载）；DGX Spark 实测完成"安装→建实例→下模型→出图"全闭环，真实硬件采集、离线安装包与一键卸载可用；0.0.7.1 升级实例模块：新建实例可选本机镜像或预置构建配方（NVIDIA cu130/cu128/cu126/cu121、AMD ROCm、CPU 六套），一键安装脚本按向导参数（ComfyUI 版本／pip 源／Manager 开关）生成下载，纯净机器自动识别显卡完成 Docker 与镜像构建（不含模型下载，模型由模型中心负责），模型仓库／导出资产／工作流挂载路径全部向导化并随实例标签回显
 - 核心目标：一次安装、Web 管理、Docker 部署、模型共享、数据持久化。
 
 ## 运行本机 Demo
@@ -13,7 +13,7 @@ cd code
 ./scripts/demo-docker.sh up
 ```
 
-访问 `http://localhost:18080`。容器名为 `flowpilot-web-demo`，镜像为 `flowpilot-web:0.0.7.0`。
+访问 `http://localhost:18080`。容器名为 `flowpilot-web-demo`，镜像为 `flowpilot-web:0.0.7.1`。
 
 ## 离线安装与一键卸载（生产交付）
 
@@ -22,7 +22,7 @@ cd code
 code/scripts/package-release.sh
 
 # 目标服务器上安装（用户目录、无需 sudo、不修改系统包）
-tar -xzf flowpilot-0.0.7.0-arm64.tar.gz -C /tmp/flowpilot-install --strip-components=1
+tar -xzf flowpilot-0.0.7.1-arm64.tar.gz -C /tmp/flowpilot-install --strip-components=1
 /tmp/flowpilot-install/scripts/install.sh
 
 # 一键卸载（只删除 FlowPilot 容器、镜像和用户目录，不碰其他业务容器）

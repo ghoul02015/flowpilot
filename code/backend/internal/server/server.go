@@ -24,7 +24,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/model"
 )
 
-const Version = "0.0.7.0"
+const Version = "0.0.7.1"
 
 type Handler struct {
 	docker       *docker.Client
