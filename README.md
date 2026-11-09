@@ -2,8 +2,8 @@
 
 面向 GPU 服务器的轻量化 ComfyUI 一体化部署与管理平台。
 
-- 当前版本：`0.0.7.3`
-- 当前阶段：实例管理（真实 Docker 生命周期＋GPU 分配）、模型中心（真实仓库扫描／删除）、镜像预置（检查＋一键拉取＋默认镜像自动探测与挂载自适应）、下载引擎（URL 下载＋本地导入＋断点续传＋SHA256 校验）已落地，任务持久化与 ComfyUI 制图状态代理上线；界面无演示数据、完全由真实后端驱动；模型市场已支持 19 条主流推荐目录＋ModelScope／HF 双源在线搜索；DGX Spark 实测完成"安装→建实例→下模型→出图"全闭环；0.0.7.3 继续升级实例镜像模块：镜像清单按「ComfyUI 镜像／机器其他镜像」分类，新建实例只展示 ComfyUI 镜像；手动构建和在线拉取改为两个参数弹窗；构建参数细化到 CPU 架构、GPU/PyTorch 配方、在线 ComfyUI 版本、pip 源和 Manager 开关，可下载同参数一键构建脚本；ComfyUI 镜像清单展示构建进度百分比、日志入口和参数简述。
+- 当前版本：`0.0.7.4`
+- 当前阶段：实例管理（真实 Docker 生命周期＋GPU 分配）、模型中心（真实仓库扫描／删除）、镜像预置（检查＋一键拉取＋默认镜像自动探测与挂载自适应）、下载引擎（URL 下载＋本地导入＋断点续传＋SHA256 校验）已落地，任务持久化与 ComfyUI 制图状态代理上线；界面无演示数据、完全由真实后端驱动；模型市场已支持 19 条主流推荐目录＋ModelScope／HF 双源在线搜索；DGX Spark 实测完成"安装→建实例→下模型→出图"全闭环；实例镜像模块支持 ComfyUI/其他镜像分类、构建/拉取双弹窗、CPU 架构/GPU 配方/在线 ComfyUI 版本等构建参数、一键构建脚本、进度百分比、日志入口和参数简述；0.0.7.4 修复 cu128/linux-amd64 构建脚本 Dockerfile LABEL 语法问题。
 - 核心目标：一次安装、Web 管理、Docker 部署、模型共享、数据持久化。
 
 ## 运行本机 Demo
@@ -13,7 +13,7 @@ cd code
 ./scripts/demo-docker.sh up
 ```
 
-访问 `http://localhost:18080`。容器名为 `flowpilot-web-demo`，镜像为 `flowpilot-web:0.0.7.3`。
+访问 `http://localhost:18080`。容器名为 `flowpilot-web-demo`，镜像为 `flowpilot-web:0.0.7.4`。
 
 ## 离线安装与一键卸载（生产交付）
 
@@ -22,7 +22,7 @@ cd code
 code/scripts/package-release.sh
 
 # 目标服务器上安装（用户目录、无需 sudo、不修改系统包）
-tar -xzf flowpilot-0.0.7.3-arm64.tar.gz -C /tmp/flowpilot-install --strip-components=1
+tar -xzf flowpilot-0.0.7.4-arm64.tar.gz -C /tmp/flowpilot-install --strip-components=1
 /tmp/flowpilot-install/scripts/install.sh
 
 # 一键卸载（只删除 FlowPilot 容器、镜像和用户目录，不碰其他业务容器）
@@ -58,7 +58,7 @@ Go 服务统一提供前端页面和 `/api/v1/` 接口。系统管理页读取�
 - [MVP 产品需求文档](docs/mvp/FlowPilot_MVP_PRD.md)
 - [项目协作与版本管理规则](PROJECT_RULES.md)
 - [版本变更日志](CHANGELOG.md)
-- [最新对话上下文](context/conversations/2026-11-09-021-实例镜像分类与构建弹窗.md)
+- [最新对话上下文](context/conversations/2026-11-09-022-cu128-amd64构建脚本语法修复.md)
 
 ## 修改要求
 

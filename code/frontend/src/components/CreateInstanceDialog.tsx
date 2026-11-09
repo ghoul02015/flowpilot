@@ -27,7 +27,7 @@ interface Props {
 export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, instances, gpuNames, defaultImage, defaultContainerPort, dataDir, defaultModelsTarget, defaultOutputsTarget, defaultWorkflowsTarget }: Props) {
   const [step, setStep] = useState(1)
   const [name, setName] = useState(`comfy-${String(instances.length + 1).padStart(2, '0')}`)
-  // 0.0.7.3：新建实例只允许选择本机 ComfyUI 镜像；构建、拉取和导入移到实例页镜像子菜单。
+  // 0.0.7.4：新建实例只允许选择本机 ComfyUI 镜像；构建、拉取和导入移到实例页镜像子菜单。
   const [localTag, setLocalTag] = useState('')
   const [localImages, setLocalImages] = useState<LocalImage[] | null>(null)
   const [loadingImages, setLoadingImages] = useState(false)

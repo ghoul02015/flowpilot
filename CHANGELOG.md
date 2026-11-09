@@ -2,6 +2,19 @@
 
 所有重要变更均记录于此。详细内容见 `context/changes/`。
 
+## 0.0.7.4 — 2026-11-09（修复：cu128/amd64 构建脚本 Dockerfile LABEL 语法）
+
+### 修复
+
+- **一键构建脚本 Dockerfile LABEL 续行符错误**：修复 `flowpilot/comfyui:cu128`、`linux/amd64` 等手动构建脚本中 `LABEL` 多行续行符输出为双反斜杠的问题，避免 Docker 报错 `failed to parse Dockerfile: can't find = in "\\\\"`。
+- **后台构建同步修复**：平台内手动构建与下载的一键构建脚本共用同一 Dockerfile 模板，后台构建同样修复该语法问题。
+
+### 验证
+
+- 后端 Docker Go 环境 `gofmt + go test ./...` 通过，并新增 cu128/linux-amd64 Dockerfile 与构建脚本回归断言。
+
+详细记录：[0.0.7.4](context/changes/0.0.7.4.md)
+
 ## 0.0.7.3 — 2026-11-09（实例镜像分类＋构建/拉取弹窗＋构建参数脚本化）
 
 ### 新增

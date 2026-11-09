@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.7.3') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.7.4') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
@@ -109,7 +109,7 @@ try {
   if (realInstancesAvailable) {
     // 真实生命周期：创建 → 端口可达 → 停止 → 启动 → 删除，全程通过界面操作。
     const instanceName = 'regress-01'
-    // 0.0.7.3：镜像分类、构建弹窗、在线版本和构建脚本接口回归断言。
+    // 0.0.7.4：镜像分类、构建弹窗、在线版本和构建脚本接口回归断言。
     const localImagesResponse = await page.request.get(`${baseURL}/api/v1/images/local`)
     const localImagesBody = await localImagesResponse.json()
     if (!localImagesResponse.ok() || !Array.isArray(localImagesBody.images)) throw new Error(`本机镜像列表接口异常：HTTP ${localImagesResponse.status()}`)

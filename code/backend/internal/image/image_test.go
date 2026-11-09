@@ -151,3 +151,31 @@ func TestBuildFailureRecorded(t *testing.T) {
 		t.Fatalf("构建错误信息未记录：%s", status.Message)
 	}
 }
+
+func TestBuildDockerfileLabelContinuation(t *testing.T) {
+	params := BuildParams{Variant: "nvidia-cu128", ImageName: "flowpilot/comfyui:cu128", ComfyUIRef: "master", PipIndexURL: "tsinghua", WithManager: "1", Platform: "linux/amd64"}
+	recipe, err := params.validate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dockerfile := BuildDockerfile(params, recipe)
+	if strings.Contains(dockerfile, `\\`) {
+		t.Fatalf("Dockerfile LABEL 续行符不应输出双反斜杠：\n%s", dockerfile)
+	}
+	if !strings.Contains(dockerfile, `flowpilot.build.platform="linux/amd64"`) || !strings.Contains(dockerfile, `flowpilot.build.summary=`) {
+		t.Fatalf("Dockerfile 缺少构建参数标签：\n%s", dockerfile)
+	}
+}
+
+func TestBuildScriptIncludesParsableDockerfileLabel(t *testing.T) {
+	script, err := BuildScript(BuildParams{Variant: "nvidia-cu128", ImageName: "flowpilot/comfyui:cu128", ComfyUIRef: "master", PipIndexURL: "tsinghua", WithManager: "1", Platform: "linux/amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(script, `\\`) {
+		t.Fatalf("构建脚本内嵌 Dockerfile 不应包含双反斜杠续行：\n%s", script)
+	}
+	if !strings.Contains(script, `--platform 'linux/amd64'`) {
+		t.Fatalf("构建脚本缺少 linux/amd64 platform 参数：\n%s", script)
+	}
+}

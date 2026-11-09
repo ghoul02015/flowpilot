@@ -351,14 +351,14 @@ func buildLabels(params BuildParams, recipe Recipe) string {
 	if params.WithManager != "0" {
 		manager = "是"
 	}
-	return fmt.Sprintf(`LABEL org.opencontainers.image.title="ComfyUI" \\
-      flowpilot.kind="comfyui" \\
-      flowpilot.build.variant="%s" \\
-      flowpilot.build.gpu="%s" \\
-      flowpilot.build.cuda="%s" \\
-      flowpilot.build.platform="%s" \\
-      flowpilot.comfyui.ref="%s" \\
-      flowpilot.comfyui.manager="%s" \\
+	return fmt.Sprintf(`LABEL org.opencontainers.image.title="ComfyUI" \
+      flowpilot.kind="comfyui" \
+      flowpilot.build.variant="%s" \
+      flowpilot.build.gpu="%s" \
+      flowpilot.build.cuda="%s" \
+      flowpilot.build.platform="%s" \
+      flowpilot.comfyui.ref="%s" \
+      flowpilot.comfyui.manager="%s" \
       flowpilot.build.summary="%s"`,
 		dockerLabelValue(recipe.ID), dockerLabelValue(recipe.GPU), dockerLabelValue(recipe.CUDA), dockerLabelValue(params.Platform), dockerLabelValue(params.ComfyUIRef), dockerLabelValue(manager), dockerLabelValue(buildSummaryText(params, recipe)))
 }

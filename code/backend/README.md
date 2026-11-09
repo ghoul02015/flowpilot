@@ -1,6 +1,6 @@
 # FlowPilot 后端
 
-当前版本：`0.0.7.3`。
+当前版本：`0.0.7.4`。
 
 轻量 Go 服务同时提供前端静态页面和 Docker API。仅使用 Go 标准库，通过 `/var/run/docker.sock` 访问 Docker Engine，不引入第三方 Docker SDK。
 
@@ -61,7 +61,7 @@
 - `GET /api/v1/models/online/search?source=modelscope|hf&q=<关键词>`：归一化仓库结果 `{results[], attempts[]}`（repo／下载量／更新时间；attempts 记录实际尝试过的关键词，空结果自动退避重试 2 次并尝试模糊变体）。输入为 `org/name` 或源站链接时前端直达文件列表（`catalog.ParseRepoRef`）。
 - `GET /api/v1/models/online/files?source=...&repo=<org/name>`：权重文件列表 `{files[]}`（真实大小降序、推断类别、直链地址，上限 100 条）。
 
-### 容器镜像管理与构建（0.0.7.3）
+### 容器镜像管理与构建（0.0.7.4）
 
 - `GET /api/v1/images/check?image=<镜像>`：本地是否存在。
 - `GET /api/v1/images/local`：本机 Docker 镜像列表，返回 Docker 标签与 Labels；前端按 `flowpilot.kind=comfyui` 或标签名将其分为 ComfyUI 镜像和其他镜像。
