@@ -49,6 +49,9 @@ export function ImageManager() {
   const [buildOpen, setBuildOpen] = useState(false)
   const [pullOpen, setPullOpen] = useState(false)
   const [logsTaskId, setLogsTaskId] = useState<string | null>(null)
+  // 打开日志时的任务快照：成功任务入库后记录会被自动清理，
+  // 没有快照会让正在查看的日志弹窗突然关闭。
+  const [logsSnapshot, setLogsSnapshot] = useState<ImageTask | null>(null)
 
   const refreshTasks = useCallback(() => {
     getImageTasks().then(setTasks).catch(() => {})
@@ -103,7 +106,17 @@ export function ImageManager() {
   const comfyRowsWithVirtual = [...virtualRows, ...comfyRows]
   const selectedRecipe = recipes.find((item) => item.id === recipeId)
   const selectedPlatform = platformOptions.find((item) => item.value === platform) ?? platformOptions[0]
-  const logsTask = tasks.find((task) => task.id === logsTaskId)
+  const logsTask = tasks.find((task) => task.id === logsTaskId) ?? (logsSnapshot?.id === logsTaskId ? logsSnapshot : null)
+
+  function openLogs(task: ImageTask) {
+    setLogsSnapshot(task)
+    setLogsTaskId(task.id)
+  }
+
+  function closeLogs() {
+    setLogsTaskId(null)
+    setLogsSnapshot(null)
+  }
 
   const currentBuildSpec = useMemo<ImageBuildSpec>(() => ({ variant: recipeId, image: imageName.trim() || selectedRecipe?.image || 'flowpilot/comfyui:local', ref: ref.trim() || 'master', pip, manager: manager ? '1' : '0', platform }), [imageName, manager, pip, platform, recipeId, ref, selectedRecipe?.image])
 
@@ -180,7 +193,7 @@ export function ImageManager() {
     try {
       const task = await startImageBuild(currentBuildSpec)
       setBuildOpen(false)
-      setLogsTaskId(task.id)
+      openLogs(task)
       toast.success(task.state === 'queued' ? '构建任务已排队' : '已开始构建镜像', { description: task.image })
       refreshTasks()
     } catch (error) {
@@ -240,7 +253,7 @@ export function ImageManager() {
             <td>{row.image ? formatBytes(row.image.Size) : '—'}</td>
             <td>{row.image ? new Date(row.image.Created * 1000).toLocaleString('zh-CN', { hour12: false }) : '—'}</td>
             <td><div className="flex items-center gap-1">
-              {task && task.logs.length > 0 && <button type="button" className="icon-button" title="构建日志" onClick={() => setLogsTaskId(task.id)}><ScrollText className="size-4" /></button>}
+              {task && task.logs.length > 0 && <button type="button" className="icon-button" title="构建日志" onClick={() => openLogs(task)}><ScrollText className="size-4" /></button>}
               {task && active && <button type="button" className="icon-button text-rose-600 hover:bg-rose-50" title="停止构建" aria-label={`停止构建 ${row.tag}`} onClick={() => void stopTask(task)}><Ban className="size-4" /></button>}
               {row.image && <button type="button" className="icon-button" title="改标签" disabled={busy} onClick={() => void retag(row.tag)}><Tag className="size-4" /></button>}
               {row.image && <button type="button" className="icon-button" title="导出 tar" onClick={() => window.open(exportLocalImageURL(row.tag), '_blank', 'noopener')}><Download className="size-4" /></button>}
@@ -264,7 +277,7 @@ export function ImageManager() {
         {task.kind === 'build' && task.state === 'running' && <div className="mt-2 flex max-w-xs items-center gap-2"><div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100"><div className="h-full bg-teal-600" style={{ width: `${Math.max(1, Math.min(100, task.progress || 1))}%` }} /></div><span className="text-xs text-slate-500">{task.progress || 1}%</span></div>}
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        {task.logs.length > 0 && <button type="button" className="btn-quiet px-2 text-xs" onClick={() => setLogsTaskId(task.id)}><ScrollText className="size-3.5" />日志</button>}
+        {task.logs.length > 0 && <button type="button" className="btn-quiet px-2 text-xs" onClick={() => openLogs(task)}><ScrollText className="size-3.5" />日志</button>}
         {isActiveTask(task) && <button type="button" className="btn-quiet px-2 text-xs text-rose-600 hover:bg-rose-50" onClick={() => void stopTask(task)}><Ban className="size-3.5" />停止</button>}
         {!isActiveTask(task) && <button type="button" className="icon-button size-9 text-slate-400 hover:text-rose-600" title="删除任务记录" aria-label={`删除任务记录 ${task.image}`} onClick={() => void removeTask(task)}><XCircle className="size-4" /></button>}
       </div>
@@ -304,7 +317,7 @@ export function ImageManager() {
       </DialogContent>
     </Dialog>
 
-    <Dialog open={Boolean(logsTask)} onOpenChange={(open) => !open && setLogsTaskId(null)}>
+    <Dialog open={Boolean(logsTask)} onOpenChange={(open) => !open && closeLogs()}>
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader><DialogTitle className="flex items-center gap-2"><ScrollText className="size-5 text-teal-700" />{logsTask?.kind === 'pull' ? '拉取日志' : '构建日志'}</DialogTitle><DialogDescription>{logsTask ? `${logsTask.image} · ${taskStateText[logsTask.state] ?? logsTask.state}${logsTask.kind === 'build' ? ` · ${logsTask.progress || 0}%` : ''}` : '暂无任务'}</DialogDescription></DialogHeader>
         <pre className="max-h-[65dvh] overflow-auto rounded-lg bg-slate-950 p-4 font-mono text-xs leading-5 whitespace-pre-wrap text-slate-100">{logsTask?.logs?.length ? logsTask.logs.join('\n') : '等待任务开始。'}</pre>

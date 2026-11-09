@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Activity, Box, ChevronRight, Database, LayoutDashboard, Menu, Server, Settings, Waves, X } from 'lucide-react'
 import { Toaster, toast } from 'sonner'
 import { createDownloadApi, createImportApi, createInstanceApi, deleteDownloadApi, deleteInstanceApi, deleteModelApi, downloadActionApi, formatBytes, getComfyStatus, getDownloads, getHardware, getHealth, getInstances, getModels, modelTypeToCategory, postInstanceAction, type CatalogEntry, type ComfyStatus, type DownloadTask, type InstanceDefaults, type ModelReport, type OnlineFile, type RealInstance } from '@/api'
@@ -38,8 +38,10 @@ export default function App() {
   const [comfyStatuses, setComfyStatuses] = useState<Record<string, ComfyStatus>>({})
   // 实例操作进行中集合：请求发出到下一次列表刷新期间禁用该实例的操作按钮。
   const [busyIds, setBusyIds] = useState<string[]>([])
+  // 同步镜像 busyIds，避免同一帧内双击穿透渲染快照的 includes 检查。
+  const busyRef = useRef<Set<string>>(new Set())
   // 界面版本号跟随后端 /health，避免硬编码漂移；离线时回退常量。
-  const [backendVersion, setBackendVersion] = useState('0.0.9.0')
+  const [backendVersion, setBackendVersion] = useState('0.0.9.1')
 
   const realMode = realInstances !== null
   const realModelMode = realModels !== null
@@ -245,7 +247,8 @@ export default function App() {
   function instanceAction(id: string, action: 'start' | 'stop' | 'restart') {
     const target = displayInstances.find((item) => item.id === id)
     if (!target || !requireBackend('实例操作')) return
-    if (busyIds.includes(id)) return
+    if (busyRef.current.has(id)) return
+    busyRef.current.add(id)
     const actionName = action === 'stop' ? '停止' : action === 'start' ? '启动' : '重启'
     setBusyIds((previous) => [...previous, id])
     postInstanceAction(target.name, action)
@@ -257,6 +260,7 @@ export default function App() {
       })
       .finally(() => {
         void refreshInstances()
+        busyRef.current.delete(id)
         setBusyIds((previous) => previous.filter((item) => item !== id))
       })
   }

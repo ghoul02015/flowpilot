@@ -22,10 +22,10 @@ function suggestName(instances: Instance[]): string {
 // 扫描第一个空闲的访问端口（8188 起，避开现有实例）。
 function suggestPort(instances: Instance[]): number {
   const taken = new Set(instances.map((item) => item.port))
-  for (let port = 8188; port < 8288; port++) {
+  for (let port = 8188; port <= 65535; port++) {
     if (!taken.has(port)) return port
   }
-  return 8188 + instances.length
+  return 8188
 }
 
 interface Props {

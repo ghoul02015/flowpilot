@@ -332,9 +332,12 @@ func (m *Manager) checkDiskSpace() error {
 }
 
 func (m *Manager) runBuild(task *Task, contextBytes []byte) {
-	// 记录被覆盖的旧镜像 ID，成功后用于清理悬挂镜像。
+	// 记录被覆盖的旧镜像 ID，成功后用于清理悬挂镜像；写入需持锁，
+	// 避免与 List/Get/saveLocked 的锁内读取产生数据竞争。
 	if oldID, err := m.docker.ImageID(context.Background(), task.Image); err == nil {
+		m.mu.Lock()
 		task.oldID = oldID
+		m.mu.Unlock()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.mu.Lock()
