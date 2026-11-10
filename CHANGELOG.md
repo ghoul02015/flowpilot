@@ -20,7 +20,7 @@
 
 - 后端 `gofmt + go vet + go test ./...` 全部通过（新增日志解复用、符号链接、硬件版本解析、SSE 端点等 10+ 用例）。
 - 前端 `npm run lint && npm run build` 通过（React Compiler 规则 `set-state-in-effect`／`set-state-in-render` 全绿）。
-- 本机演示环境端到端回归 61 项全部通过（零控制台错误、零 4xx/5xx）；模型关联符号链接经 `docker exec` 实证增删即时生效、免重启；Spark 实机多卡回归待执行。
+- 本机演示环境端到端回归 61 项全部通过（零控制台错误、零 4xx/5xx）；模型关联符号链接经 `docker exec` 实证增删即时生效、免重启；Spark 实机回归通过：DGX Spark 升级至 0.0.9.4（保留既有实例与数据），硬件管理页 GB10 逐卡表格、日志 SSE 实时流、模型关联符号链接免重启生效均实测确认。
 - 端到端回归脚本新增 0.0.9.4 断言（硬件管理页与 GPU 逐卡表格、日志 SSE meta 帧、日志弹窗、模型关联弹窗、首页两处跳转）。
 
 详细记录：[0.0.9.4](context/changes/0.0.9.4.md)
