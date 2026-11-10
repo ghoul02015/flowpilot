@@ -129,6 +129,11 @@ try {
     const diskUsageResponse = await page.request.get(`${baseURL}/api/v1/images/disk-usage`)
     if (!diskUsageResponse.ok()) throw new Error(`镜像磁盘占用接口异常：HTTP ${diskUsageResponse.status()}`)
     check('镜像磁盘占用接口')
+    // 0.0.9.2：网络存储配置接口（未配置时应返回 enabled=false 且不报错）。
+    const storageResponse = await page.request.get(`${baseURL}/api/v1/storage/network`)
+    const storageBody = storageResponse.ok() ? await storageResponse.json() : null
+    if (!storageResponse.ok() || typeof storageBody.enabled !== 'boolean' || typeof storageBody.detected !== 'boolean' || !storageBody.mountPoint) throw new Error(`网络存储接口异常：${JSON.stringify(storageBody)}`)
+    check('网络存储配置接口（未启用默认态）')
     // 0.0.9.0：创建实例前探测宿主机端口真实占用，18080 管理端口必须被拦截。
     const occupiedPortResponse = await page.request.post(`${baseURL}/api/v1/instances`, { data: { name: 'regress-port-probe', image: `flowpilot/comfyui-regress:${health.version}`, gpu: -1, port: 18080 } })
     if (occupiedPortResponse.ok()) throw new Error('宿主机已占用端口（18080）创建实例未被拦截')
@@ -336,12 +341,15 @@ try {
 
   if (realModelsAvailable) {
     check('真实模型仓库扫描接口')
-    await page.getByText('共享仓库实时扫描', { exact: true }).waitFor()
+    await page.getByText('本地仓库', { exact: true }).first().waitFor()
+    await page.getByText('每 3 秒自动刷新', { exact: true }).waitFor()
+    check('模型中心分组统计条')
     if (seedFile) {
       // 预置的回归文件（部署时在目标机 seed）：checkpoints/regress-test.safetensors
+      // 0.0.9.2 起按类别分组：类别在组头，行内不再重复展示。
+      await page.getByRole('button', { name: /Checkpoints/ }).first().waitFor()
       const seedRow = page.getByRole('row').filter({ hasText: 'regress-test.safetensors' })
       await seedRow.waitFor()
-      await seedRow.getByText('Checkpoints', { exact: true }).waitFor()
       check('真实模型文件在界面展示')
       await screenshot('03-models-real')
 
