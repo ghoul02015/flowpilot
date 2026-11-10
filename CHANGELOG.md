@@ -2,6 +2,22 @@
 
 所有重要变更均记录于此。详细内容见 `context/changes/`。
 
+## 0.0.9.5 — 2026-11-10（阶段 1 开篇：数据底座与现状基线）
+
+### 新增
+
+- **嵌入式 SQLite 数据底座**：引入 `modernc.org/sqlite`（纯 Go、免 CGO、amd64/arm64），项目首个外部依赖；WAL＋busy_timeout＋外键＋单写连接。
+- **迁移框架**：`schema_migrations` 表记录版本／名称／checksum／时间／结果；已应用迁移 checksum 校验，篡改即拒绝；重复执行幂等。迁移 001 建 `instances`（UUID 主键＋name 唯一＋container_id 映射＋orphan 标记）、`instance_configs`（期望配置快照，级联删除）、`settings`（KV）。
+- **实例映射同步**：启动时与手动触发「导入→比对→报告」——新容器入库生成 UUID、字段变化更新、同名新容器视为重建沿用 UUID、容器消失标记孤儿（不删记录）、同名冲突显式报告；不随 2 秒硬件轮询写库。实例创建／删除经钩子即时写库。
+- **新 API**：`GET /api/v1/database`（schema 版本／映射统计／最近同步／integrity）、`POST /api/v1/database/check`（全量对账报告含逐字段差异：数据库值→Docker 值→采用值＋原因）、`POST /api/v1/database/backup`（VACUUM INTO 一致性备份到数据目录 backups/）。
+- **UI**：系统管理新增「数据底座」子页（DatabasePanel）：引擎与 schema 状态卡、异常映射统计、最近同步摘要、立即检查、备份数据库。
+
+### 验证
+
+- 后端 10 包 `gofmt + go vet + go test` 全绿（database 包 7 用例：迁移幂等／checksum 防篡改／导入-更新-重建-孤儿-冲突全场景／级联删除／备份可打开／integrity；server 新增 2 用例：未启用 503 分支、真实 store 三端点）。
+- 前端 `npm run lint && npm run build` 通过。
+- 本机 E2E 与 Spark 实机回归见 `context/changes/0.0.9.5.md`。
+
 ## 0.0.9.4 — 2026-11-10（实例日志实时流＋模型在线关联＋硬件管理页＋首页跳转）
 
 ### 新增

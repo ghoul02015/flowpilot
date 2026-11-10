@@ -127,6 +127,11 @@ type Manager struct {
 	// modelRoot 是平台容器内的本地模型仓库根目录，用于关联时的存在性校验。
 	modelRoot string
 	linksMu   sync.Mutex
+
+	// 数据底座钩子（0.0.9.5）：创建／删除后尽力即时写库，
+	// 遗漏由数据底座的下次同步修复；为空时无副作用（测试与旧装配兼容）。
+	onCreate func(spec Spec, created Instance)
+	onDelete func(name string)
 }
 
 // NewManager 创建实例管理器；hostDataDir 是宿主机共享数据目录（绑定挂载用宿主机路径），
@@ -173,6 +178,13 @@ func (m *Manager) SetModelLinks(hostDir, containerDir, modelRoot string) {
 	m.linksHostDir = hostDir
 	m.linksContainerDir = containerDir
 	m.modelRoot = modelRoot
+}
+
+// SetRecorder 注册数据底座钩子：实例创建成功后回调 onCreate（含完整 Spec），
+// 删除成功后回调 onDelete。回调错误由数据层自行记录，不影响实例操作。
+func (m *Manager) SetRecorder(onCreate func(spec Spec, created Instance), onDelete func(name string)) {
+	m.onCreate = onCreate
+	m.onDelete = onDelete
 }
 
 // Defaults 返回创建表单的推荐默认值。
@@ -321,7 +333,14 @@ func (m *Manager) Create(ctx context.Context, spec Spec) (Instance, error) {
 		_ = m.docker.RemoveContainer(ctx, id, true)
 		return Instance{}, fmt.Errorf("启动容器失败：%w", err)
 	}
-	return m.Get(ctx, spec.Name)
+	created, err := m.Get(ctx, spec.Name)
+	if err != nil {
+		return Instance{}, err
+	}
+	if m.onCreate != nil {
+		m.onCreate(spec, created)
+	}
+	return created, nil
 }
 
 // validate 校验创建参数。
@@ -442,7 +461,13 @@ func (m *Manager) Delete(ctx context.Context, name string, force bool) error {
 		// 关联目录仅含平台创建的符号链接，随实例一并清理。
 		_ = os.RemoveAll(filepath.Join(m.linksContainerDir, name))
 	}
-	return m.docker.RemoveContainer(ctx, target.ContainerID, force)
+	if err := m.docker.RemoveContainer(ctx, target.ContainerID, force); err != nil {
+		return err
+	}
+	if m.onDelete != nil {
+		m.onDelete(name)
+	}
+	return nil
 }
 
 func fromContainer(container docker.Container) Instance {

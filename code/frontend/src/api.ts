@@ -640,3 +640,88 @@ export async function getModelLinks(name: string): Promise<ModelLinksView> {
 export async function putModelLinks(name: string, links: ModelLink[]): Promise<ModelLinksUpdateResult> {
   return sendJSON<ModelLinksUpdateResult>('PUT', `/api/v1/instances/${encodeURIComponent(name)}/model-links`, { links })
 }
+
+// 数据底座（0.0.9.5）：SQLite 状态、一致性检查与备份。
+
+export interface DatabaseMigration {
+  version: number
+  name: string
+  appliedAt: string
+  result: string
+}
+
+export interface DatabaseSyncSummary {
+  checkedAt: string
+  instances: number
+  orphans: number
+  conflicts: number
+  imported: number
+  updated: number
+  rebuilt: number
+  unchanged: number
+  ok: boolean
+}
+
+export interface DatabaseStatus {
+  schemaVersion: number
+  migrations: DatabaseMigration[]
+  instanceMappings: number
+  orphanMappings: number
+  lastSync?: DatabaseSyncSummary
+  integrity: { ok: boolean; message: string }
+  driver: string
+  journalMode: string
+}
+
+export interface DatabaseFieldDiff {
+  field: string
+  database: string
+  docker: string
+  adopted: string
+  reason: string
+}
+
+export interface DatabaseInstanceDiff {
+  name: string
+  uuid: string
+  kind: 'imported' | 'updated' | 'rebuilt' | 'unchanged' | 'orphan'
+  orphan: boolean
+  diffs?: DatabaseFieldDiff[]
+  adoptedTo?: string
+}
+
+export interface DatabaseSyncConflict {
+  name: string
+  reason: string
+  details?: string
+}
+
+export interface DatabaseSyncReport {
+  checkedAt: string
+  imported: string[]
+  updated: string[]
+  rebuilt: string[]
+  orphans: string[]
+  conflicts: DatabaseSyncConflict[]
+  diffs: DatabaseInstanceDiff[]
+  unchanged: number
+  duration: string
+}
+
+export interface DatabaseBackupResult {
+  path: string
+  name: string
+  size: number
+}
+
+export async function getDatabaseStatus(signal?: AbortSignal): Promise<DatabaseStatus> {
+  return getJSON<DatabaseStatus>('/api/v1/database', signal ?? AbortSignal.timeout(6000))
+}
+
+export async function runDatabaseCheck(): Promise<DatabaseSyncReport> {
+  return sendJSON<DatabaseSyncReport>('POST', '/api/v1/database/check', undefined)
+}
+
+export async function backupDatabase(): Promise<DatabaseBackupResult> {
+  return sendJSON<DatabaseBackupResult>('POST', '/api/v1/database/backup', undefined)
+}

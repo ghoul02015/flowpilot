@@ -1,14 +1,20 @@
 FROM node:24-alpine AS frontend-build
 WORKDIR /app
 
+# GOPROXY/NPM 可经 build-arg 覆盖，受限网络环境（如国内）可传镜像源。
+ARG GOPROXY=https://proxy.golang.org,direct
+ARG NPM_REGISTRY=https://registry.npmjs.org
+
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+RUN npm ci --registry=$NPM_REGISTRY
 
 COPY frontend/ ./
 RUN npm run build
 
 FROM golang:1.25-alpine AS backend-build
 WORKDIR /src
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
 COPY backend/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/flowpilotd ./cmd/flowpilotd
 

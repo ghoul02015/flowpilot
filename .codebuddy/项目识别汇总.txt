@@ -1,0 +1,114 @@
+慧浪智算 ComfyUI 管理平台识别汇总
+
+1. 项目识别结论
+
+- 项目名称：慧浪智算·FlowPilot
+- 项目定位：面向 GPU 服务器的轻量化 ComfyUI 一体化部署与管理平台。
+- 当前版本：0.0.7.1
+- 当前阶段：真实 Docker 生命周期管理、GPU 分配、模型中心、模型市场、下载/导入任务、一键镜像安装脚本、DGX Spark 实机验证均已形成闭环。
+- 核心目标：一次安装、Web 管理、Docker 部署、模型共享、数据持久化。
+
+2. 顶层文件与目录
+
+- README.md：项目总说明、当前版本、部署方式、目录说明。
+- CHANGELOG.md：版本变更索引，当前最新为 0.0.7.1。
+- VERSION：当前唯一版本号，内容为 0.0.7.1。
+- PROJECT_RULES.md：项目协作与版本管理规则。
+- docs/mvp/FlowPilot_MVP_PRD.md：MVP 产品需求文档。
+- context/conversations/：历史对话摘要、需求决策和上下文。
+- context/changes/：分版本详细变更记录。
+- code/backend/：Go 后端服务与 Docker API 封装。
+- code/frontend/：React/Vite 前端管理台。
+- code/deploy/：一体化 Dockerfile 与部署配置。
+- code/scripts/：Demo、打包、安装、卸载、远程部署脚本。
+
+3. 技术栈识别
+
+前端：
+- 位置：code/frontend/
+- 技术栈：React 19、TypeScript 5.9、Vite 7、TailwindCSS、Radix UI、lucide-react、recharts、sonner、zod、react-hook-form。
+- 入口文件：code/frontend/src/main.tsx、code/frontend/src/App.tsx。
+- 主要页面：Dashboard、Instances、Models、Tasks、System。
+- 数据模式：前端已移除演示数据，业务数据全部来自真实后端接口；后端不可用时显示空态和离线提示。
+
+后端：
+- 位置：code/backend/
+- 技术栈：Go 1.25，主要使用标准库 HTTP 服务。
+- 模块名：github.com/ghoul02015/flowpilot。
+- 启动入口：code/backend/cmd/flowpilotd/main.go。
+- 路由集中：code/backend/internal/server/server.go。
+- 后端特点：同时提供前端静态页面和 /api/v1/ API，通过 /var/run/docker.sock 访问 Docker Engine，不引入第三方 Docker SDK。
+
+部署交付：
+- Web Demo：code/scripts/demo-docker.sh up。
+- 默认访问：http://localhost:18080。
+- 一体化镜像：flowpilot-web:0.0.7.1。
+- 离线包脚本：code/scripts/package-release.sh。
+- 远程部署脚本：code/scripts/deploy-remote.sh。
+- 已在 DGX Spark（Ubuntu 24.04 arm64、NVIDIA GB10、Docker 29.2.1）实测。
+
+4. 后端核心能力
+
+- 健康与系统：/health、/system/info。
+- 硬件采集：/hardware。
+- Docker 信息：/docker/info、/docker/containers。
+- 实例管理：/instances、启动/停止/重启/删除、/instances/{name}/comfy/status。
+- 模型仓库：/models。
+- 模型市场：/models/catalog、/models/online/search、/models/online/files。
+- 在线源状态：/sources/status。
+- 镜像能力：/images/check、/images/local、/images/catalog、/images/install-script、/images/pull。
+- 下载/导入任务：/downloads、/imports。
+
+5. 业务上下文梳理
+
+项目演进主线：Web Demo 与 Docker 交付 → 真实 Docker 生命周期 → 真实硬件采集 → 模型中心 → 下载/导入任务 → 去演示数据 → 任务持久化与 ComfyUI 状态代理 → 模型市场在线源 → 搜索体验优化 → 实例镜像可选与一键安装 → DGX Spark 实机验证。
+
+6. 最近更新记录
+
+0.0.7.1 — 2026-11-09
+主题：一键安装脚本 sudo 凭据预检 + DGX 实机验证。
+- 0.0.7.0 部署到 DGX Spark 后完成 52 项远程端到端回归，全部通过。
+- 验证本机镜像列表、六套镜像构建配方、安装脚本生成、真实 ComfyUI 实例链路、模型市场真实下载、URL 下载、本地导入和真实 GPU 采集。
+- 修复一键安装脚本在 NONINTERACTIVE=1 nohup 后台执行时卡在 sudo 密码提示的问题。
+- 新增 sudo -n true 预检；交互模式先 sudo -v 缓存凭据；非交互模式明确报错并给出指引。
+- 0.0.7.1 修复版脚本在 DGX Spark 全流程实测通过，成功构建 flowpilot/comfyui:cu130 镜像并创建实例验证。
+- 已知风险：非交互无人值守仍需要 NOPASSWD、root 或 tmux/screen；安装脚本步骤 2 会无条件 systemctl restart docker，可能短暂影响同机其他容器。
+
+0.0.7.0 — 2026-11-08
+主题：实例镜像可选 + 多显卡一键安装脚本 + 挂载路径向导化。
+- 新建实例支持本机已有镜像、预置构建配方、手动输入三种来源。
+- 新增 NVIDIA cu130/cu128/cu126/cu121、AMD ROCm、CPU 六套构建配方。
+- 新增一键安装脚本生成接口。
+- 安装脚本自动检测显卡与架构、安装 Docker/NVIDIA Container Toolkit、配置镜像加速、克隆 ComfyUI、构建镜像。
+- 模型下载不进入安装脚本，由模型中心统一负责。
+- 模型仓库、输出目录、工作流目录挂载路径全部向导化。
+
+0.0.6.x
+主题：模型市场、在线源和搜索体验优化。
+- 0.0.6.0：上线模型市场，内置主流模型目录，支持一键下载。
+- 0.0.6.1：接入 ModelScope/HF 双在线源，支持实时搜索和文件列表。
+- 0.0.6.2：修复全词搜索空结果和弹窗横向溢出。
+- 0.0.6.3：新增空结果退避重试、模糊变体、org/name 或源站 URL 直达。
+
+0.0.5.x
+主题：真实生产显示与任务持久化。
+- 0.0.5.1：移除全部虚拟演示数据，页面完全由真实后端接口驱动。
+- 0.0.5.0：下载/导入任务持久化，平台重启后任务列表不丢；新增 ComfyUI 制图状态代理和一键跳转真实应用。
+
+7. 当前 Git 状态
+
+- 当前分支：main。
+- 最近提交：f432e15 docs: 0.0.7.1 补充 DGX 一键脚本全流程实测结果。
+- 检查时 git status --short 输出为空，说明原工作区没有未提交改动。
+
+8. 主要风险与注意事项
+
+1. 当前版本没有认证、用户权限和数据库。
+2. 服务会挂载 /var/run/docker.sock，管理端权限较高，不应直接暴露公网。
+3. 一键安装脚本会在部分步骤重启 Docker，可能短暂影响同机其他容器。
+4. 非交互安装依赖 sudo 条件，生产无人值守建议使用 root、NOPASSWD 或 tmux/screen。
+5. 现有安全头较基础，后续生产化建议补充认证、权限、审计和 CSP。
+
+9. 总体判断
+
+该仓库不是简单 Demo，而是已经具备生产交付雏形的 ComfyUI 管理平台。当前功能重点围绕 GPU 服务器上的 ComfyUI 环境管理、实例生命周期、模型仓库、模型市场、下载导入任务、Docker 镜像准备和离线部署。最近版本已经在 DGX Spark 实机完成较完整闭环验证，当前最需要关注的是认证权限、Docker Socket 暴露风险、安装脚本对 Docker 的重启影响，以及无人值守 sudo 条件。

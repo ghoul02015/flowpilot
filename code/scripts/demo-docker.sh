@@ -3,8 +3,8 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-IMAGE="flowpilot-web:0.0.9.4"
-REGRESSION_IMAGE="flowpilot/comfyui-regress:0.0.9.4"
+IMAGE="flowpilot-web:0.0.9.5"
+REGRESSION_IMAGE="flowpilot/comfyui-regress:0.0.9.5"
 CONTAINER="flowpilot-web-demo"
 PORT="${FLOWPILOT_DEMO_PORT:-18080}"
 DOCKER_SOCKET="${FLOWPILOT_DOCKER_SOCKET:-/var/run/docker.sock}"
@@ -15,7 +15,11 @@ usage() {
 }
 
 build_image() {
-  docker build -f "${CODE_DIR}/deploy/web.Dockerfile" -t "${IMAGE}" "${CODE_DIR}"
+  # 受限网络可通过 GOPROXY/NPM_REGISTRY 环境变量覆盖默认源（自动透传为 build-arg）。
+  docker build -f "${CODE_DIR}/deploy/web.Dockerfile" \
+    --build-arg GOPROXY="${GOPROXY:-https://proxy.golang.org,direct}" \
+    --build-arg NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmjs.org}" \
+    -t "${IMAGE}" "${CODE_DIR}"
   # 仅用于本机端到端回归：让新建实例在“只展示 ComfyUI 镜像”规则下仍可用轻量健康镜像快速验证生命周期。
   docker tag "${IMAGE}" "${REGRESSION_IMAGE}"
 }

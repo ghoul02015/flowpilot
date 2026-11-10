@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ghoul02015/flowpilot/internal/catalog"
+	"github.com/ghoul02015/flowpilot/internal/database"
 	"github.com/ghoul02015/flowpilot/internal/docker"
 	"github.com/ghoul02015/flowpilot/internal/download"
 	"github.com/ghoul02015/flowpilot/internal/hardware"
@@ -25,7 +26,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/storage"
 )
 
-const Version = "0.0.9.4"
+const Version = "0.0.9.5"
 
 type Handler struct {
 	docker       *docker.Client
@@ -37,11 +38,13 @@ type Handler struct {
 	downloads    *download.Manager
 	catalog      *catalog.Manager
 	storage      *storage.Manager
+	database     *database.Store
+	backupDir    string
 	comfyGateway string
 	comfyClient  *http.Client
 }
 
-func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imageManager *image.Manager, downloadManager *download.Manager, comfyGateway string, catalogManager *catalog.Manager, storageManager *storage.Manager) http.Handler {
+func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imageManager *image.Manager, downloadManager *download.Manager, comfyGateway string, catalogManager *catalog.Manager, storageManager *storage.Manager, dataStore *database.Store, backupDir string) http.Handler {
 	if comfyGateway == "" {
 		comfyGateway = "host.docker.internal"
 	}
@@ -49,9 +52,18 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 		docker: dockerClient, staticDir: staticDir, hardware: hardwareCollector, instances: instanceManager,
 		models: modelManager, images: imageManager, downloads: downloadManager, catalog: catalogManager,
 		storage:      storageManager,
+		database:     dataStore,
+		backupDir:    backupDir,
 		comfyGateway: comfyGateway,
 		// ComfyUI 状态探测是秒级接口，必须有整体超时，避免拖住轮询。
 		comfyClient: &http.Client{Timeout: 4 * time.Second},
+	}
+	if dataStore != nil {
+		// 实例创建／删除即时写库；启动同步见 syncAtStartup。
+		if instanceManager != nil {
+			instanceManager.SetRecorder(handler.recordCreate, handler.recordDelete)
+		}
+		go handler.syncAtStartup(context.Background())
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", handler.health)
@@ -103,6 +115,10 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("POST /api/v1/imports", handler.createImport)
 	mux.HandleFunc("POST /api/v1/downloads/{id}/{action}", handler.downloadAction)
 	mux.HandleFunc("DELETE /api/v1/downloads/{id}", handler.deleteDownload)
+	// 数据底座（0.0.9.5）：状态、一致性检查与备份。
+	mux.HandleFunc("GET /api/v1/database", handler.databaseStatus)
+	mux.HandleFunc("POST /api/v1/database/check", handler.databaseCheck)
+	mux.HandleFunc("POST /api/v1/database/backup", handler.databaseBackup)
 	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "API endpoint not found"})
 	})

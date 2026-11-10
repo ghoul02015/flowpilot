@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.9.4') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.9.5') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
@@ -761,6 +761,26 @@ try {
   const download = await downloadPromise
   await download.saveAs(`${outputDir}diagnostics.json`)
   check('诊断导出')
+
+  // 数据底座（0.0.9.5）：状态卡 + 一致性检查 + 备份。
+  const databaseResponse = await page.request.get(`${baseURL}/api/v1/database`)
+  const databaseStatus = await databaseResponse.json()
+  if (!databaseResponse.ok() || databaseStatus.schemaVersion !== 1 || !databaseStatus.integrity.ok) throw new Error(`数据底座状态异常：${JSON.stringify(databaseStatus)}`)
+  check('数据底座状态接口（schema v1 · integrity ok）')
+  await page.getByRole('tab', { name: '数据底座' }).click()
+  await page.getByTestId('database-panel').waitFor()
+  await page.getByText('integrity_check 通过', { exact: true }).waitFor()
+  check('数据底座状态卡渲染')
+  await page.getByRole('button', { name: '立即检查' }).click()
+  await page.getByText(/检查报告 ·/, { exact: false }).waitFor()
+  const checkReport = await page.request.post(`${baseURL}/api/v1/database/check`).then((response) => response.json())
+  if (typeof checkReport.unchanged !== 'number' || !Array.isArray(checkReport.diffs)) throw new Error(`一致性检查报告异常：${JSON.stringify(checkReport)}`)
+  check('数据底座一致性检查')
+  const backupResponse = await page.request.post(`${baseURL}/api/v1/database/backup`)
+  const backupResult = await backupResponse.json()
+  if (!backupResponse.ok() || backupResult.size <= 0) throw new Error(`数据库备份异常：${JSON.stringify(backupResult)}`)
+  check(`数据库备份（${backupResult.name}）`)
+  await screenshot('05-system-database')
 
   await page.setViewportSize({ width: 375, height: 812 })
   await page.getByRole('button', { name: '打开菜单' }).click()

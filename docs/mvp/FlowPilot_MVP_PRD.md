@@ -1,7 +1,7 @@
 # 慧浪智算·FlowPilot MVP 产品需求文档
 
 > 文档性质：立项评审稿
-> 项目版本：0.0.9.4
+> 项目版本：0.0.9.5
 > 产品阶段：MVP
 > 编写日期：2026-11-04
 > 产品品牌：慧浪智算
@@ -727,11 +727,11 @@ URL 下载表单：
 ### 11.1 推荐架构
 
 - 后端：Go 单二进制服务。
-- 前端：Vue 3＋TypeScript，构建后由后端托管。
-- 数据库：SQLite。
+- 前端：React 19＋TypeScript（Vite 构建，后端托管静态资源；原设想的 Vue 3 已在实现中调整为 React）。
+- 数据库：嵌入式 SQLite（0.0.9.5 起落地，modernc.org/sqlite 纯 Go 驱动）。
 - 容器控制：Docker API。
-- 系统服务：systemd。
-- 实时日志和进度：SSE 或 WebSocket，立项技术评审确定一种。
+- 系统服务：容器化交付（`--restart unless-stopped`），不依赖 systemd；systemd 服务配置作为可选增强保留。
+- 实时日志和进度：SSE（实例日志流已落地，WebSocket 不再采用）。
 - CLI：提供状态查看、密码重置、诊断导出和卸载辅助命令。
 
 ### 11.2 内部 API 建议

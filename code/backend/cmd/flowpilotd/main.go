@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ghoul02015/flowpilot/internal/catalog"
+	"github.com/ghoul02015/flowpilot/internal/database"
 	"github.com/ghoul02015/flowpilot/internal/docker"
 	"github.com/ghoul02015/flowpilot/internal/download"
 	"github.com/ghoul02015/flowpilot/internal/hardware"
@@ -68,9 +69,33 @@ func main() {
 	downloadManager := download.NewManager(filepath.Join(dataDir, "models"), importDirs, filepath.Join(dataDir, "tasks.json"))
 	catalogManager := catalog.NewManager(filepath.Join(dataDir, "catalog.json"))
 
+	// 数据底座（0.0.9.5）：嵌入式 SQLite，迁移后由 server 在启动时同步实例映射。
+	// 初始化失败降级运行（数据底座接口返回 503），不让整个管理进程崩溃——
+	// flowpilotd 同时被回归镜像用作实例内假 ComfyUI，其容器无 /data/flowpilot 挂载。
+	dbPath := filepath.Join(dataDir, "flowpilot.db")
+	var dataStore *database.Store
+	backupDir := filepath.Join(dataDir, "backups")
+	if err := os.MkdirAll(dataDir, 0o755); err == nil {
+		if db, openErr := database.Open(dbPath); openErr == nil {
+			defer db.Close()
+			if applied, migrateErr := database.Migrate(db, database.Migrations); migrateErr != nil {
+				slog.Error("数据底座迁移失败，降级运行", "error", migrateErr)
+			} else {
+				if applied > 0 {
+					slog.Info("数据底座迁移完成", "applied", applied)
+				}
+				dataStore = database.NewStore(db)
+			}
+		} else {
+			slog.Error("数据底座初始化失败，降级运行", "error", openErr)
+		}
+	} else {
+		slog.Error("数据目录不可创建，数据底座降级运行", "dir", dataDir, "error", err)
+	}
+
 	httpServer := &http.Server{
 		Addr:    address,
-		Handler: server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imageManager, downloadManager, environment("FLOWPILOT_HOST_GATEWAY", "host.docker.internal"), catalogManager, storageManager),
+		Handler: server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imageManager, downloadManager, environment("FLOWPILOT_HOST_GATEWAY", "host.docker.internal"), catalogManager, storageManager, dataStore, backupDir),
 		// 镜像导入/导出可能是 GB 级长连接；保留请求头超时，正文与响应不设置固定上限。
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
