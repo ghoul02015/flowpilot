@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ghoul02015/flowpilot/internal/docker"
 )
 
@@ -35,7 +37,10 @@ const (
 	labelWorkflowsTarget = "flowpilot.instance.workflows-target"
 	// labelModelLinks 标记实例具备模型关联挂载（models-linked 目录 + extra_model_paths.yaml）。
 	// 0.0.9.4 之前创建的实例无此标签，模型关联功能对它们不可用（挂载创建时固定，重启不生效）。
-	labelModelLinks    = "flowpilot.instance.model-links"
+	labelModelLinks = "flowpilot.instance.model-links"
+	// labelUUID 实例稳定对象 ID（0.0.9.7 起）；同时是 workspace 与链接目录名。
+	// 旧实例无此标签：仍用共享目录挂载，删除默认保留旧共享数据。
+	labelUUID          = "flowpilot.instance.uuid"
 	containerPrefix    = "flowpilot-comfyui-"
 	stopTimeoutSecond  = 10
 	modelsLinkedSubdir = "models-linked"
@@ -74,8 +79,12 @@ type Instance struct {
 	OutputsTarget   string `json:"outputsTarget"`
 	WorkflowsTarget string `json:"workflowsTarget"`
 	// ModelLinks 表示该实例是否支持「模型关联」（带 models-linked 挂载）。
-	ModelLinks bool      `json:"modelLinks"`
-	CreatedAt  time.Time `json:"createdAt"`
+	ModelLinks bool `json:"modelLinks"`
+	// UUID 稳定对象 ID（0.0.9.7 起新实例必有）；空表示旧实例。
+	UUID string `json:"uuid,omitempty"`
+	// Workspace 实例独立数据目录相对路径（如 instances/<uuid>）；空表示旧式共享挂载。
+	Workspace string    `json:"workspace,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // Defaults 是创建实例时的推荐默认值，随列表接口返回。
@@ -126,12 +135,22 @@ type Manager struct {
 	linksContainerDir string
 	// modelRoot 是平台容器内的本地模型仓库根目录，用于关联时的存在性校验。
 	modelRoot string
-	linksMu   sync.Mutex
+	// workspacesRoot 平台容器内实例独立数据根（如 <dataDir>/instances）；
+	// 为空表示未启用独立 workspace（兼容旧装配）。hostWorkspacesRoot 为宿主机侧同目录。
+	workspacesRoot     string
+	hostWorkspacesRoot string
+	// workspaceReuse 返回同名历史实例（默认删除保留数据）的 UUID，
+	// 重建时沿用其 workspace；空表示无历史。
+	workspaceReuse func(name string) string
+	// markOrphan 保留数据删除后立即标记 DB 记录为孤儿（不等待下次同步）。
+	markOrphan func(name string)
+	linksMu    sync.Mutex
 
 	// 数据底座钩子（0.0.9.5）：创建／删除后尽力即时写库，
 	// 遗漏由数据底座的下次同步修复；为空时无副作用（测试与旧装配兼容）。
+	// onDelete 携带 purge：彻底删除移除记录；保留数据删除仅标记孤儿（重建可沿用）。
 	onCreate func(spec Spec, created Instance)
-	onDelete func(name string)
+	onDelete func(name string, purge bool)
 }
 
 // NewManager 创建实例管理器；hostDataDir 是宿主机共享数据目录（绑定挂载用宿主机路径），
@@ -180,9 +199,28 @@ func (m *Manager) SetModelLinks(hostDir, containerDir, modelRoot string) {
 	m.modelRoot = modelRoot
 }
 
+// SetOrphanMarker 注册保留删除的孤儿标记钩子（数据底座）。
+func (m *Manager) SetOrphanMarker(mark func(name string)) {
+	m.markOrphan = mark
+}
+
+// SetWorkspaceReuse 注册 workspace 复用查询（通常来自数据底座孤儿记录）。
+func (m *Manager) SetWorkspaceReuse(reuse func(name string) string) {
+	m.workspaceReuse = reuse
+}
+
+// SetWorkspaceRoot 注册实例独立数据根目录：
+// hostDir 为宿主机侧根（bind 挂载源，如 <hostShared>/instances），
+// containerDir 为平台容器内同一路径（os 操作用，如 <dataDir>/instances）。
+// 设置后新实例自动使用 instances/<uuid>/{outputs,workflows,user,config} 独立挂载。
+func (m *Manager) SetWorkspaceRoot(hostDir, containerDir string) {
+	m.hostWorkspacesRoot = hostDir
+	m.workspacesRoot = containerDir
+}
+
 // SetRecorder 注册数据底座钩子：实例创建成功后回调 onCreate（含完整 Spec），
-// 删除成功后回调 onDelete。回调错误由数据层自行记录，不影响实例操作。
-func (m *Manager) SetRecorder(onCreate func(spec Spec, created Instance), onDelete func(name string)) {
+// 删除成功后回调 onDelete(name, purge)。回调错误由数据层自行记录，不影响实例操作。
+func (m *Manager) SetRecorder(onCreate func(spec Spec, created Instance), onDelete func(name string, purge bool)) {
 	m.onCreate = onCreate
 	m.onDelete = onDelete
 }
@@ -251,6 +289,28 @@ func (m *Manager) Create(ctx context.Context, spec Spec) (Instance, error) {
 		return Instance{}, err
 	}
 
+	// 0.0.9.7 起新实例使用独立 workspace：outputs/workflows/user/config 每实例独立，
+	// 模型仓库仍全局只读共享。workspace 由后端按 UUID 生成，不接受任意宿主机路径。
+	instanceUUID := ""
+	binds := []string{
+		// 模型仓库只读共享（PRD 10.1）：实例可读取全部模型，
+		// 但不能在容器内改动或删除共享文件。
+		m.hostDataDir + "/models:" + spec.ModelsTarget + ":ro",
+	}
+	if m.workspacesRoot != "" && m.hostWorkspacesRoot != "" {
+		// 重建沿用：同名历史孤儿记录存在时复用其 UUID 与 workspace。
+		if m.workspaceReuse != nil {
+			instanceUUID = m.workspaceReuse(spec.Name)
+		}
+		if instanceUUID == "" {
+			instanceUUID = uuid.NewString()
+		}
+	} else {
+		// 未配置 workspace 根（旧装配）：沿用共享目录。
+		binds = append(binds,
+			m.hostDataDir+"/workflows:"+spec.WorkflowsTarget,
+			m.hostDataDir+"/outputs:"+spec.OutputsTarget)
+	}
 	labels := map[string]string{
 		LabelManaged:         "true",
 		LabelInstance:        "true",
@@ -262,15 +322,36 @@ func (m *Manager) Create(ctx context.Context, spec Spec) (Instance, error) {
 		labelOutputsTarget:   spec.OutputsTarget,
 		labelWorkflowsTarget: spec.WorkflowsTarget,
 	}
-	portKey := fmt.Sprintf("%d/tcp", spec.ContainerPort)
-	binds := []string{
-		// 模型仓库只读共享（PRD 10.1）：实例可读取全部模型，
-		// 但不能在容器内改动或删除共享文件。
-		m.hostDataDir + "/models:" + spec.ModelsTarget + ":ro",
-		m.hostDataDir + "/workflows:" + spec.WorkflowsTarget,
-		m.hostDataDir + "/outputs:" + spec.OutputsTarget,
+	if instanceUUID != "" {
+		labels[labelUUID] = instanceUUID
 	}
+	portKey := fmt.Sprintf("%d/tcp", spec.ContainerPort)
 	basePath := path.Dir(spec.ModelsTarget)
+	if instanceUUID != "" {
+		// 独立 workspace：outputs/workflows/user/config 每实例独立目录。
+		// hostWorkspacesRoot 已是 <hostShared>/instances，bind 源直接拼 UUID（勿再叠 instances）。
+		userTarget := path.Dir(spec.WorkflowsTarget)
+		// user 挂载仅在独立子目录时进行（如 /app/ComfyUI/user）；
+		// 若 workflows 父目录即 basePath（如 /data/workflows → /data），
+		// 挂载 user 会覆盖 basePath 与其他 /data 挂载冲突，跳过。
+		mounts := map[string]string{
+			"outputs":   spec.OutputsTarget,
+			"workflows": spec.WorkflowsTarget,
+			"config":    basePath + "/flowpilot-config",
+		}
+		if userTarget != basePath && userTarget != "/" {
+			mounts["user"] = userTarget
+		}
+		// 四个子目录始终创建（数据完整性）；挂载按布局条件。
+		for _, sub := range []string{"outputs", "workflows", "user", "config"} {
+			if err := os.MkdirAll(filepath.Join(m.workspacesRoot, instanceUUID, sub), 0o755); err != nil {
+				return Instance{}, fmt.Errorf("创建实例数据目录失败：%w", err)
+			}
+		}
+		for sub, target := range mounts {
+			binds = append(binds, m.hostWorkspacesRoot+"/"+instanceUUID+"/"+sub+":"+target)
+		}
+	}
 	// extra_model_paths.yaml 恒生成：含 flowpilot_linked 节（模型关联快捷层），
 	// 网络存储挂载时另含 flowpilot_network 节，由 writer 内部判定。
 	var yamlHostFile string
@@ -286,11 +367,16 @@ func (m *Manager) Create(ctx context.Context, spec Spec) (Instance, error) {
 	// 被勾选的共享模型在 ComfyUI 内以 flowpilot_linked 来源出现；增删链接热生效。
 	modelLinks := false
 	if m.linksHostDir != "" && m.linksContainerDir != "" && yamlHostFile != "" {
+		// 链接目录名 0.0.9.7 起用稳定实例 ID；未启用 workspace 的旧装配仍用名称。
+		linkDirName := spec.Name
+		if instanceUUID != "" {
+			linkDirName = instanceUUID
+		}
 		// 目录在平台容器内创建（与宿主机 bind 源是同一物理目录）。
-		if err := os.MkdirAll(filepath.Join(m.linksContainerDir, spec.Name), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(m.linksContainerDir, linkDirName), 0o755); err != nil {
 			return Instance{}, fmt.Errorf("创建模型关联目录失败：%w", err)
 		}
-		binds = append(binds, filepath.Join(m.linksHostDir, spec.Name)+":"+basePath+"/"+modelsLinkedSubdir+":ro")
+		binds = append(binds, filepath.Join(m.linksHostDir, linkDirName)+":"+basePath+"/"+modelsLinkedSubdir+":ro")
 		modelLinks = true
 	}
 	// 网络存储已启用并完成挂载时：追加 NAS 只读仓库（yaml 的 network 节由 writer 判定）。
@@ -445,8 +531,13 @@ func (m *Manager) checkGPUConflict(ctx context.Context, target Instance) error {
 	return nil
 }
 
-// Delete 删除实例容器；force 为 true 时允许删除运行中的实例。
-func (m *Manager) Delete(ctx context.Context, name string, force bool) error {
+// Delete 删除实例。0.0.9.7 起分两档：
+//   - purge=false（默认）：删除容器与模型链接目录，保留独立 workspace 数据
+//     （数据库记录由下次同步标记为孤儿，可恢复或后续彻底清理）。
+//   - purge=true：彻底删除容器、链接目录与 workspace 全部数据。
+//
+// force 为 true 时允许删除运行中的实例。
+func (m *Manager) Delete(ctx context.Context, name string, force, purge bool) error {
 	target, err := m.Get(ctx, name)
 	if err != nil {
 		return err
@@ -458,16 +549,42 @@ func (m *Manager) Delete(ctx context.Context, name string, force bool) error {
 		m.yamlCleaner(name)
 	}
 	if m.linksContainerDir != "" {
-		// 关联目录仅含平台创建的符号链接，随实例一并清理。
+		// 关联目录仅含平台创建的符号链接，随实例一并清理（兼容旧实例名称目录）。
+		linkDirName := target.UUID
+		if linkDirName == "" {
+			linkDirName = name
+		}
+		_ = os.RemoveAll(filepath.Join(m.linksContainerDir, linkDirName))
 		_ = os.RemoveAll(filepath.Join(m.linksContainerDir, name))
 	}
 	if err := m.docker.RemoveContainer(ctx, target.ContainerID, force); err != nil {
 		return err
 	}
-	if m.onDelete != nil {
-		m.onDelete(name)
+	if purge {
+		if m.workspacesRoot != "" && target.UUID != "" {
+			// 彻底删除：移除实例全部独立数据。
+			if err := os.RemoveAll(filepath.Join(m.workspacesRoot, target.UUID)); err != nil {
+				return fmt.Errorf("清理实例数据目录失败：%w", err)
+			}
+		}
+		if m.onDelete != nil {
+			m.onDelete(name, true)
+		} else if m.markOrphan != nil {
+			m.markOrphan(name)
+		}
+	} else if m.markOrphan != nil {
+		// 保留数据档：立即标记孤儿（重建时据此沿用 workspace 与 UUID）。
+		m.markOrphan(name)
 	}
 	return nil
+}
+
+// WorkspacePath 返回实例独立数据目录（平台容器内路径）；旧实例返回空。
+func (m *Manager) WorkspacePath(target Instance) string {
+	if m.workspacesRoot == "" || target.UUID == "" {
+		return ""
+	}
+	return filepath.Join(m.workspacesRoot, target.UUID)
 }
 
 func fromContainer(container docker.Container) Instance {
@@ -486,8 +603,18 @@ func fromContainer(container docker.Container) Instance {
 		OutputsTarget:   container.Labels[labelOutputsTarget],
 		WorkflowsTarget: container.Labels[labelWorkflowsTarget],
 		ModelLinks:      container.Labels[labelModelLinks] == "true",
+		UUID:            container.Labels[labelUUID],
+		Workspace:       workspaceLabelValue(container.Labels[labelUUID]),
 		CreatedAt:       time.Unix(container.Created, 0),
 	}
+}
+
+// workspaceLabelValue 由 UUID 推导 workspace 相对路径。
+func workspaceLabelValue(instanceUUID string) string {
+	if instanceUUID == "" {
+		return ""
+	}
+	return "instances/" + instanceUUID
 }
 
 func mapStatus(state string) string {

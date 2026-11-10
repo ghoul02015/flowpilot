@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.9.6') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.9.7') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   // 认证（0.0.9.6）：未登录先看到登录页 → 初始化 → 登录 → 会话恢复。
@@ -344,6 +344,15 @@ try {
     if (!instanceHealth.ok()) throw new Error(`实例端口不可达：HTTP ${instanceHealth.status()}`)
     check('真实实例端口可访问')
 
+    // 数据隔离（0.0.9.7）：新实例应有独立 workspace（UUID 目录）。
+    const workspacesResponse = await page.request.get(`${baseURL}/api/v1/instances/workspaces`)
+    const workspacesBody = await workspacesResponse.json()
+    const myWorkspace = workspacesBody.workspaces?.find((item) => item.name === instanceName)
+    if (!workspacesResponse.ok() || !myWorkspace || !myWorkspace.hasContainer || myWorkspace.uuid.length < 32) {
+      throw new Error(`新实例应有 workspace：${JSON.stringify(workspacesBody)}`)
+    }
+    check('新实例独立 workspace（UUID 标识）')
+
     await page.getByRole('button', { name: `停止 ${instanceName}`, exact: true }).click()
     await page.getByRole('button', { name: `启动 ${instanceName}`, exact: true }).waitFor({ timeout: 20000 })
     check('真实实例停止')
@@ -356,10 +365,84 @@ try {
     await page.getByRole('button', { name: `启动 ${instanceName}`, exact: true }).waitFor({ timeout: 20000 })
     await page.getByRole('button', { name: `删除 ${instanceName}`, exact: true }).click()
     const deleteDialog = page.getByRole('dialog')
+    // 默认档「删除实例，保留数据」。
+    await deleteDialog.getByTestId('delete-keep-data').click()
     await deleteDialog.getByLabel('实例名称').fill(instanceName)
     await deleteDialog.getByRole('button', { name: '确认删除' }).click()
     await page.getByRole('button', { name: `删除 ${instanceName}`, exact: true }).waitFor({ state: 'detached', timeout: 15000 })
-    check('真实实例删除')
+    check('真实实例删除（默认保留数据）')
+
+    // 0.0.9.7：删除后 workspace 保留为孤儿目录（Docker 列表存在最终一致性，轮询等待）。
+    let orphanWorkspace = null
+    for (let attempt = 0; attempt < 15; attempt += 1) {
+      const afterDeleteWorkspaces = await page.request.get(`${baseURL}/api/v1/instances/workspaces`).then((response) => response.json())
+      const candidate = afterDeleteWorkspaces.workspaces?.find((item) => item.uuid === myWorkspace.uuid)
+      if (candidate && candidate.orphan && !candidate.hasContainer) {
+        orphanWorkspace = candidate
+        break
+      }
+      await page.waitForTimeout(1000)
+    }
+    if (!orphanWorkspace) {
+      throw new Error('删除后 workspace 应保留为孤儿（等待 15 秒未出现）')
+    }
+    check('删除后实例数据保留（孤儿 workspace）')
+
+    // 重建同名实例：沿用同一 workspace（UUID 不变）。
+    await page.getByRole('button', { name: '新建实例', exact: true }).click()
+    const rebuildDialog = page.getByRole('dialog')
+    await rebuildDialog.getByLabel('实例名称').fill(instanceName)
+    const rebuildImageSelect = rebuildDialog.getByLabel('容器镜像（本机已有）')
+    const rebuildOptionDeadline = Date.now() + 8000
+    while (Date.now() < rebuildOptionDeadline && await rebuildImageSelect.locator('option').count() === 0) await page.waitForTimeout(200)
+    const rebuildImage = `flowpilot/comfyui-regress:${health.version}`
+    if (await rebuildImageSelect.locator(`option[value="${rebuildImage}"]`).count() > 0) {
+      await rebuildImageSelect.selectOption(rebuildImage)
+    }
+    await rebuildDialog.getByLabel('分配 GPU').selectOption('-1')
+    await rebuildDialog.getByLabel('访问端口').fill('18188')
+    await rebuildDialog.getByRole('button', { name: /高级设置/ }).click()
+    await rebuildDialog.getByLabel('容器端口').fill('18080')
+    await page.getByRole('button', { name: '下一步' }).click()
+    await page.getByRole('button', { name: /确认部署|正在创建容器/ }).click()
+    await page.getByRole('button', { name: `停止 ${instanceName}`, exact: true }).waitFor({ timeout: 30000 })
+    let rebuiltWorkspace = null
+    for (let attempt = 0; attempt < 15; attempt += 1) {
+      const rebuiltWorkspaces = await page.request.get(`${baseURL}/api/v1/instances/workspaces`).then((response) => response.json())
+      const candidate = rebuiltWorkspaces.workspaces?.find((item) => item.name === instanceName)
+      if (candidate && candidate.uuid === myWorkspace.uuid && candidate.hasContainer) {
+        rebuiltWorkspace = candidate
+        break
+      }
+      await page.waitForTimeout(1000)
+    }
+    if (!rebuiltWorkspace) {
+      throw new Error(`重建应沿用 workspace UUID：${myWorkspace.uuid}（等待 15 秒未确认）`)
+    }
+    check('重建同名实例沿用 workspace')
+
+    // 彻底删除（purge）：workspace 一并清理。
+    await page.getByRole('button', { name: `停止 ${instanceName}`, exact: true }).click()
+    await page.getByRole('button', { name: `删除 ${instanceName}`, exact: true }).waitFor({ timeout: 20000 })
+    await page.getByRole('button', { name: `删除 ${instanceName}`, exact: true }).click()
+    const purgeDialog = page.getByRole('dialog')
+    await purgeDialog.getByTestId('delete-purge-data').click()
+    await purgeDialog.getByLabel('实例名称').fill(instanceName)
+    await purgeDialog.getByRole('button', { name: '彻底删除', exact: true }).click()
+    await page.getByRole('button', { name: `删除 ${instanceName}`, exact: true }).waitFor({ state: 'detached', timeout: 15000 })
+    let purgedStillThere = true
+    for (let attempt = 0; attempt < 15; attempt += 1) {
+      const purgedWorkspaces = await page.request.get(`${baseURL}/api/v1/instances/workspaces`).then((response) => response.json())
+      if (!purgedWorkspaces.workspaces?.some((item) => item.uuid === myWorkspace.uuid)) {
+        purgedStillThere = false
+        break
+      }
+      await page.waitForTimeout(1000)
+    }
+    if (purgedStillThere) {
+      throw new Error('彻底删除后 workspace 不应存在（等待 15 秒仍在）')
+    }
+    check('彻底删除清理 workspace')
     }
 
     // ComfyUI 实例链路：用默认预置镜像（comfyui-h3:spark）创建 →
@@ -827,6 +910,13 @@ try {
   if (!auditResponse.ok() || !auditBody.logs.some((entry) => entry.action === 'auth.login' && entry.result === 'success')) throw new Error(`审计应包含登录成功事件：${JSON.stringify(auditBody.logs.slice(0, 5))}`)
   check('操作审计记录（登录事件可查）')
   await screenshot('05-system-audit')
+
+  // 数据迁移（0.0.9.7）：扫描与面板渲染。
+  await page.getByRole('tab', { name: '数据迁移' }).click()
+  await page.getByTestId('migration-panel').waitFor()
+  await page.getByRole('button', { name: '扫描共享目录' }).click()
+  await page.getByTestId('migration-scan').waitFor({ timeout: 15000 })
+  check('数据迁移面板与共享目录扫描')
 
   // 退出登录：回到登录页，业务 API 再次 401。
   await page.getByRole('tab', { name: '安全与会话' }).click()

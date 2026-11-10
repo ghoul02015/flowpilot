@@ -22,7 +22,7 @@ interface Props {
   models?: ModelReport | null
   onCreate: () => void
   onAction: (id: string, action: 'start' | 'stop' | 'restart') => void
-  onDelete: (id: string) => void
+  onDelete: (id: string, purge?: boolean) => void
 }
 
 type InstanceTab = 'instances' | 'images'
@@ -36,6 +36,7 @@ export function Instances({ instances, gpuNames, realMode, busyIds, initialFocus
   const [detailId, setDetailId] = useState<string | null>(initialId)
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [confirmName, setConfirmName] = useState('')
+  const [purgeMode, setPurgeMode] = useState(false)
   const [logsInstance, setLogsInstance] = useState<{ name: string; status: string } | null>(null)
   const [linksInstance, setLinksInstance] = useState<{ name: string; status: string } | null>(null)
   const [highlightId, setHighlightId] = useState<string | null>(initialId)
@@ -110,12 +111,22 @@ export function Instances({ instances, gpuNames, realMode, busyIds, initialFocus
       </>}</DialogContent>
     </Dialog>
 
-    <Dialog open={Boolean(deleting)} onOpenChange={(open) => !open && closeDelete()}>
+    <Dialog open={Boolean(deleting)} onOpenChange={(open) => { if (!open) closeDelete(); setPurgeMode(false) }}>
       <DialogContent>{deleting && <>
-        <DialogHeader><DialogTitle>删除实例</DialogTitle><DialogDescription>此操作将删除真实 Docker 容器；共享模型目录始终保留。</DialogDescription></DialogHeader>
-        <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm leading-6 text-rose-800">请输入实例名称 <strong>{deleting.name}</strong> 以确认删除。</div>
+        <DialogHeader><DialogTitle>删除实例</DialogTitle><DialogDescription>共享模型目录始终保留；实例数据的去留由下方选项决定。</DialogDescription></DialogHeader>
+        <div className="grid gap-2">
+          <button type="button" onClick={() => setPurgeMode(false)} className={`rounded-lg border p-3 text-left text-sm transition-colors ${!purgeMode ? 'border-teal-600 bg-teal-50' : 'border-slate-200 hover:border-slate-300'}`} data-testid="delete-keep-data">
+            <div className="font-medium text-slate-900">删除实例，保留数据（推荐）</div>
+            <div className="mt-0.5 text-slate-500">删除容器与模型链接；输出、工作流等实例数据保留，重建同名实例时自动沿用。</div>
+          </button>
+          <button type="button" onClick={() => setPurgeMode(true)} className={`rounded-lg border p-3 text-left text-sm transition-colors ${purgeMode ? 'border-rose-500 bg-rose-50' : 'border-slate-200 hover:border-slate-300'}`} data-testid="delete-purge-data">
+            <div className="font-medium text-slate-900">彻底删除实例及数据</div>
+            <div className="mt-0.5 text-slate-500">删除容器与全部实例数据（输出、工作流、用户数据），不可恢复。</div>
+          </button>
+        </div>
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm leading-6 text-amber-900">请输入实例名称 <strong>{deleting.name}</strong> 以确认{purgeMode ? '彻底删除' : '删除'}。</div>
         <label className="field-label">实例名称<input className="field-input" value={confirmName} onChange={(event) => setConfirmName(event.target.value)} autoComplete="off" /></label>
-        <DialogFooter><button type="button" className="btn-secondary" onClick={closeDelete}>取消</button><button type="button" className="btn-danger" disabled={confirmName !== deleting.name} onClick={() => { onDelete(deleting.id); closeDelete() }}><Trash2 className="size-4" />确认删除</button></DialogFooter>
+        <DialogFooter><button type="button" className="btn-secondary" onClick={() => { closeDelete(); setPurgeMode(false) }}>取消</button><button type="button" className="btn-danger" disabled={confirmName !== deleting.name} onClick={() => { onDelete(deleting.id, purgeMode); closeDelete(); setPurgeMode(false) }}><Trash2 className="size-4" />{purgeMode ? '彻底删除' : '确认删除'}</button></DialogFooter>
       </>}</DialogContent>
     </Dialog>
 

@@ -590,8 +590,68 @@ export async function postInstanceAction(name: string, action: 'start' | 'stop' 
   return sendJSON<RealInstance>('POST', `/api/v1/instances/${encodeURIComponent(name)}/${action}`)
 }
 
-export async function deleteInstanceApi(name: string, force: boolean): Promise<void> {
-  await sendJSON<{ status: string }>('DELETE', `/api/v1/instances/${encodeURIComponent(name)}${force ? '?force=1' : ''}`)
+export async function deleteInstanceApi(name: string, force: boolean, purge = false): Promise<void> {
+  await sendJSON<{ status: string }>('DELETE', `/api/v1/instances/${encodeURIComponent(name)}?force=${force ? 1 : 0}${purge ? '&purge=1' : ''}`, undefined)
+}
+
+export interface WorkspaceItem {
+  uuid: string
+  name: string
+  hasContainer: boolean
+  orphan: boolean
+  exists: boolean
+}
+
+export async function listWorkspaces(): Promise<{ workspaces: WorkspaceItem[] }> {
+  return getJSON<{ workspaces: WorkspaceItem[] }>('/api/v1/instances/workspaces', AbortSignal.timeout(6000))
+}
+
+export interface MigrationDirectoryStats {
+  files: number
+  bytes: number
+  exists: boolean
+  lastModified?: string
+}
+
+export interface MigrationScanReport {
+  scannedAt: string
+  outputs: MigrationDirectoryStats
+  workflows: MigrationDirectoryStats
+}
+
+export interface MigrationPreviewPlan {
+  instance: string
+  workspace: string
+  available: boolean
+  reason?: string
+  scope: Record<string, MigrationDirectoryStats>
+  totalFiles: number
+  totalBytes: number
+  backupBytes: number
+}
+
+export interface MigrationRunResult {
+  instance: string
+  mode: string
+  scope: string[]
+  backupDir: string
+  copiedFiles: Record<string, number>
+  copiedBytes: Record<string, number>
+  verified: boolean
+  duration: string
+  warnings: string[]
+}
+
+export async function migrationScan(): Promise<MigrationScanReport> {
+  return getJSON<MigrationScanReport>('/api/v1/migration/scan', AbortSignal.timeout(10000))
+}
+
+export async function migrationPreview(instance: string): Promise<MigrationPreviewPlan> {
+  return getJSON<MigrationPreviewPlan>(`/api/v1/migration/preview?instance=${encodeURIComponent(instance)}`, AbortSignal.timeout(10000))
+}
+
+export async function migrationRun(instance: string, scope: string[], mode: 'copy' | 'move'): Promise<MigrationRunResult> {
+  return sendJSON<MigrationRunResult>('POST', '/api/v1/migration/run', { instance, scope, mode })
 }
 
 // ---- 实例日志（SSE 实时流）与模型关联（0.0.9.4）----

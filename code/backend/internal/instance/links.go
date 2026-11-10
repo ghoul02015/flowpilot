@@ -40,7 +40,7 @@ func (m *Manager) ListModelLinks(ctx context.Context, name string) (bool, []Mode
 	if !target.ModelLinks || m.linksContainerDir == "" {
 		return false, links, nil
 	}
-	root := filepath.Join(m.linksContainerDir, name)
+	root := filepath.Join(m.linksContainerDir, linkDirName(target))
 	categories, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -115,7 +115,7 @@ func (m *Manager) SetModelLinksFor(ctx context.Context, name string, want []Mode
 	m.linksMu.Lock()
 	defer m.linksMu.Unlock()
 
-	root := filepath.Join(m.linksContainerDir, name)
+	root := filepath.Join(m.linksContainerDir, linkDirName(target))
 	existing := make(map[string]bool)
 	_ = filepath.WalkDir(root, func(p string, entry fs.DirEntry, err error) error {
 		if err != nil || entry.Type()&os.ModeSymlink == 0 {
@@ -191,4 +191,12 @@ func pruneEmptyDirs(dir, root string) {
 		}
 		dir = filepath.Dir(cleanedDir)
 	}
+}
+
+// linkDirName 模型链接目录名：0.0.9.7 起新实例用稳定 UUID，旧实例沿用名称。
+func linkDirName(target Instance) string {
+	if target.UUID != "" {
+		return target.UUID
+	}
+	return target.Name
 }

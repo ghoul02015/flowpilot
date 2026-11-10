@@ -23,43 +23,48 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/hardware"
 	"github.com/ghoul02015/flowpilot/internal/image"
 	"github.com/ghoul02015/flowpilot/internal/instance"
+	"github.com/ghoul02015/flowpilot/internal/migration"
 	"github.com/ghoul02015/flowpilot/internal/model"
 	"github.com/ghoul02015/flowpilot/internal/storage"
 )
 
-const Version = "0.0.9.6"
+const Version = "0.0.9.7"
 
 type Handler struct {
-	docker       *docker.Client
-	staticDir    string
-	hardware     *hardware.Collector
-	instances    *instance.Manager
-	models       *model.Manager
-	images       *image.Manager
-	downloads    *download.Manager
-	catalog      *catalog.Manager
-	storage      *storage.Manager
-	database     *database.Store
-	backupDir    string
-	auth         *auth.Manager
-	authDisabled bool
-	comfyGateway string
-	comfyClient  *http.Client
+	docker        *docker.Client
+	staticDir     string
+	hardware      *hardware.Collector
+	instances     *instance.Manager
+	models        *model.Manager
+	images        *image.Manager
+	downloads     *download.Manager
+	catalog       *catalog.Manager
+	storage       *storage.Manager
+	database      *database.Store
+	backupDir     string
+	auth          *auth.Manager
+	authDisabled  bool
+	migrations    *migration.Manager
+	workspaceRoot string
+	comfyGateway  string
+	comfyClient   *http.Client
 }
 
-func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imageManager *image.Manager, downloadManager *download.Manager, comfyGateway string, catalogManager *catalog.Manager, storageManager *storage.Manager, dataStore *database.Store, backupDir string, authManager *auth.Manager, authDisabled bool) http.Handler {
+func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imageManager *image.Manager, downloadManager *download.Manager, comfyGateway string, catalogManager *catalog.Manager, storageManager *storage.Manager, dataStore *database.Store, backupDir string, authManager *auth.Manager, authDisabled bool, migrationManager *migration.Manager, workspaceRoot string) http.Handler {
 	if comfyGateway == "" {
 		comfyGateway = "host.docker.internal"
 	}
 	handler := &Handler{
 		docker: dockerClient, staticDir: staticDir, hardware: hardwareCollector, instances: instanceManager,
 		models: modelManager, images: imageManager, downloads: downloadManager, catalog: catalogManager,
-		storage:      storageManager,
-		database:     dataStore,
-		backupDir:    backupDir,
-		auth:         authManager,
-		authDisabled: authDisabled,
-		comfyGateway: comfyGateway,
+		storage:       storageManager,
+		database:      dataStore,
+		backupDir:     backupDir,
+		auth:          authManager,
+		authDisabled:  authDisabled,
+		migrations:    migrationManager,
+		workspaceRoot: workspaceRoot,
+		comfyGateway:  comfyGateway,
 		// ComfyUI 状态探测是秒级接口，必须有整体超时，避免拖住轮询。
 		comfyClient: &http.Client{Timeout: 4 * time.Second},
 	}
@@ -130,6 +135,11 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("POST /api/v1/imports", handler.createImport)
 	mux.HandleFunc("POST /api/v1/downloads/{id}/{action}", handler.downloadAction)
 	mux.HandleFunc("DELETE /api/v1/downloads/{id}", handler.deleteDownload)
+	// 实例数据隔离与历史迁移（0.0.9.7）。
+	mux.HandleFunc("GET /api/v1/instances/workspaces", handler.listWorkspaces)
+	mux.HandleFunc("GET /api/v1/migration/scan", handler.migrationScan)
+	mux.HandleFunc("GET /api/v1/migration/preview", handler.migrationPreview)
+	mux.HandleFunc("POST /api/v1/migration/run", handler.migrationRun)
 	// 数据底座（0.0.9.5）：状态、一致性检查与备份。
 	mux.HandleFunc("GET /api/v1/database", handler.databaseStatus)
 	mux.HandleFunc("POST /api/v1/database/check", handler.databaseCheck)
@@ -473,11 +483,16 @@ func (h *Handler) deleteInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	force := r.URL.Query().Get("force") == "1" || r.URL.Query().Get("force") == "true"
-	if err := h.instances.Delete(r.Context(), r.PathValue("name"), force); err != nil {
+	purge := r.URL.Query().Get("purge") == "1" || r.URL.Query().Get("purge") == "true"
+	if err := h.instances.Delete(r.Context(), r.PathValue("name"), force, purge); err != nil {
 		h.writeInstanceError(w, err, "删除实例失败")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	if purge {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "purged"})
+	} else {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	}
 }
 
 func (h *Handler) listModels(w http.ResponseWriter, _ *http.Request) {

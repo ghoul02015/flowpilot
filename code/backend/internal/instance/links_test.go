@@ -135,7 +135,7 @@ func TestDeleteClearsInstanceLinks(t *testing.T) {
 	if _, _, err := manager.SetModelLinksFor(ctx, "demo", []ModelLink{{Category: "loras", Name: "a.safetensors"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Delete(ctx, "demo", true); err != nil {
+	if err := manager.Delete(ctx, "demo", true, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(linksDir, "demo")); !os.IsNotExist(err) {

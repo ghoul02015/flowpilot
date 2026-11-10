@@ -51,7 +51,7 @@ export default function App() {
   // 同步镜像 busyIds，避免同一帧内双击穿透渲染快照的 includes 检查。
   const busyRef = useRef<Set<string>>(new Set())
   // 界面版本号跟随后端 /health，避免硬编码漂移；离线时回退常量。
-  const [backendVersion, setBackendVersion] = useState('0.0.9.6')
+  const [backendVersion, setBackendVersion] = useState('0.0.9.7')
 
   const realMode = realInstances !== null
   const realModelMode = realModels !== null
@@ -340,12 +340,12 @@ export default function App() {
     }
   }
 
-  function deleteInstance(id: string) {
+  function deleteInstance(id: string, purge = false) {
     const target = displayInstances.find((item) => item.id === id)
-    if (!target || !requireBackend('删除实例')) return
-    deleteInstanceApi(target.name, target.status === 'running')
+    if (!target || !requireBackend(purge ? '彻底删除实例' : '删除实例')) return
+    deleteInstanceApi(target.name, target.status === 'running', purge === true)
       .then(() => {
-        toast.success('实例容器已删除', { description: `${target.name} · 共享模型目录保留` })
+        toast.success(purge ? '实例及数据已彻底删除' : '实例容器已删除', { description: purge ? `${target.name} · 容器与全部实例数据已清理` : `${target.name} · 实例数据已保留，重建同名实例自动沿用` })
         void refreshInstances()
       })
       .catch((error: unknown) => {

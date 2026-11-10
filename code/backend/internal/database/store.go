@@ -11,7 +11,9 @@ import (
 
 // Snapshot 是 Docker 侧实例事实快照，由调用方从 instance.Instance 转换。
 type Snapshot struct {
-	Name            string
+	Name string
+	// UUID 容器标签携带的稳定对象 ID（0.0.9.7 起）；空表示旧实例（导入时生成）。
+	UUID            string
 	ContainerID     string
 	ContainerName   string
 	Image           string
@@ -253,7 +255,10 @@ func (s *Store) loadRows() []row {
 }
 
 func (s *Store) insertRow(snapshot Snapshot) string {
-	id := newUUID()
+	id := snapshot.UUID
+	if id == "" {
+		id = newUUID()
+	}
 	createdAt := nowRFC3339()
 	if !snapshot.CreatedAt.IsZero() {
 		createdAt = snapshot.CreatedAt.UTC().Format(time.RFC3339Nano)
@@ -407,7 +412,12 @@ func (s *Store) IntegrityCheck() (bool, string) {
 func (s *Store) RecordCreate(snapshot Snapshot, specJSON string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	id := newUUID()
+	// 优先使用容器标签的稳定 UUID（与 workspace/链接目录一致）；
+	// name 冲突（重建换 UUID）由 INSERT OR REPLACE 按 name 唯一索引替换旧行。
+	id := snapshot.UUID
+	if id == "" {
+		id = newUUID()
+	}
 	createdAt := nowRFC3339()
 	if !snapshot.CreatedAt.IsZero() {
 		createdAt = snapshot.CreatedAt.UTC().Format(time.RFC3339Nano)
@@ -435,6 +445,27 @@ func (s *Store) RecordCreate(snapshot Snapshot, specJSON string) {
 	if err := tx.Commit(); err != nil {
 		logSQLError("RecordCreate commit", err)
 	}
+}
+
+// MarkOrphanByName 将记录标记为孤儿（保留数据删除实例时调用，无需等待下次同步）。
+func (s *Store) MarkOrphanByName(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.db.Exec("UPDATE instances SET orphan = 1, updated_at = ? WHERE name = ?", nowRFC3339(), name); err != nil {
+		logSQLError("MarkOrphanByName "+name, err)
+	}
+}
+
+// FindOrphanByName 返回孤儿记录（容器已删、数据保留）的 UUID，
+// 供实例重建时沿用 workspace 与对象身份。
+func (s *Store) FindOrphanByName(name string) (string, bool) {
+	var uuid string
+	var orphan int
+	err := s.db.QueryRow("SELECT uuid, orphan FROM instances WHERE name = ?", name).Scan(&uuid, &orphan)
+	if err != nil || orphan != 1 || uuid == "" {
+		return "", false
+	}
+	return uuid, true
 }
 
 // RecordDelete 在实例删除后移除其记录与期望配置（级联）。

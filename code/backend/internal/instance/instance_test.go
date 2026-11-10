@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -34,22 +36,33 @@ func (f *fakeDocker) ImageExists(_ context.Context, image string) (bool, error) 
 func (f *fakeDocker) CreateContainer(_ context.Context, name string, config any) (string, error) {
 	f.createCounter++
 	f.created = append(f.created, name)
+	// 容器标签优先取真实 config 中的 Labels（新代码路径），回退到兼容默认。
+	labels := map[string]string{
+		LabelInstance:  "true",
+		labelName:      strings.TrimPrefix(name, containerPrefix),
+		labelGPU:       "0",
+		labelPort:      "18188",
+		labelAutoStart: "true",
+	}
+	image := "comfyui:test"
 	if decoded, ok := config.(map[string]any); ok {
 		f.lastConfig = decoded
+		if configLabels, ok := decoded["Labels"].(map[string]string); ok {
+			for key, value := range configLabels {
+				labels[key] = value
+			}
+		}
+		if configImage, ok := decoded["Image"].(string); ok && configImage != "" {
+			image = configImage
+		}
 	}
 	id := strings.Repeat("ab", 6)
 	f.containers = append(f.containers, docker.Container{
-		ID:    id,
-		Names: []string{"/" + name},
-		Image: "comfyui:test",
-		State: "created",
-		Labels: map[string]string{
-			LabelInstance:  "true",
-			labelName:      strings.TrimPrefix(name, containerPrefix),
-			labelGPU:       "0",
-			labelPort:      "18188",
-			labelAutoStart: "true",
-		},
+		ID:      id,
+		Names:   []string{"/" + name},
+		Image:   image,
+		State:   "created",
+		Labels:  labels,
 		Created: time.Now().Unix(),
 	})
 	return id, nil
@@ -237,10 +250,10 @@ func TestActionsAndDelete(t *testing.T) {
 		t.Fatalf("unexpected action counts: stopped=%v started=%v", fake.stopped, fake.started)
 	}
 
-	if err := manager.Delete(context.Background(), "draw-01", false); err == nil {
+	if err := manager.Delete(context.Background(), "draw-01", false, false); err == nil {
 		t.Fatal("deleting a running instance without force must fail")
 	}
-	if err := manager.Delete(context.Background(), "draw-01", true); err != nil {
+	if err := manager.Delete(context.Background(), "draw-01", true, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := manager.Get(context.Background(), "draw-01"); err == nil {
@@ -377,5 +390,68 @@ func TestCreateWithoutNetworkStorageKeepsThreeMounts(t *testing.T) {
 	binds := fake.lastConfig["HostConfig"].(map[string]any)["Binds"].([]string)
 	if len(binds) != 3 {
 		t.Fatalf("未启用网络存储时应保持 3 个挂载，实际 %d", len(binds))
+	}
+}
+
+func TestWorkspaceLifecycle(t *testing.T) {
+	dockerClient := &fakeDocker{images: map[string]bool{"img:1": true}}
+	hostShared := t.TempDir()
+	dataDir := t.TempDir()
+	manager := NewManager(dockerClient, func() int { return 1 }, hostShared, "img:1", 8188, "/data/models", "/data/outputs", "/data/workflows")
+	manager.SetModelLinks(filepath.Join(hostShared, "instance-links"), filepath.Join(dataDir, "instance-links"), filepath.Join(dataDir, "models"))
+	manager.SetWorkspaceRoot(filepath.Join(hostShared, "instances"), filepath.Join(dataDir, "instances"))
+
+	spec := Spec{Name: "iso-01", Image: "img:1", GPU: -1, Port: 18100, ContainerPort: 8188, AutoStart: false}
+	created, err := manager.Create(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("创建失败：%v", err)
+	}
+	if created.UUID == "" || created.Workspace == "" {
+		t.Fatalf("新实例应有 UUID 与 workspace：%+v", created)
+	}
+	for _, sub := range []string{"outputs", "workflows", "user", "config"} {
+		if _, err := os.Stat(filepath.Join(dataDir, "instances", created.UUID, sub)); err != nil {
+			t.Fatalf("workspace 子目录 %s 未创建：%v", sub, err)
+		}
+	}
+	binds := dockerClient.lastConfig["HostConfig"].(map[string]any)["Binds"].([]string)
+	joined := strings.Join(binds, "\n")
+	if !strings.Contains(joined, "instances/"+created.UUID+"/outputs") || !strings.Contains(joined, "models:/data/models:ro") {
+		t.Fatalf("挂载异常：%v", binds)
+	}
+
+	// 默认删除保留 workspace，链接目录清理。
+	if err := manager.Delete(context.Background(), "iso-01", true, false); err != nil {
+		t.Fatalf("删除失败：%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "instances", created.UUID, "outputs")); err != nil {
+		t.Fatal("默认删除必须保留 workspace 数据")
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "instance-links", created.UUID)); !os.IsNotExist(err) {
+		t.Fatal("链接目录应随删除清理")
+	}
+
+	// 重建复用孤儿 workspace。
+	manager.SetWorkspaceReuse(func(name string) string {
+		if name == "iso-01" {
+			return created.UUID
+		}
+		return ""
+	})
+	dockerClient.containers = nil
+	rebuilt, err := manager.Create(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("重建失败：%v", err)
+	}
+	if rebuilt.UUID != created.UUID {
+		t.Fatalf("重建应沿用 UUID：%s → %s", created.UUID, rebuilt.UUID)
+	}
+
+	// 彻底删除。
+	if err := manager.Delete(context.Background(), "iso-01", true, true); err != nil {
+		t.Fatalf("彻底删除失败：%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "instances", created.UUID)); !os.IsNotExist(err) {
+		t.Fatal("purge 应删除 workspace 全部数据")
 	}
 }

@@ -2,6 +2,22 @@
 
 所有重要变更均记录于此。详细内容见 `context/changes/`。
 
+## 0.0.9.7 — 2026-11-11（实例数据隔离与历史迁移）
+
+### 新增
+
+- **独立 workspace**：0.0.9.7 起新实例自动获得 `shared/instances/<UUID>/{outputs,workflows,user,config}` 独立挂载（模型仓库仍全局只读共享）；workspace 由后端按 UUID 生成，不接受任意宿主机路径；容器标签新增 `flowpilot.instance.uuid`。
+- **删除两档**：默认「删除实例，保留数据」（容器与链接目录清理，workspace 保留为孤儿可恢复）；`?purge=1`「彻底删除」（含全部实例数据）。删除弹窗双选项＋实例名确认。
+- **重建沿用**：同名实例重建自动复用历史孤儿记录的 UUID 与 workspace（数据不丢）。
+- **历史迁移**：`internal/migration` 新包——扫描（outputs/workflows 统计）、预览（文件数/空间/备份需求）、执行（自动备份→copy/move→数量字节校验，同名跳过不覆盖，失败中止保留源数据）。
+- **API**：`GET /api/v1/instances/workspaces`（清单含孤儿目录）、`GET /api/v1/migration/{scan,preview}`、`POST /api/v1/migration/run`、`DELETE /api/v1/instances/{name}?purge=`。
+- **UI**：系统管理新增「数据迁移」子页（MigrationPanel：扫描摘要→选实例→预览→复制/移动→结果报告）。
+
+### 验证
+
+- 后端 12 包全绿（migration 5 用例：扫描统计/预览校验/copy 保留源+备份+幂等跳过/move 清源/非法输入拒绝；instance 新增 workspace 生命周期用例：创建挂载/删除保留/重建沿用/purge 清理）。
+- 前端 lint＋build 通过；本机 E2E 新增 6 项断言（workspace UUID、删除保留、孤儿状态、重建沿用、purge 清理、迁移面板）；Spark 实机回归见 `context/changes/0.0.9.7.md`。
+
 ## 0.0.9.6 — 2026-11-10（认证、安全与操作审计）
 
 ### 新增

@@ -21,6 +21,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/hardware"
 	"github.com/ghoul02015/flowpilot/internal/image"
 	"github.com/ghoul02015/flowpilot/internal/instance"
+	"github.com/ghoul02015/flowpilot/internal/migration"
 	"github.com/ghoul02015/flowpilot/internal/model"
 	"github.com/ghoul02015/flowpilot/internal/server"
 	"github.com/ghoul02015/flowpilot/internal/storage"
@@ -63,6 +64,17 @@ func main() {
 	instanceLinksContainerDir := filepath.Join(dataDir, "instance-links")
 	instanceManager.SetModelLinks(filepath.Join(hostDataDir, "instance-links"), instanceLinksContainerDir, filepath.Join(dataDir, "models"))
 	modelManager.SetLinksRoot(instanceLinksContainerDir)
+	// 实例独立数据目录（0.0.9.7）：shared/instances/<uuid>/{outputs,workflows,user,config}。
+	workspacesContainerRoot := filepath.Join(dataDir, "instances")
+	instanceManager.SetWorkspaceRoot(filepath.Join(hostDataDir, "instances"), workspacesContainerRoot)
+	// 历史数据迁移：旧共享 outputs/workflows → 实例 workspace。
+	migrationManager := migration.NewManager(dataDir, filepath.Join(dataDir, "backups"), func(instanceName string) (string, bool) {
+		target, err := instanceManager.Get(context.Background(), instanceName)
+		if err != nil || target.UUID == "" {
+			return "", false
+		}
+		return filepath.Join(workspacesContainerRoot, target.UUID), true
+	})
 	imageManager := image.NewManager(dockerClient, filepath.Join(dataDir, "image-tasks.json"))
 	// 网络仓库路径同时作为导入白名单：「本地化」任务即把 NAS 模型复制进本地仓库。
 	importDirs := strings.Split(environment("FLOWPILOT_IMPORT_DIRS", "/data/import"), ":")
@@ -87,6 +99,15 @@ func main() {
 					slog.Info("数据底座迁移完成", "applied", applied)
 				}
 				dataStore = database.NewStore(db)
+				// 实例重建沿用历史 workspace（孤儿记录复用 UUID）。
+				instanceManager.SetOrphanMarker(func(name string) { dataStore.MarkOrphanByName(name) })
+				instanceManager.SetWorkspaceReuse(func(name string) string {
+					if uuidValue, ok := dataStore.FindOrphanByName(name); ok {
+						slog.Info("实例重建沿用历史 workspace", "name", name, "uuid", uuidValue)
+						return uuidValue
+					}
+					return ""
+				})
 				// 认证（0.0.9.6）：会话与审计存于数据底座；数据库不可用则认证不可用。
 				authManager = auth.NewManager(db, dataDir, os.Getenv("FLOWPILOT_INIT_TOKEN"))
 				authManager.CleanupStartup()
@@ -106,7 +127,7 @@ func main() {
 
 	httpServer := &http.Server{
 		Addr:    address,
-		Handler: server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imageManager, downloadManager, environment("FLOWPILOT_HOST_GATEWAY", "host.docker.internal"), catalogManager, storageManager, dataStore, backupDir, authManager, authDisabledFlag),
+		Handler: server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imageManager, downloadManager, environment("FLOWPILOT_HOST_GATEWAY", "host.docker.internal"), catalogManager, storageManager, dataStore, backupDir, authManager, authDisabledFlag, migrationManager, workspacesContainerRoot),
 		// 镜像导入/导出可能是 GB 级长连接；保留请求头超时，正文与响应不设置固定上限。
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,

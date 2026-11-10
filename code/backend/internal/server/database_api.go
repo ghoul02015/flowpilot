@@ -14,6 +14,7 @@ import (
 func snapshotOf(item instance.Instance) database.Snapshot {
 	return database.Snapshot{
 		Name:            item.Name,
+		UUID:            item.UUID,
 		ContainerID:     item.ContainerID,
 		ContainerName:   item.ContainerName,
 		Image:           item.Image,
@@ -107,12 +108,16 @@ func (h *Handler) recordCreate(spec instance.Spec, created instance.Instance) {
 	h.database.RecordCreate(snapshotOf(created), string(specJSON))
 }
 
-// recordDelete 是实例删除钩子。
-func (h *Handler) recordDelete(name string) {
+// recordDelete 是实例彻底删除钩子（移除记录）。
+func (h *Handler) recordDelete(name string, purge bool) {
 	if h.database == nil {
 		return
 	}
-	h.database.RecordDelete(name)
+	if purge {
+		h.database.RecordDelete(name)
+	} else {
+		h.database.MarkOrphanByName(name)
+	}
 }
 
 // syncAtStartup 启动时执行一次同步（导入 0.0.9.4 及之前版本的存量实例）。

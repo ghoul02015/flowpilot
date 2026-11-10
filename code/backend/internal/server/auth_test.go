@@ -27,7 +27,7 @@ func newAuthedHandler(t *testing.T) http.Handler {
 		t.Fatalf("迁移失败：%v", err)
 	}
 	manager := auth.NewManager(db, t.TempDir(), "test-init-token-0001")
-	return New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, nil, nil, nil, "", catalog.NewManager(""), nil, nil, "", manager, false)
+	return New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, nil, nil, nil, "", catalog.NewManager(""), nil, nil, "", manager, false, nil, "")
 }
 
 func TestAuthMiddlewareFullFlow(t *testing.T) {
