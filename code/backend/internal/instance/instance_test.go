@@ -331,3 +331,51 @@ func TestListIgnoresUnmanagedContainers(t *testing.T) {
 		t.Fatalf("unmanaged containers must be ignored: %+v", instances)
 	}
 }
+
+func TestCreateAddsNetworkStorageMounts(t *testing.T) {
+	fake := &fakeDocker{images: map[string]bool{"comfyui:test": true}}
+	manager := NewManager(fake, func() int { return 1 }, t.TempDir(), "comfyui:test", 8188, "", "", "")
+	var yamlBase string
+	manager.SetNetworkStorage("/host/shared/network",
+		func() bool { return true },
+		func(name, basePath string) (string, error) {
+			yamlBase = basePath
+			return "/host/shared/network-extra/" + name + ".yaml", nil
+		},
+		func(string) {},
+	)
+	if _, err := manager.Create(context.Background(), Spec{Name: "net-01", Image: "comfyui:test", GPU: -1, Port: 18200}); err != nil {
+		t.Fatal(err)
+	}
+	hostConfig, ok := fake.lastConfig["HostConfig"].(map[string]any)
+	if !ok {
+		t.Fatal("缺少 HostConfig")
+	}
+	binds, ok := hostConfig["Binds"].([]string)
+	if !ok {
+		t.Fatal("缺少 Binds")
+	}
+	joined := strings.Join(binds, "\n")
+	if yamlBase != "/data" {
+		t.Fatalf("basePath 应为 modelsTarget 的父目录 /data，实际 %s", yamlBase)
+	}
+	if !strings.Contains(joined, "/host/shared/network:/data/models-net:ro") {
+		t.Fatalf("缺少网络仓库挂载：%s", joined)
+	}
+	if !strings.Contains(joined, "/host/shared/network-extra/net-01.yaml:/data/extra_model_paths.yaml:ro") {
+		t.Fatalf("缺少 extra_model_paths 挂载：%s", joined)
+	}
+}
+
+func TestCreateWithoutNetworkStorageKeepsThreeMounts(t *testing.T) {
+	fake := &fakeDocker{images: map[string]bool{"comfyui:test": true}}
+	manager := NewManager(fake, func() int { return 1 }, t.TempDir(), "comfyui:test", 8188, "", "", "")
+	manager.SetNetworkStorage("/host/shared/network", func() bool { return false }, nil, nil)
+	if _, err := manager.Create(context.Background(), Spec{Name: "plain-01", Image: "comfyui:test", GPU: -1, Port: 18201}); err != nil {
+		t.Fatal(err)
+	}
+	binds := fake.lastConfig["HostConfig"].(map[string]any)["Binds"].([]string)
+	if len(binds) != 3 {
+		t.Fatalf("未启用网络存储时应保持 3 个挂载，实际 %d", len(binds))
+	}
+}

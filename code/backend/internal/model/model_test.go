@@ -119,3 +119,59 @@ func TestScanCacheAndDeleteInvalidation(t *testing.T) {
 		t.Fatalf("删除后应立即看到最新仓库：%+v", afterDelete.Files)
 	}
 }
+
+func TestScanMergesNetworkRepository(t *testing.T) {
+	local := t.TempDir()
+	network := t.TempDir()
+	writeFile(t, local, "checkpoints/local.safetensors", 4)
+	writeFile(t, network, "loras/nas.safetensors", 8)
+	manager := NewManager(local)
+	manager.SetNetworkSource(func() (string, bool) { return network, true })
+	report, err := manager.Scan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Network == nil || !report.Network.Available {
+		t.Fatal("网络仓库应可用")
+	}
+	if len(report.Files) != 2 {
+		t.Fatalf("应合并两个仓库的文件，实际 %d", len(report.Files))
+	}
+	for _, file := range report.Files {
+		if file.Node != "本机" {
+			t.Fatal("Node 应恒为本机")
+		}
+		switch file.Path {
+		case "checkpoints/local.safetensors":
+			if file.Origin != "local" {
+				t.Fatal("本地文件 origin 应为 local")
+			}
+		case "loras/nas.safetensors":
+			if file.Origin != "network" {
+				t.Fatal("NAS 文件 origin 应为 network")
+			}
+		default:
+			t.Fatalf("未知文件 %s", file.Path)
+		}
+	}
+	if report.TotalBytes != 4 {
+		t.Fatalf("TotalBytes 只应统计本地仓库，实际 %d", report.TotalBytes)
+	}
+}
+
+func TestNetworkUnavailableDoesNotFailScan(t *testing.T) {
+	local := t.TempDir()
+	writeFile(t, local, "vae/v.safetensors", 2)
+	manager := NewManager(local)
+	manager.SetNetworkSource(func() (string, bool) { return filepath.Join(t.TempDir(), "missing"), true })
+	report, err := manager.Scan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Network == nil || report.Network.Available {
+		t.Fatal("网络仓库缺失应标记为不可用而非报错")
+	}
+	if len(report.Files) != 1 {
+		t.Fatal("本地仓库文件不应受网络仓库影响")
+	}
+}

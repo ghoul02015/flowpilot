@@ -41,7 +41,7 @@ export default function App() {
   // 同步镜像 busyIds，避免同一帧内双击穿透渲染快照的 includes 检查。
   const busyRef = useRef<Set<string>>(new Set())
   // 界面版本号跟随后端 /health，避免硬编码漂移；离线时回退常量。
-  const [backendVersion, setBackendVersion] = useState('0.0.9.1')
+  const [backendVersion, setBackendVersion] = useState('0.0.9.2')
 
   const realMode = realInstances !== null
   const realModelMode = realModels !== null
@@ -205,14 +205,16 @@ export default function App() {
           createdAt: new Date(task.createdAt).toLocaleString('zh-CN', { hour12: false }),
         } satisfies ModelItem)),
       ...realModels.files.map((file) => ({
-        id: file.path,
+        id: `${file.origin}:${file.path}`,
         name: file.name,
         type: file.type,
         size: formatBytes(file.sizeBytes),
-        source: '共享仓库',
+        source: file.origin === 'network' ? '网络存储' : '本地仓库',
         status: 'ready' as const,
         progress: 100,
         createdAt: new Date(file.modifiedAt).toLocaleString('zh-CN', { hour12: false }),
+        origin: file.origin,
+        rawPath: file.path,
       })),
     ]
     : []
@@ -348,15 +350,37 @@ export default function App() {
         })
       return
     }
+    if (id.startsWith('network:')) {
+      toast.error('网络存储为只读来源', { description: '如需下线该模型，请在 NAS 侧操作；平台内可用「本地化」复制到本地仓库后再管理。' })
+      return
+    }
     if (!requireBackend('删除模型')) return
-    deleteModelApi(id)
+    const rawPath = id.startsWith('local:') ? id.slice('local:'.length) : id
+    deleteModelApi(rawPath)
       .then(() => {
-        toast.success('模型文件已删除', { description: id })
+        toast.success('模型文件已删除', { description: rawPath })
         void refreshModels()
       })
       .catch((error: unknown) => {
         toast.error('删除模型失败', { description: error instanceof Error ? error.message : '请求失败' })
         void refreshModels()
+      })
+  }
+
+  // 本地化：把网络存储（NAS）中的模型复制进本地仓库，实例加载走本机高速盘。
+  function localizeModel(id: string) {
+    if (!requireBackend('本地化模型')) return
+    const file = realModels?.files.find((item) => `network:${item.path}` === id)
+    const networkRoot = realModels?.network?.root
+    if (!file || !networkRoot) return
+    const sourcePath = `${networkRoot}/${file.path}`
+    createImportApi({ path: sourcePath, category: file.category, name: file.name })
+      .then((task) => {
+        toast.success('本地化任务已创建', { description: `${task.fileName} → ${task.path}（复制到本地仓库）` })
+        void refreshDownloads()
+      })
+      .catch((error: unknown) => {
+        toast.error('创建本地化任务失败', { description: error instanceof Error ? error.message : '请求失败' })
       })
   }
 
@@ -423,7 +447,7 @@ export default function App() {
       <main className="mx-auto max-w-[1600px] p-4 md:p-8">
         {page === 'dashboard' && <Dashboard instances={displayInstances} models={displayModels} tasks={displayTasks} gpuCount={gpuNames.length} gpuSummary={hostInfo.gpuSummary} modelsTotal={realModels ? formatBytes(realModels.totalBytes) : undefined} onNavigate={navigate} onCreate={openCreateDialog} onAddModel={openAddModelDialog} />}
         {page === 'instances' && <Instances instances={displayInstances} gpuNames={gpuNames} realMode={realMode} busyIds={busyIds} onCreate={openCreateDialog} onAction={instanceAction} onDelete={deleteInstance} />}
-        {page === 'models' && <Models models={displayModels} realMode={realModelMode} modelsRoot={realModels?.root} totalBytes={realModels?.totalBytes} hasRunningInstances={displayInstances.some((item) => item.status === 'running')} onAdd={openAddModelDialog} onPause={pauseModel} onDelete={deleteModel} />}
+        {page === 'models' && <Models models={displayModels} realMode={realModelMode} modelsRoot={realModels?.root} totalBytes={realModels?.totalBytes} network={realModels?.network} runningInstanceNames={displayInstances.filter((item) => item.status === 'running').map((item) => item.name)} onAdd={openAddModelDialog} onPause={pauseModel} onDelete={deleteModel} onLocalize={localizeModel} />}
         {page === 'tasks' && <Tasks tasks={displayTasks} onAction={taskAction} />}
         {page === 'system' && <System instances={displayInstances} models={displayModels} tasks={displayTasks} version={backendVersion} />}
       </main>

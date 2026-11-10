@@ -2,8 +2,8 @@
 
 面向 GPU 服务器的轻量化 ComfyUI 一体化部署与管理平台。
 
-- 当前版本：`0.0.9.1`
-- 当前阶段：实例管理（真实 Docker 生命周期＋GPU 分配）、模型中心（真实仓库扫描／删除）、镜像预置（检查＋一键拉取＋默认镜像自动探测与挂载自适应）、下载引擎（URL 下载＋本地导入＋断点续传＋SHA256 校验）已落地，任务持久化与 ComfyUI 制图状态代理上线；界面无演示数据、完全由真实后端驱动；模型市场已支持 19 条主流推荐目录＋ModelScope／HF 双源在线搜索；DGX Spark 实测完成"安装→建实例→下模型→出图"全闭环；实例镜像模块支持 ComfyUI/其他镜像分类、构建/拉取双弹窗、CPU 架构/GPU 配方/在线 ComfyUI 版本等构建参数、一键构建脚本、进度百分比、日志入口和参数简述；0.0.9.1 起镜像构建/拉取改为有界并发任务列表（2 构建＋1 拉取并行、排队、停止、删除记录、持久化中断标记、悬挂镜像自动清理、构建缓存手动清理与磁盘水位检查）。
+- 当前版本：`0.0.9.2`
+- 当前阶段：实例管理（真实 Docker 生命周期＋GPU 分配）、模型中心（真实仓库扫描／删除）、镜像预置（检查＋一键拉取＋默认镜像自动探测与挂载自适应）、下载引擎（URL 下载＋本地导入＋断点续传＋SHA256 校验）已落地，任务持久化与 ComfyUI 制图状态代理上线；界面无演示数据、完全由真实后端驱动；模型市场已支持 19 条主流推荐目录＋ModelScope／HF 双源在线搜索；DGX Spark 实测完成"安装→建实例→下模型→出图"全闭环；实例镜像模块支持 ComfyUI/其他镜像分类、构建/拉取双弹窗、CPU 架构/GPU 配方/在线 ComfyUI 版本等构建参数、一键构建脚本、进度百分比、日志入口和参数简述；0.0.9.2 起镜像构建/拉取改为有界并发任务列表（2 构建＋1 拉取并行、排队、停止、删除记录、持久化中断标记、悬挂镜像自动清理、构建缓存手动清理与磁盘水位检查）。
 - 核心目标：一次安装、Web 管理、Docker 部署、模型共享、数据持久化。
 
 ## 运行本机 Demo
@@ -13,7 +13,7 @@ cd code
 ./scripts/demo-docker.sh up
 ```
 
-访问 `http://localhost:18080`。容器名为 `flowpilot-web-demo`，镜像为 `flowpilot-web:0.0.9.1`。
+访问 `http://localhost:18080`。容器名为 `flowpilot-web-demo`，镜像为 `flowpilot-web:0.0.9.2`。
 
 ## 离线安装与一键卸载（生产交付）
 
@@ -22,7 +22,7 @@ cd code
 code/scripts/package-release.sh
 
 # 目标服务器上安装（用户目录、无需 sudo、不修改系统包）
-tar -xzf flowpilot-0.0.9.1-arm64.tar.gz -C /tmp/flowpilot-install --strip-components=1
+tar -xzf flowpilot-0.0.9.2-arm64.tar.gz -C /tmp/flowpilot-install --strip-components=1
 /tmp/flowpilot-install/scripts/install.sh
 
 # 一键卸载（只删除 FlowPilot 容器、镜像和用户目录，不碰其他业务容器）

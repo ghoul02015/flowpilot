@@ -177,6 +177,10 @@ export interface ModelFile {
   path: string
   sizeBytes: number
   modifiedAt: string
+  /** local＝本地仓库（可写）；network＝网络存储（NAS 只读）。 */
+  origin: 'local' | 'network'
+  /** 集群预留字段，当前恒为「本机」。 */
+  node: string
 }
 
 export interface ModelReport {
@@ -184,6 +188,30 @@ export interface ModelReport {
   files: ModelFile[]
   totalBytes: number
   scannedAt: string
+  network?: { root: string; available: boolean }
+}
+
+// 网络存储（NAS）配置视图。
+export interface NetworkStorageView {
+  enabled: boolean
+  type: 'nfs' | 'smb'
+  address: string
+  remotePath: string
+  mountPoint: string
+  containerPath: string
+  detected: boolean
+}
+
+export async function getNetworkStorage(): Promise<NetworkStorageView> {
+  return getJSON<NetworkStorageView>('/api/v1/storage/network', AbortSignal.timeout(5000))
+}
+
+export async function saveNetworkStorage(config: { enabled: boolean; type: string; address: string; remotePath: string }): Promise<NetworkStorageView> {
+  return sendJSON<NetworkStorageView>('PUT', '/api/v1/storage/network', config)
+}
+
+export function networkMountScriptURL(): string {
+  return '/api/v1/storage/network/mount-script'
 }
 
 export interface ImageCheckResponse {

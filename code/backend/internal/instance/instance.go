@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -101,6 +102,13 @@ type Manager struct {
 	modelsTarget    string
 	outputsTarget   string
 	workflowsTarget string
+
+	// 网络存储（NAS 只读仓库）：启用且已挂载时，实例追加网络仓库与
+	// extra_model_paths.yaml 两个 bind 挂载，ComfyUI 原生读取，无需拷贝。
+	netActive   func() bool
+	netHostDir  string
+	yamlWriter  func(name, basePath string) (string, error)
+	yamlCleaner func(name string)
 }
 
 // NewManager 创建实例管理器；hostDataDir 是宿主机共享数据目录（绑定挂载用宿主机路径），
@@ -128,6 +136,15 @@ func NewManager(dockerClient DockerAPI, gpuCount GPUCounter, hostDataDir, defaul
 		outputsTarget:   outputsTarget,
 		workflowsTarget: workflowsTarget,
 	}
+}
+
+// SetNetworkStorage 注册网络存储挂载钩子；active 为 true 时新实例自动获得
+// 网络仓库（只读）与 extra_model_paths.yaml 挂载。
+func (m *Manager) SetNetworkStorage(hostDir string, active func() bool, writer func(name, basePath string) (string, error), cleaner func(name string)) {
+	m.netHostDir = hostDir
+	m.netActive = active
+	m.yamlWriter = writer
+	m.yamlCleaner = cleaner
 }
 
 // Defaults 返回创建表单的推荐默认值。
@@ -206,15 +223,29 @@ func (m *Manager) Create(ctx context.Context, spec Spec) (Instance, error) {
 		labelWorkflowsTarget: spec.WorkflowsTarget,
 	}
 	portKey := fmt.Sprintf("%d/tcp", spec.ContainerPort)
+	binds := []string{
+		// 模型仓库只读共享（PRD 10.1）：实例可读取全部模型，
+		// 但不能在容器内改动或删除共享文件。
+		m.hostDataDir + "/models:" + spec.ModelsTarget + ":ro",
+		m.hostDataDir + "/workflows:" + spec.WorkflowsTarget,
+		m.hostDataDir + "/outputs:" + spec.OutputsTarget,
+	}
+	// 网络存储已启用并完成挂载时：追加 NAS 只读仓库与 extra_model_paths.yaml，
+	// ComfyUI 原生把网络仓库合并为模型来源，模型无需拷贝到本机。
+	if m.netActive != nil && m.netActive() && m.yamlWriter != nil {
+		basePath := path.Dir(spec.ModelsTarget)
+		hostFile, err := m.yamlWriter(spec.Name, basePath)
+		if err != nil {
+			return Instance{}, fmt.Errorf("生成网络模型路径配置失败：%w", err)
+		}
+		binds = append(binds,
+			m.netHostDir+":"+basePath+"/models-net:ro",
+			hostFile+":"+basePath+"/extra_model_paths.yaml:ro",
+		)
+	}
 	hostConfig := map[string]any{
 		"PortBindings": map[string]any{portKey: []map[string]string{{"HostPort": strconv.Itoa(spec.Port)}}},
-		"Binds": []string{
-			// 模型仓库只读共享（PRD 10.1）：实例可读取全部模型，
-			// 但不能在容器内改动或删除共享文件。
-			m.hostDataDir + "/models:" + spec.ModelsTarget + ":ro",
-			m.hostDataDir + "/workflows:" + spec.WorkflowsTarget,
-			m.hostDataDir + "/outputs:" + spec.OutputsTarget,
-		},
+		"Binds":        binds,
 	}
 	if spec.AutoStart {
 		hostConfig["RestartPolicy"] = map[string]string{"Name": "unless-stopped"}
@@ -358,6 +389,9 @@ func (m *Manager) Delete(ctx context.Context, name string, force bool) error {
 	}
 	if target.Status == "running" && !force {
 		return &ValidationError{Message: "实例正在运行，请先停止或确认强制删除"}
+	}
+	if m.yamlCleaner != nil {
+		m.yamlCleaner(name)
 	}
 	return m.docker.RemoveContainer(ctx, target.ContainerID, force)
 }

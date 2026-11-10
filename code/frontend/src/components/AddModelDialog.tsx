@@ -217,21 +217,20 @@ function MarketPanel({ onMarketDownload, onOnlineDownload, existingPaths }: { on
           <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
             {filtered.map((entry) => {
               const taken = occupied.has(`${entry.category}/${entry.fileName}`) || (entry.category === 'other' && occupied.has(entry.fileName))
-              return <div key={entry.id} className="rounded-lg border border-slate-200 p-3" data-testid={`market-entry-${entry.id}`}>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2"><span className="text-sm font-semibold text-slate-900">{entry.name}</span><span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">{entry.typeLabel}</span><span className="text-xs text-slate-500">{formatBytes(entry.sizeBytes)}</span>{!entry.reachable && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800">暂不可达</span>}</div>
-                    {/* 显示名与 ComfyUI 官方模板引用的文件名保持一致 */}
-                    <p className="mt-1 truncate font-mono text-[11px] text-slate-500" title={`${entry.repo} · ${entry.filePath}`}>{entry.fileName}</p>
-                    <p className="mt-1 text-xs leading-5 text-slate-600">{entry.description}</p>
-                  </div>
-                  <div className="flex shrink-0 flex-col items-end gap-1.5">
-                    {taken
-                      ? <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700"><Check className="size-3.5" />已入库</span>
-                      : <button type="button" className="btn-primary px-3 py-1.5 text-xs" aria-label={`下载 ${entry.name}`} onClick={() => onMarketDownload(entry, false)}><CloudDownload className="size-3.5" />下载</button>}
-                    {!taken && entry.fallbackUrl && <button type="button" className="text-[11px] text-slate-500 underline decoration-dotted hover:text-teal-700" aria-label={`使用 HF 镜像下载 ${entry.name}`} onClick={() => onMarketDownload(entry, true)}>HF 镜像{entry.fallbackGated ? '（需授权）' : ''}</button>}
-                  </div>
+              return <div key={entry.id} className="rounded-lg border border-slate-200 px-3 py-2.5" data-testid={`market-entry-${entry.id}`}>
+                {/* 单行信息层级：名称＋类型徽章＋大小＋可达性一眼扫读；描述默认收起一行 */}
+                <div className="flex items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-900" title={entry.name}>{entry.name}</span>
+                  <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">{entry.typeLabel}</span>
+                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${entry.reachable ? 'bg-teal-50 text-teal-700' : 'bg-amber-100 text-amber-800'}`}>{formatBytes(entry.sizeBytes)} · {entry.reachable ? '可达' : '暂不可达'}</span>
+                  {taken
+                    ? <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700"><Check className="size-3.5" />已入库</span>
+                    : <button type="button" className="btn-primary shrink-0 px-3 py-1.5 text-xs" aria-label={`下载 ${entry.name}`} onClick={() => onMarketDownload(entry, false)}><CloudDownload className="size-3.5" />下载</button>}
                 </div>
+                {/* 显示名与 ComfyUI 官方模板引用的文件名保持一致 */}
+                <p className="mt-1 truncate font-mono text-[11px] text-slate-500" title={`${entry.repo} · ${entry.filePath}`}>{entry.fileName}</p>
+                <p className="mt-0.5 truncate text-xs text-slate-500" title={entry.description}>{entry.description}</p>
+                {!taken && entry.fallbackUrl && <button type="button" className="mt-1 text-[11px] text-slate-500 underline decoration-dotted hover:text-teal-700" aria-label={`使用 HF 镜像下载 ${entry.name}`} onClick={() => onMarketDownload(entry, true)}>HF 镜像备选{entry.fallbackGated ? '（需授权）' : ''}</button>}
               </div>
             })}
             {filtered.length === 0 && <p className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">没有匹配的模型。可切换到 ModelScope／HF 镜像在线搜索，或调整筛选条件。</p>}
@@ -263,18 +262,23 @@ function MarketPanel({ onMarketDownload, onOnlineDownload, existingPaths }: { on
               {files === 'loading' && <div className="flex items-center justify-center gap-2 py-4 text-xs text-slate-500"><LoaderCircle className="size-3.5 animate-spin" />正在读取仓库文件…</div>}
               {files === 'error' && <p className="py-3 text-center text-xs text-rose-600">文件列表读取失败，请稍后重试。</p>}
               {Array.isArray(files) && files.length === 0 && <p className="py-3 text-center text-xs text-slate-500">仓库中没有可下载的权重文件（.safetensors 等）。</p>}
-              {Array.isArray(files) && visibleFiles.map((file) => {
-                const taken = occupied.has(`${file.category}/${file.name}`)
-                return <div key={file.path} className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-slate-50">
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-mono text-[11px] text-slate-800" title={file.path}>{file.name}</span>
-                    <span className="mt-0.5 flex items-center gap-2 text-[10px] text-slate-500"><span className="rounded-full bg-slate-100 px-1.5 py-px">{categoryLabel(file.category)}</span>{formatBytes(file.sizeBytes)}</span>
-                  </span>
-                  {taken
-                    ? <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-emerald-700"><Check className="size-3" />已入库</span>
-                    : <button type="button" className="btn-primary shrink-0 px-2.5 py-1 text-[11px]" aria-label={`下载 ${file.name}`} onClick={() => onOnlineDownload(file)}><CloudDownload className="size-3" />下载</button>}
-                </div>
-              })}
+              {Array.isArray(files) && visibleFiles.length > 0 && <div className="space-y-2">
+                {[...new Set(visibleFiles.map((file) => file.category))].sort().map((category) => <div key={category}>
+                  <div className="px-2 pt-1 pb-0.5 text-[10px] font-semibold tracking-wide text-slate-400 uppercase">{categoryLabel(category)} · {[...visibleFiles].filter((file) => file.category === category).length} 个</div>
+                  {[...visibleFiles].filter((file) => file.category === category).sort((a, b) => b.sizeBytes - a.sizeBytes).map((file) => {
+                    const taken = occupied.has(`${file.category}/${file.name}`)
+                    return <div key={file.path} className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-slate-50">
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-mono text-[11px] text-slate-800" title={file.path}>{file.name}</span>
+                      </span>
+                      <span className="shrink-0 text-[10px] font-medium text-slate-500">{formatBytes(file.sizeBytes)}</span>
+                      {taken
+                        ? <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-emerald-700"><Check className="size-3" />已入库</span>
+                        : <button type="button" className="btn-primary shrink-0 px-2.5 py-1 text-[11px]" aria-label={`下载 ${file.name}`} onClick={() => onOnlineDownload(file)}><CloudDownload className="size-3" />下载</button>}
+                    </div>
+                  })}
+                </div>)}
+              </div>}
               {Array.isArray(files) && files.length > 0 && visibleFiles.length === 0 && <p className="py-3 text-center text-xs text-slate-500">该仓库没有「{type}」类型的文件。</p>}
             </div>}
           </div>

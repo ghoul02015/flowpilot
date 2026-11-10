@@ -37,6 +37,10 @@ export interface ModelItem {
   status: ModelStatus
   progress: number
   createdAt: string
+  /** 来源仓库：local 本地（可删除）｜ network 网络存储（只读，可本地化）。下载任务条目无此字段。 */
+  origin?: 'local' | 'network'
+  /** 仓库相对路径（删除/本地化 API 用）。 */
+  rawPath?: string
 }
 
 export interface TaskItem {

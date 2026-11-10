@@ -3,9 +3,10 @@ import { CheckCircle2, CircleAlert, Download, FileJson, RefreshCw, ShieldCheck }
 import { toast } from 'sonner'
 import { formatBytes, getHardware, getRuntimeSnapshot, type HardwareReport, type RuntimeSnapshot } from '@/api'
 import { PageHeader, Panel, PanelHeader } from '@/components/common'
+import { NetworkStoragePanel } from '@/components/NetworkStoragePanel'
 import type { Instance, ModelItem, TaskItem } from '@/types'
 
-type SystemTab = 'environment' | 'about'
+type SystemTab = 'environment' | 'storage' | 'about'
 type RuntimeView = { status: 'loading' | 'connected' | 'fallback'; snapshot?: RuntimeSnapshot; error?: string }
 
 interface Props {
@@ -68,7 +69,7 @@ export function System({ instances, models, tasks, version }: Props) {
     toast.success('诊断包已导出', { description: '包含后端、Docker、硬件采集与业务数据摘要，不含密码或令牌。' })
   }
 
-  const tabs: { key: SystemTab; label: string }[] = [{ key: 'environment', label: '环境检测' }, { key: 'about', label: '诊断与关于' }]
+  const tabs: { key: SystemTab; label: string }[] = [{ key: 'environment', label: '环境检测' }, { key: 'storage', label: '网络存储' }, { key: 'about', label: '诊断与关于' }]
   const hostName = runtime.snapshot?.engine.info.Name ?? hardware?.hostName ?? '未知主机'
   return <>
     <PageHeader eyebrow="SYSTEM" title="系统管理" description="查看主机环境、Docker 与硬件采集状态，导出用于售后排障的脱敏诊断信息。" />
@@ -93,6 +94,7 @@ export function System({ instances, models, tasks, version }: Props) {
       <div className="border-t border-slate-200 px-5 py-4 text-xs leading-5 text-slate-500">管理端口建议仅在管理网开放，不要将 FlowPilot 管理台直接暴露到公网；当前版本无认证机制。</div>
     </Panel>}
 
+    {tab === 'storage' && <NetworkStoragePanel />}
     {tab === 'about' && <div className="grid gap-5 lg:grid-cols-2"><Panel><PanelHeader title="诊断信息" description="导出环境、实例、模型和任务摘要，不包含密码或令牌。" /><div className="p-5"><FileJson className="size-8 text-teal-700" /><h3 className="mt-4 font-semibold text-slate-900">FlowPilot 诊断包</h3><p className="mt-2 text-sm leading-6 text-slate-600">用于售后定位安装、Docker、GPU 和任务问题。诊断包全部来自真实后端与硬件采集数据。</p><button type="button" className="btn-primary mt-5" onClick={exportDiagnostics}><Download className="size-4" />导出诊断包</button></div></Panel><Panel><PanelHeader title="关于 FlowPilot" description="慧浪智算 GPU 服务器配套软件" /><div className="p-5"><div className="flex items-center gap-3"><ShieldCheck className="size-8 text-teal-700" /><div><div className="font-semibold text-slate-900">慧浪智算·FlowPilot</div><div className="mt-1 text-sm text-slate-500">ComfyUI 一体化部署与管理平台</div></div></div><dl className="mt-5 space-y-3 text-sm"><div className="flex justify-between"><dt className="text-slate-500">项目版本</dt><dd className="font-mono font-medium">{version}</dd></div><div className="flex justify-between"><dt className="text-slate-500">运行模式</dt><dd>Go 后端＋Web 管理台</dd></div><div className="flex justify-between"><dt className="text-slate-500">界面语言</dt><dd>简体中文</dd></div><div className="flex justify-between"><dt className="text-slate-500">数据方式</dt><dd>真实 Docker API＋硬件采集＋共享仓库</dd></div></dl></div></Panel></div>}
   </>
 }

@@ -22,9 +22,10 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/image"
 	"github.com/ghoul02015/flowpilot/internal/instance"
 	"github.com/ghoul02015/flowpilot/internal/model"
+	"github.com/ghoul02015/flowpilot/internal/storage"
 )
 
-const Version = "0.0.9.1"
+const Version = "0.0.9.2"
 
 type Handler struct {
 	docker       *docker.Client
@@ -35,17 +36,19 @@ type Handler struct {
 	images       *image.Manager
 	downloads    *download.Manager
 	catalog      *catalog.Manager
+	storage      *storage.Manager
 	comfyGateway string
 	comfyClient  *http.Client
 }
 
-func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imageManager *image.Manager, downloadManager *download.Manager, comfyGateway string, catalogManager *catalog.Manager) http.Handler {
+func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imageManager *image.Manager, downloadManager *download.Manager, comfyGateway string, catalogManager *catalog.Manager, storageManager *storage.Manager) http.Handler {
 	if comfyGateway == "" {
 		comfyGateway = "host.docker.internal"
 	}
 	handler := &Handler{
 		docker: dockerClient, staticDir: staticDir, hardware: hardwareCollector, instances: instanceManager,
 		models: modelManager, images: imageManager, downloads: downloadManager, catalog: catalogManager,
+		storage:      storageManager,
 		comfyGateway: comfyGateway,
 		// ComfyUI 状态探测是秒级接口，必须有整体超时，避免拖住轮询。
 		comfyClient: &http.Client{Timeout: 4 * time.Second},
@@ -70,6 +73,9 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("GET /api/v1/sources/status", handler.sourcesStatus)
 	mux.HandleFunc("GET /api/v1/models/online/search", handler.onlineSearch)
 	mux.HandleFunc("GET /api/v1/models/online/files", handler.onlineFiles)
+	mux.HandleFunc("GET /api/v1/storage/network", handler.getNetworkStorage)
+	mux.HandleFunc("PUT /api/v1/storage/network", handler.putNetworkStorage)
+	mux.HandleFunc("GET /api/v1/storage/network/mount-script", handler.networkMountScript)
 	mux.HandleFunc("GET /api/v1/images/check", handler.checkImage)
 	mux.HandleFunc("GET /api/v1/images/local", handler.localImages)
 	mux.HandleFunc("DELETE /api/v1/images/local", handler.deleteLocalImage)
@@ -288,6 +294,59 @@ func (h *Handler) listModels(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, report)
+}
+
+// getNetworkStorage 返回网络存储配置与挂载探测状态。
+func (h *Handler) getNetworkStorage(w http.ResponseWriter, _ *http.Request) {
+	if h.storage == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "网络存储未启用"})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.storage.View())
+}
+
+// putNetworkStorage 校验并保存网络存储配置。
+func (h *Handler) putNetworkStorage(w http.ResponseWriter, r *http.Request) {
+	if h.storage == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "网络存储未启用"})
+		return
+	}
+	var config storage.Config
+	if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求体不是合法 JSON"})
+		return
+	}
+	if err := h.storage.Save(config); err != nil {
+		var validationError *storage.ValidationError
+		if errors.As(err, &validationError) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationError.Error()})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "保存网络存储配置失败", "detail": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.storage.View())
+}
+
+// networkMountScript 生成宿主机一键挂载脚本（附件下载）。
+func (h *Handler) networkMountScript(w http.ResponseWriter, _ *http.Request) {
+	if h.storage == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "网络存储未启用"})
+		return
+	}
+	script, err := h.storage.MountScript()
+	if err != nil {
+		var validationError *storage.ValidationError
+		if errors.As(err, &validationError) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationError.Error()})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "生成挂载脚本失败", "detail": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "text/x-shellscript; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="mount-network-models.sh"`)
+	_, _ = w.Write([]byte(script))
 }
 
 func (h *Handler) modelCatalog(w http.ResponseWriter, _ *http.Request) {
