@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ghoul02015/flowpilot/internal/auth"
 	"github.com/ghoul02015/flowpilot/internal/catalog"
 	"github.com/ghoul02015/flowpilot/internal/database"
 	"github.com/ghoul02015/flowpilot/internal/docker"
@@ -26,7 +27,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/storage"
 )
 
-const Version = "0.0.9.5"
+const Version = "0.0.9.6"
 
 type Handler struct {
 	docker       *docker.Client
@@ -40,11 +41,13 @@ type Handler struct {
 	storage      *storage.Manager
 	database     *database.Store
 	backupDir    string
+	auth         *auth.Manager
+	authDisabled bool
 	comfyGateway string
 	comfyClient  *http.Client
 }
 
-func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imageManager *image.Manager, downloadManager *download.Manager, comfyGateway string, catalogManager *catalog.Manager, storageManager *storage.Manager, dataStore *database.Store, backupDir string) http.Handler {
+func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imageManager *image.Manager, downloadManager *download.Manager, comfyGateway string, catalogManager *catalog.Manager, storageManager *storage.Manager, dataStore *database.Store, backupDir string, authManager *auth.Manager, authDisabled bool) http.Handler {
 	if comfyGateway == "" {
 		comfyGateway = "host.docker.internal"
 	}
@@ -54,6 +57,8 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 		storage:      storageManager,
 		database:     dataStore,
 		backupDir:    backupDir,
+		auth:         authManager,
+		authDisabled: authDisabled,
 		comfyGateway: comfyGateway,
 		// ComfyUI 状态探测是秒级接口，必须有整体超时，避免拖住轮询。
 		comfyClient: &http.Client{Timeout: 4 * time.Second},
@@ -67,6 +72,16 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", handler.health)
+	// 认证与初始化（0.0.9.6）。
+	mux.HandleFunc("GET /api/v1/auth/setup/status", handler.setupStatus)
+	mux.HandleFunc("POST /api/v1/auth/setup", handler.setupSubmit)
+	mux.HandleFunc("POST /api/v1/auth/login", handler.loginSubmit)
+	mux.HandleFunc("POST /api/v1/auth/logout", handler.logoutSubmit)
+	mux.HandleFunc("GET /api/v1/auth/session", handler.currentSession)
+	mux.HandleFunc("PUT /api/v1/auth/password", handler.changePassword)
+	mux.HandleFunc("GET /api/v1/auth/sessions", handler.listSessions)
+	mux.HandleFunc("DELETE /api/v1/auth/sessions/{id}", handler.revokeSession)
+	mux.HandleFunc("GET /api/v1/audit/logs", handler.auditLogsPage)
 	mux.HandleFunc("GET /api/v1/system/info", handler.systemInfo)
 	mux.HandleFunc("GET /api/v1/hardware", handler.hardwareReport)
 	mux.HandleFunc("GET /api/v1/docker/info", handler.dockerInfo)
@@ -123,7 +138,7 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "API endpoint not found"})
 	})
 	mux.Handle("/", handler.spa())
-	return securityHeaders(mux)
+	return securityHeaders(handler.requireAuth(mux))
 }
 
 func (h *Handler) health(w http.ResponseWriter, _ *http.Request) {

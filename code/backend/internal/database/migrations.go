@@ -38,4 +38,39 @@ var Migrations = []Migration{
 			updated_at TEXT NOT NULL DEFAULT ''
 		);`,
 	},
+	{
+		Version: 2,
+		Name:    "auth-and-audit",
+		SQL: `CREATE TABLE IF NOT EXISTS users (
+			username TEXT PRIMARY KEY,
+			password_hash TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS sessions (
+			id TEXT PRIMARY KEY,
+			username TEXT NOT NULL,
+			csrf_token TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			last_seen_at TEXT NOT NULL,
+			idle_expires_at TEXT NOT NULL,
+			absolute_expires_at TEXT NOT NULL,
+			revoked INTEGER NOT NULL DEFAULT 0,
+			ip_hash TEXT NOT NULL DEFAULT '',
+			user_agent TEXT NOT NULL DEFAULT ''
+		);
+		CREATE INDEX IF NOT EXISTS idx_sessions_username ON sessions(username);
+		CREATE TABLE IF NOT EXISTS audit_logs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts TEXT NOT NULL,
+			actor TEXT NOT NULL,
+			action TEXT NOT NULL,
+			object TEXT NOT NULL DEFAULT '',
+			result TEXT NOT NULL,
+			ip_hash TEXT NOT NULL DEFAULT '',
+			request_id TEXT NOT NULL DEFAULT '',
+			detail TEXT NOT NULL DEFAULT ''
+		);
+		CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_logs(ts);`,
+	},
 }

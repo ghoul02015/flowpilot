@@ -33,8 +33,38 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.9.5') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.9.6') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
+
+  // 认证（0.0.9.6）：未登录先看到登录页 → 初始化 → 登录 → 会话恢复。
+  await page.goto(baseURL, { waitUntil: 'domcontentloaded' })
+  await page.getByTestId('setup-page').waitFor({ timeout: 15000 })
+  check('未初始化时显示初始化页')
+
+  const setupResponse = await page.request.post(`${baseURL}/api/v1/auth/setup`, { data: { token: 'flowpilot-demo-init-2026', password: 'FlowPilot2026' } })
+  if (!setupResponse.ok()) throw new Error(`初始化失败：${await setupResponse.text()}`)
+  check('一次性令牌初始化')
+
+  const replayResponse = await page.request.post(`${baseURL}/api/v1/auth/setup`, { data: { token: 'flowpilot-demo-init-2026', password: 'Another2026' } })
+  if (replayResponse.ok()) throw new Error('初始化令牌重放必须被拒绝')
+  check('初始化令牌重放拒绝')
+
+  const noAuthResponse = await page.request.get(`${baseURL}/api/v1/instances`)
+  if (noAuthResponse.status() !== 401) throw new Error(`未登录业务 API 应 401，实际 ${noAuthResponse.status()}`)
+  check('未认证业务 API 拒绝（401）')
+
+  const badLogin = await page.request.post(`${baseURL}/api/v1/auth/login`, { data: { username: 'admin', password: 'WrongPass1' } })
+  if (badLogin.ok() || (await badLogin.json()).error !== '用户名或密码错误') throw new Error('错误密码应统一文案')
+  check('登录失败统一文案')
+
+  const loginResponse = await page.request.post(`${baseURL}/api/v1/auth/login`, { data: { username: 'admin', password: 'FlowPilot2026' } })
+  if (!loginResponse.ok()) throw new Error(`登录失败：${await loginResponse.text()}`)
+  const { csrfToken } = await loginResponse.json()
+  check('管理员登录')
+
+  const noCsrfResponse = await page.request.post(`${baseURL}/api/v1/instances`, { data: {} })
+  if (noCsrfResponse.status() !== 403) throw new Error(`写请求缺 CSRF 头应 403，实际 ${noCsrfResponse.status()}`)
+  check('写请求 CSRF 校验（403）')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
   const docker = await dockerResponse.json()
@@ -243,7 +273,7 @@ try {
     if (!storageResponse.ok() || typeof storageBody.enabled !== 'boolean' || typeof storageBody.detected !== 'boolean' || !storageBody.mountPoint) throw new Error(`网络存储接口异常：${JSON.stringify(storageBody)}`)
     check('网络存储配置接口（未启用默认态）')
     // 0.0.9.0：创建实例前探测宿主机端口真实占用，18080 管理端口必须被拦截。
-    const occupiedPortResponse = await page.request.post(`${baseURL}/api/v1/instances`, { data: { name: 'regress-port-probe', image: `flowpilot/comfyui-regress:${health.version}`, gpu: -1, port: 18080 } })
+    const occupiedPortResponse = await page.request.post(`${baseURL}/api/v1/instances`, { headers: { 'X-FlowPilot-CSRF': csrfToken }, data: { name: 'regress-port-probe', image: `flowpilot/comfyui-regress:${health.version}`, gpu: -1, port: 18080 } })
     if (occupiedPortResponse.ok()) throw new Error('宿主机已占用端口（18080）创建实例未被拦截')
     check('宿主机端口占用创建拦截（18080 管理端口）')
     const buildScriptResponse = await page.request.get(`${baseURL}/api/v1/images/build-script?variant=nvidia-cu130&image=flowpilot%2Fcomfyui%3Aregress&ref=master&pip=tsinghua&manager=1&platform=linux%2Farm64`)
@@ -723,7 +753,7 @@ try {
     if (!checkResponse.ok() || typeof checkBody.exists !== 'boolean') throw new Error(`镜像检查接口异常：${JSON.stringify(checkBody)}`)
     check('镜像本地存在性检查接口')
 
-    const pullResponse = await page.request.post(`${baseURL}/api/v1/images/pull`, { data: { image: pullImageName } })
+    const pullResponse = await page.request.post(`${baseURL}/api/v1/images/pull`, { headers: { 'X-FlowPilot-CSRF': csrfToken }, data: { image: pullImageName } })
     if (!pullResponse.ok()) throw new Error(`启动镜像拉取失败：HTTP ${pullResponse.status()}`)
     const pullTask = await pullResponse.json()
     // 0.0.8.0 起拉取为任务制：轮询任务状态直至收口。
@@ -765,22 +795,50 @@ try {
   // 数据底座（0.0.9.5）：状态卡 + 一致性检查 + 备份。
   const databaseResponse = await page.request.get(`${baseURL}/api/v1/database`)
   const databaseStatus = await databaseResponse.json()
-  if (!databaseResponse.ok() || databaseStatus.schemaVersion !== 1 || !databaseStatus.integrity.ok) throw new Error(`数据底座状态异常：${JSON.stringify(databaseStatus)}`)
-  check('数据底座状态接口（schema v1 · integrity ok）')
+  if (!databaseResponse.ok() || databaseStatus.schemaVersion !== 2 || !databaseStatus.integrity.ok) throw new Error(`数据底座状态异常：${JSON.stringify(databaseStatus)}`)
+  check('数据底座状态接口（schema v2 · integrity ok）')
   await page.getByRole('tab', { name: '数据底座' }).click()
   await page.getByTestId('database-panel').waitFor()
   await page.getByText('integrity_check 通过', { exact: true }).waitFor()
   check('数据底座状态卡渲染')
   await page.getByRole('button', { name: '立即检查' }).click()
   await page.getByText(/检查报告 ·/, { exact: false }).waitFor()
-  const checkReport = await page.request.post(`${baseURL}/api/v1/database/check`).then((response) => response.json())
+  const checkReport = await page.request.post(`${baseURL}/api/v1/database/check`, { headers: { 'X-FlowPilot-CSRF': csrfToken } }).then((response) => response.json())
   if (typeof checkReport.unchanged !== 'number' || !Array.isArray(checkReport.diffs)) throw new Error(`一致性检查报告异常：${JSON.stringify(checkReport)}`)
   check('数据底座一致性检查')
-  const backupResponse = await page.request.post(`${baseURL}/api/v1/database/backup`)
+  const backupResponse = await page.request.post(`${baseURL}/api/v1/database/backup`, { headers: { 'X-FlowPilot-CSRF': csrfToken } })
   const backupResult = await backupResponse.json()
   if (!backupResponse.ok() || backupResult.size <= 0) throw new Error(`数据库备份异常：${JSON.stringify(backupResult)}`)
   check(`数据库备份（${backupResult.name}）`)
   await screenshot('05-system-database')
+
+  // 安全与会话（0.0.9.6）：修改密码与活跃会话。
+  await page.getByRole('tab', { name: '安全与会话' }).click()
+  await page.getByTestId('security-panel').waitFor()
+  await page.getByTestId('auth-session-current').waitFor()
+  check('安全与会话面板（当前会话标识）')
+
+  // 操作审计（0.0.9.6）：登录与写操作事件。
+  await page.getByRole('tab', { name: '操作审计' }).click()
+  await page.getByTestId('audit-panel').waitFor()
+  await page.getByTestId('audit-table').waitFor()
+  const auditResponse = await page.request.get(`${baseURL}/api/v1/audit/logs?limit=50`)
+  const auditBody = await auditResponse.json()
+  if (!auditResponse.ok() || !auditBody.logs.some((entry) => entry.action === 'auth.login' && entry.result === 'success')) throw new Error(`审计应包含登录成功事件：${JSON.stringify(auditBody.logs.slice(0, 5))}`)
+  check('操作审计记录（登录事件可查）')
+  await screenshot('05-system-audit')
+
+  // 退出登录：回到登录页，业务 API 再次 401。
+  await page.getByRole('tab', { name: '安全与会话' }).click()
+  await page.getByTestId('security-panel').getByRole('button', { name: '退出登录' }).click()
+  await page.getByTestId('login-page').waitFor({ timeout: 10000 })
+  const afterLogout = await page.request.get(`${baseURL}/api/v1/instances`)
+  if (afterLogout.status() !== 401) throw new Error(`退出后业务 API 应 401，实际 ${afterLogout.status()}`)
+  check('退出登录后会话失效')
+  await page.request.post(`${baseURL}/api/v1/auth/login`, { data: { username: 'admin', password: 'FlowPilot2026' } })
+  // 重新登录后刷新页面恢复业务界面（移动端视口断言需要主布局）。
+  await page.goto(baseURL, { waitUntil: 'domcontentloaded' })
+  await page.getByRole('button', { name: '首页看板', exact: true }).first().waitFor({ timeout: 15000 })
 
   await page.setViewportSize({ width: 375, height: 812 })
   await page.getByRole('button', { name: '打开菜单' }).click()
@@ -795,10 +853,15 @@ try {
   if (overflow.scrollWidth > overflow.innerWidth) throw new Error(`375px 视口出现页面级横向滚动：${JSON.stringify(overflow)}`)
   check('375px 视口无页面级横向滚动')
 
-  if (consoleErrors.length || failedResponses.length) {
-    throw new Error(`浏览器异常：${JSON.stringify({ consoleErrors, failedResponses })}`)
+  // 认证流程中 401/403 是预期探针（未登录探测、CSRF 缺失验证、退出后失效验证、
+  // 会话恢复尝试），仅拦截其他非预期 4xx/5xx 与控制台业务错误。
+  const expectedAuthProbes = (message) => message.startsWith('401') || message.startsWith('403')
+  const unexpectedResponses = failedResponses.filter((message) => !expectedAuthProbes(message))
+  const unexpectedErrors = consoleErrors.filter((message) => message !== '未登录或会话已过期' && !message.includes('status of 401'))
+  if (unexpectedErrors.length || unexpectedResponses.length) {
+    throw new Error(`浏览器异常：${JSON.stringify({ consoleErrors: unexpectedErrors, failedResponses: unexpectedResponses })}`)
   }
-  check('无控制台错误及 HTTP 4xx／5xx 资源')
+  check('无控制台错误及非预期 HTTP 4xx／5xx 资源')
 
   await writeFile(`${outputDir}verification.json`, JSON.stringify({ success: true, baseURL, checks, consoleErrors, failedResponses }, null, 2))
 } catch (error) {

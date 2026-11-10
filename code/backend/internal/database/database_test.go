@@ -33,8 +33,8 @@ func TestMigrateIdempotent(t *testing.T) {
 		}
 	}
 	version, err := SchemaVersion(db)
-	if err != nil || version != 1 {
-		t.Fatalf("schema 版本应为 1，实际 %d（err=%v）", version, err)
+	if err != nil || version != 2 {
+		t.Fatalf("schema 版本应为 2，实际 %d（err=%v）", version, err)
 	}
 }
 

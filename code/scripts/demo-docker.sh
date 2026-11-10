@@ -3,8 +3,8 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-IMAGE="flowpilot-web:0.0.9.5"
-REGRESSION_IMAGE="flowpilot/comfyui-regress:0.0.9.5"
+IMAGE="flowpilot-web:0.0.9.6"
+REGRESSION_IMAGE="flowpilot/comfyui-regress:0.0.9.6"
 CONTAINER="flowpilot-web-demo"
 PORT="${FLOWPILOT_DEMO_PORT:-18080}"
 DOCKER_SOCKET="${FLOWPILOT_DOCKER_SOCKET:-/var/run/docker.sock}"
@@ -31,6 +31,7 @@ start_container() {
   DATA_DIR="$(cd "${CODE_DIR}/.." && pwd)/.tmp/flowpilot-data"
   IMPORT_DIR="$(cd "${CODE_DIR}/.." && pwd)/.tmp/flowpilot-import"
   mkdir -p "${DATA_DIR}" "${IMPORT_DIR}"
+  rm -f "${DATA_DIR}/flowpilot.db" "${DATA_DIR}/flowpilot.db-shm" "${DATA_DIR}/flowpilot.db-wal" "${DATA_DIR}/init-token"
   docker run -d --name "${CONTAINER}" --restart unless-stopped \
     --add-host host.docker.internal:host-gateway \
     -p "${PORT}:18080" \
@@ -39,6 +40,7 @@ start_container() {
     -v "${IMPORT_DIR}:/data/import:ro" \
     -e FLOWPILOT_HOST_DATA_DIR="${DATA_DIR}" \
     -e FLOWPILOT_COMFYUI_IMAGE="${REGRESSION_IMAGE}" \
+    -e FLOWPILOT_INIT_TOKEN="${FLOWPILOT_DEMO_INIT_TOKEN:-flowpilot-demo-init-2026}" \
     "${IMAGE}" >/dev/null
   printf 'FlowPilot Demo：http://localhost:%s\n' "${PORT}"
 }

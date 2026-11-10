@@ -2,6 +2,23 @@
 
 所有重要变更均记录于此。详细内容见 `context/changes/`。
 
+## 0.0.9.6 — 2026-11-10（认证、安全与操作审计）
+
+### 新增
+
+- **认证闭环**：单管理员（admin）＋Argon2id 密码哈希（x/crypto，新依赖）；一次性初始化令牌（数据目录 `init-token` 0600，支持 `FLOWPILOT_INIT_TOKEN` 注入，完成后文件删除不可重放）；服务端会话（闲置 30 分钟／绝对 7 天滑动续期，注销与改密撤销）。
+- **中间件防护**：认证覆盖全部业务 API（豁免仅 health／setup status／setup／login）；写方法强制 `X-FlowPilot-CSRF` 头＋Origin/Host 一致性校验；Cookie HttpOnly＋SameSite=Lax（HTTPS 加 Secure）；登录每 IP 连续 5 次失败锁定 15 分钟、统一错误文案防枚举；失败关闭——数据底座故障时认证拒绝全部业务请求而非放行。
+- **审计**：登录成功／失败／锁定、退出、改密、初始化、会话撤销显式记录；写操作中间件兜底记录（actor／动作／对象／状态／IP 摘要／requestId）；`GET /api/v1/audit/logs` 分页查询。
+- **API**：`/api/v1/auth/{setup/status,setup,login,logout,session,password,sessions}`、`DELETE /api/v1/auth/sessions/{id}`、`GET /api/v1/audit/logs`。
+- **UI**：全屏初始化页（令牌＋密码策略）与登录页（版本＋管理网提示＋锁定提示）；App 认证门卫（401 全局跳登录，未登录不发起业务轮询）；顶栏退出登录；系统管理新增「安全与会话」（改密＋活跃会话撤销）与「操作审计」（搜索＋分页＋结果徽章）子页。
+- **迁移 002**：users／sessions／audit_logs 三表。
+
+### 验证
+
+- 后端 11 包全绿：auth 包 6 用例（Argon2id 哈希校验／密码策略／令牌重放／限流锁定与其他 IP 不连坐／改密撤销其他会话／审计分页过滤）；server 认证全链路 15 步（豁免／401 语义／CSRF 403／Origin 403／注销失效／审计查询）。
+- 前端 lint＋build 通过；本机 E2E **71 项全部通过**（新增认证 10 项断言；预期 401/403 探针在最终检查中豁免）。
+- Spark 实机回归见 `context/changes/0.0.9.6.md`。
+
 ## 0.0.9.5 — 2026-11-10（阶段 1 开篇：数据底座与现状基线）
 
 ### 新增

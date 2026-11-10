@@ -165,10 +165,13 @@ export async function getHardware(signal?: AbortSignal): Promise<HardwareReport>
 async function sendJSON<T>(method: string, path: string, payload?: unknown): Promise<T> {
   const response = await fetch(path, {
     method,
-    headers: { Accept: 'application/json', ...(payload !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+    headers: { Accept: 'application/json', ...(payload !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(csrfToken ? { 'X-FlowPilot-CSRF': csrfToken } : {}) },
     body: payload !== undefined ? JSON.stringify(payload) : undefined,
   })
   if (!response.ok) {
+    if (response.status === 401) {
+      unauthorizedHandler?.()
+    }
     const body = await response.json().catch(() => null) as { detail?: string; error?: string } | null
     throw new Error(body?.detail ?? body?.error ?? `请求失败：HTTP ${response.status}`)
   }
@@ -724,4 +727,119 @@ export async function runDatabaseCheck(): Promise<DatabaseSyncReport> {
 
 export async function backupDatabase(): Promise<DatabaseBackupResult> {
   return sendJSON<DatabaseBackupResult>('POST', '/api/v1/database/backup', undefined)
+}
+
+// 认证与会话（0.0.9.6）。
+
+// csrfToken 全局保存：登录/初始化成功或 session 恢复时更新；写请求自动注入。
+let csrfToken = ''
+
+export function setCSRFToken(token: string): void {
+  csrfToken = token
+}
+
+export function getCSRFToken(): string {
+  return csrfToken
+}
+
+// onUnauthorized 由 App 注册：任何请求遇到 401 时全局退出到登录页。
+let unauthorizedHandler: (() => void) | null = null
+
+export function setUnauthorizedHandler(handler: () => void): void {
+  unauthorizedHandler = handler
+}
+
+export interface SetupStatus {
+  initialized: boolean
+  tokenReady: boolean
+}
+
+export interface LoginResult {
+  username: string
+  csrfToken: string
+}
+
+export interface SessionInfo {
+  username: string
+  csrfToken: string
+}
+
+export interface AuthSession {
+  id: string
+  username: string
+  createdAt: string
+  lastSeenAt: string
+  idleExpiresAt: string
+  absoluteExpiresAt: string
+  ipHash: string
+  userAgent: string
+  current?: boolean
+}
+
+export interface AuditLogEntry {
+  id: number
+  ts: string
+  actor: string
+  action: string
+  object: string
+  result: string
+  ipHash: string
+  requestId: string
+  detail: string
+}
+
+export interface AuditLogPage {
+  logs: AuditLogEntry[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export async function getSetupStatus(signal?: AbortSignal): Promise<SetupStatus> {
+  return getJSON<SetupStatus>('/api/v1/auth/setup/status', signal ?? AbortSignal.timeout(5000))
+}
+
+export async function completeSetup(token: string, password: string): Promise<{ initialized: boolean }> {
+  return sendJSON<{ initialized: boolean }>('POST', '/api/v1/auth/setup', { token, password })
+}
+
+export async function login(username: string, password: string): Promise<LoginResult> {
+  const result = await sendJSON<LoginResult>('POST', '/api/v1/auth/login', { username, password })
+  setCSRFToken(result.csrfToken)
+  return result
+}
+
+export async function logout(): Promise<void> {
+  try {
+    await sendJSON<{ ok: boolean }>('POST', '/api/v1/auth/logout', undefined)
+  } finally {
+    setCSRFToken('')
+  }
+}
+
+export async function getSession(): Promise<SessionInfo> {
+  const info = await getJSON<SessionInfo>('/api/v1/auth/session', AbortSignal.timeout(5000))
+  setCSRFToken(info.csrfToken)
+  return info
+}
+
+export async function changePassword(current: string, next: string): Promise<{ ok: boolean }> {
+  return sendJSON<{ ok: boolean }>('PUT', '/api/v1/auth/password', { current, next })
+}
+
+export async function listAuthSessions(): Promise<{ sessions: AuthSession[] }> {
+  return getJSON<{ sessions: AuthSession[] }>('/api/v1/auth/sessions', AbortSignal.timeout(6000))
+}
+
+export async function revokeAuthSession(id: string): Promise<{ ok: boolean }> {
+  return sendJSON<{ ok: boolean }>('DELETE', `/api/v1/auth/sessions/${encodeURIComponent(id)}`, undefined)
+}
+
+export async function getAuditLogs(params: { limit?: number; offset?: number; action?: string; q?: string }): Promise<AuditLogPage> {
+  const query = new URLSearchParams()
+  if (params.limit) query.set('limit', String(params.limit))
+  if (params.offset) query.set('offset', String(params.offset))
+  if (params.action) query.set('action', params.action)
+  if (params.q) query.set('q', params.q)
+  return getJSON<AuditLogPage>(`/api/v1/audit/logs?${query.toString()}`, AbortSignal.timeout(6000))
 }

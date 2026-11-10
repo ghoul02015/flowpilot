@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ghoul02015/flowpilot/internal/auth"
 	"github.com/ghoul02015/flowpilot/internal/catalog"
 	"github.com/ghoul02015/flowpilot/internal/database"
 	"github.com/ghoul02015/flowpilot/internal/docker"
@@ -74,6 +75,7 @@ func main() {
 	// flowpilotd 同时被回归镜像用作实例内假 ComfyUI，其容器无 /data/flowpilot 挂载。
 	dbPath := filepath.Join(dataDir, "flowpilot.db")
 	var dataStore *database.Store
+	var authManager *auth.Manager
 	backupDir := filepath.Join(dataDir, "backups")
 	if err := os.MkdirAll(dataDir, 0o755); err == nil {
 		if db, openErr := database.Open(dbPath); openErr == nil {
@@ -85,6 +87,9 @@ func main() {
 					slog.Info("数据底座迁移完成", "applied", applied)
 				}
 				dataStore = database.NewStore(db)
+				// 认证（0.0.9.6）：会话与审计存于数据底座；数据库不可用则认证不可用。
+				authManager = auth.NewManager(db, dataDir, os.Getenv("FLOWPILOT_INIT_TOKEN"))
+				authManager.CleanupStartup()
 			}
 		} else {
 			slog.Error("数据底座初始化失败，降级运行", "error", openErr)
@@ -92,10 +97,16 @@ func main() {
 	} else {
 		slog.Error("数据目录不可创建，数据底座降级运行", "dir", dataDir, "error", err)
 	}
+	// 认证默认必须开启；仅显式环境变量可关闭（受控调试/回归场景）。
+	// 数据底座不可用时认证管理器为 nil——中间件按失败关闭处理（全部 401），绝不静默放行。
+	authDisabledFlag := os.Getenv("FLOWPILOT_AUTH_DISABLED") == "1" || os.Getenv("FLOWPILOT_REGRESS_MODE") == "1"
+	if authDisabledFlag {
+		slog.Warn("认证已显式关闭（FLOWPILOT_AUTH_DISABLED/REGRESS_MODE），仅限受控调试环境")
+	}
 
 	httpServer := &http.Server{
 		Addr:    address,
-		Handler: server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imageManager, downloadManager, environment("FLOWPILOT_HOST_GATEWAY", "host.docker.internal"), catalogManager, storageManager, dataStore, backupDir),
+		Handler: server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imageManager, downloadManager, environment("FLOWPILOT_HOST_GATEWAY", "host.docker.internal"), catalogManager, storageManager, dataStore, backupDir, authManager, authDisabledFlag),
 		// 镜像导入/导出可能是 GB 级长连接；保留请求头超时，正文与响应不设置固定上限。
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
