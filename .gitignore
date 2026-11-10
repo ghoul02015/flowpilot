@@ -26,3 +26,6 @@ diagnostics/
 .DS_Store
 .idea/
 .vscode/
+
+.codebuddy/
+.workbuddy/
