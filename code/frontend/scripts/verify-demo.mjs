@@ -129,6 +129,10 @@ try {
     const diskUsageResponse = await page.request.get(`${baseURL}/api/v1/images/disk-usage`)
     if (!diskUsageResponse.ok()) throw new Error(`镜像磁盘占用接口异常：HTTP ${diskUsageResponse.status()}`)
     check('镜像磁盘占用接口')
+    // 0.0.9.0：创建实例前探测宿主机端口真实占用，18080 管理端口必须被拦截。
+    const occupiedPortResponse = await page.request.post(`${baseURL}/api/v1/instances`, { data: { name: 'regress-port-probe', image: `flowpilot/comfyui-regress:${health.version}`, gpu: -1, port: 18080 } })
+    if (occupiedPortResponse.ok()) throw new Error('宿主机已占用端口（18080）创建实例未被拦截')
+    check('宿主机端口占用创建拦截（18080 管理端口）')
     const buildScriptResponse = await page.request.get(`${baseURL}/api/v1/images/build-script?variant=nvidia-cu130&image=flowpilot%2Fcomfyui%3Aregress&ref=master&pip=tsinghua&manager=1&platform=linux%2Farm64`)
     const buildScriptText = await buildScriptResponse.text()
     if (!buildScriptResponse.ok() || !buildScriptText.startsWith('#!/usr/bin/env bash') || !buildScriptText.includes('--platform') || !buildScriptText.includes('flowpilot.build.summary')) throw new Error('一键构建脚本生成接口异常')
@@ -139,18 +143,16 @@ try {
     if (!scriptResponse.ok() || !scriptText.startsWith('#!/usr/bin/env bash') || !scriptText.includes('nvidia-cu130') || !scriptText.includes('amd-rocm')) throw new Error('安装脚本生成接口异常')
     if (scriptText.includes('modelscope download') || scriptText.includes('hf download')) throw new Error('安装脚本不应包含模型下载逻辑')
     check('一键安装脚本生成接口（独立分发保留）')
-    await page.getByRole('tab', { name: '容器镜像管理' }).click()
-    await page.getByRole('heading', { name: '容器镜像管理' }).waitFor()
+    await page.getByRole('tab', { name: '镜像中心' }).click()
+    await page.getByRole('heading', { name: '镜像中心' }).waitFor()
     await page.getByRole('heading', { name: 'ComfyUI 镜像' }).waitFor()
     await page.getByRole('heading', { name: '机器其他镜像' }).waitFor()
-    check('容器镜像分类子菜单')
-    await page.getByRole('tab', { name: '手动构建 / 拉取' }).click()
-    await page.getByRole('heading', { name: '手动构建 / 在线拉取' }).waitFor()
+    check('镜像中心合并视图（ComfyUI/其他镜像分类）')
     await page.getByRole('button', { name: /一键构建 ComfyUI 镜像/ }).click()
     const buildDialog = page.getByRole('dialog')
     await buildDialog.getByLabel('CPU 芯片架构').waitFor()
     await buildDialog.getByLabel('GPU / PyTorch 配方').waitFor()
-    await buildDialog.getByLabel('ComfyUI 在线版本').waitFor()
+    await buildDialog.getByLabel(/ComfyUI 版本/).waitFor()
     await page.keyboard.press('Escape')
     await buildDialog.waitFor({ state: 'detached' })
     await page.getByRole('button', { name: /拉取在线容器镜像/ }).click()
@@ -158,7 +160,7 @@ try {
     await pullDialog.getByLabel('在线镜像名').waitFor()
     await page.keyboard.press('Escape')
     await pullDialog.waitFor({ state: 'detached' })
-    check('手动构建与拉取双弹窗')
+    check('构建与拉取双弹窗（镜像中心入口）')
     await page.getByRole('tab', { name: '实例列表' }).click()
     await page.getByRole('button', { name: '新建实例', exact: true }).click()
     await createDialog.waitFor()
@@ -189,7 +191,6 @@ try {
     await createDialog.getByLabel('容器端口').fill('18080')
     await page.getByRole('button', { name: /下一步/ }).click()
     await page.getByText('共享模型仓库将自动挂载进实例容器', { exact: false }).waitFor()
-    await page.getByRole('button', { name: /下一步/ }).click()
     await page.getByRole('button', { name: /确认部署|正在创建容器/ }).click()
     await page.getByRole('button', { name: `停止 ${instanceName}`, exact: true }).waitFor({ timeout: 30000 })
     check('真实实例创建并启动（Docker API）')
@@ -246,14 +247,14 @@ try {
     await comfyDialog.getByLabel('容器端口').fill('8188')
     await page.getByRole('button', { name: /下一步/ }).click()
     await page.getByText('共享模型仓库将自动挂载进实例容器', { exact: false }).waitFor()
-    await page.getByRole('button', { name: /下一步/ }).click()
     await page.getByRole('button', { name: /确认部署|正在创建容器/ }).click()
     await page.getByRole('button', { name: `停止 ${comfyName}`, exact: true }).waitFor({ timeout: 60000 })
     check('ComfyUI 实例创建并启动（预置镜像）')
 
     const comfyURL = new URL(baseURL)
     comfyURL.port = '18189'
-    const comfyDeadline = Date.now() + 180000
+    // ComfyUI-Manager 首次启动需在线安装依赖，实测冷启动可超过 3 分钟。
+    const comfyDeadline = Date.now() + 420000
     let comfyReady = false
     while (Date.now() < comfyDeadline && !comfyReady) {
       try {
@@ -265,7 +266,7 @@ try {
       } catch { /* 容器尚未就绪，继续等待 */ }
       if (!comfyReady) await page.waitForTimeout(5000)
     }
-    if (!comfyReady) throw new Error('ComfyUI 实例 180 秒内未就绪')
+    if (!comfyReady) throw new Error('ComfyUI 实例 420 秒内未就绪')
     check('ComfyUI 服务就绪（/system_stats）')
     await screenshot('02-instances-comfyui')
 
@@ -287,7 +288,7 @@ try {
     check('ComfyUI 状态代理接口（reachable 与版本）')
 
     await page.getByTestId(`comfy-queue-${comfyName}`).waitFor({ timeout: 15000 })
-    check('实例列表制图任务徽标')
+    check('实例列表 ComfyUI 队列徽标')
 
     const openButton = page.getByRole('button', { name: `打开 ${comfyName} ComfyUI` })
     await openButton.waitFor()
@@ -562,16 +563,18 @@ try {
 
     const pullResponse = await page.request.post(`${baseURL}/api/v1/images/pull`, { data: { image: pullImageName } })
     if (!pullResponse.ok()) throw new Error(`启动镜像拉取失败：HTTP ${pullResponse.status()}`)
+    const pullTask = await pullResponse.json()
+    // 0.0.8.0 起拉取为任务制：轮询任务状态直至收口。
     const pullDeadline = Date.now() + 120000
     let pullState = 'pulling'
     while (Date.now() < pullDeadline) {
-      const statusBody = await (await page.request.get(`${baseURL}/api/v1/images/pull`)).json()
+      const statusBody = await (await page.request.get(`${baseURL}/api/v1/images/tasks/${pullTask.id}`)).json()
       pullState = statusBody.state
-      if (pullState === 'done' || pullState === 'error') break
+      if (pullState === 'done' || pullState === 'error' || pullState === 'cancelled') break
       await page.waitForTimeout(2000)
     }
     if (pullState !== 'done') throw new Error(`镜像拉取未完成：${pullState}`)
-    check('镜像后台拉取链路（Docker API）')
+    check('镜像后台拉取链路（Docker API 任务制）')
   }
 
   await page.getByRole('button', { name: /^任务中心/ }).first().click()
