@@ -123,7 +123,11 @@ type ContainerInspectResult struct {
 	Config struct {
 		Image  string            `json:"Image"`
 		Labels map[string]string `json:"Labels"`
+		Tty    bool              `json:"Tty"`
 	} `json:"Config"`
+	HostConfig struct {
+		Binds []string `json:"Binds"`
+	} `json:"HostConfig"`
 }
 
 // Image 是本机一个镜像的摘要视图（对应 /images/json 条目）。
@@ -476,6 +480,49 @@ func (c *Client) RemoveContainer(ctx context.Context, id string, force bool) err
 	}
 	_, err := c.do(ctx, http.MethodDelete, path, nil)
 	return err
+}
+
+// ContainerTTY 返回容器是否分配了 TTY（决定 logs 流是否需要剥离 multiplex header）。
+func (c *Client) ContainerTTY(ctx context.Context, id string) (bool, error) {
+	inspected, err := c.ContainerInspect(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	return inspected.Config.Tty, nil
+}
+
+// ContainerLogs 打开容器日志流：stdout+stderr、带时间戳、先回放 tail 行再 follow。
+// 使用无超时的流式客户端；返回的 body 由调用方关闭（关闭即中止流）。
+// 非 TTY 容器的流带 8 字节 multiplex header，由 DemuxReader 剥离。
+func (c *Client) ContainerLogs(ctx context.Context, id string, tail int) (io.ReadCloser, error) {
+	if tail < 0 {
+		tail = 0
+	}
+	path := fmt.Sprintf("/containers/%s/logs?stdout=1&stderr=1&follow=1&timestamps=1&tail=%d", url.PathEscape(id), tail)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	response, err := c.streamClient.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		defer response.Body.Close()
+		body, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBody))
+		message := strings.TrimSpace(string(body))
+		var dockerError struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal([]byte(message), &dockerError) == nil && dockerError.Message != "" {
+			message = dockerError.Message
+		}
+		if message == "" {
+			message = http.StatusText(response.StatusCode)
+		}
+		return nil, &StatusError{StatusCode: response.StatusCode, Message: message}
+	}
+	return response.Body, nil
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, target any) error {

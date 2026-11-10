@@ -84,6 +84,9 @@ export interface HardwareReport {
   gpuAvailable: boolean
   gpuError?: string
   gpuMemoryMode: 'discrete' | 'unified' | 'none'
+  /** 来自 nvidia-smi 头部；解析失败或不可用时缺省。 */
+  driverVersion?: string
+  cudaVersion?: string
   gpus: RealGPU[]
 }
 
@@ -105,6 +108,8 @@ export interface RealInstance {
   modelsTarget?: string
   outputsTarget?: string
   workflowsTarget?: string
+  /** 是否支持「模型关联」（0.0.9.4 起创建的实例为 true）。 */
+  modelLinks?: boolean
   createdAt: string
 }
 
@@ -584,4 +589,54 @@ export async function postInstanceAction(name: string, action: 'start' | 'stop' 
 
 export async function deleteInstanceApi(name: string, force: boolean): Promise<void> {
   await sendJSON<{ status: string }>('DELETE', `/api/v1/instances/${encodeURIComponent(name)}${force ? '?force=1' : ''}`)
+}
+
+// ---- 实例日志（SSE 实时流）与模型关联（0.0.9.4）----
+
+// InstanceLogEvent 是一行容器日志（stream 区分 stdout/stderr）。
+export interface InstanceLogEvent {
+  stream: 'stdout' | 'stderr'
+  line: string
+  time?: string
+}
+
+// InstanceLogMeta 是日志流的首帧元信息。
+export interface InstanceLogMeta {
+  instance: string
+  tail: number
+  tty: boolean
+  status: string
+}
+
+// openInstanceLogs 建立实例日志 SSE 连接：先回放最近 tail 行再实时跟随。
+// 调用方负责 close()；流自然结束会收到 end 事件后自动关闭。
+export function openInstanceLogs(name: string, tail = 200): EventSource {
+  return new EventSource(`/api/v1/instances/${encodeURIComponent(name)}/logs?tail=${tail}`)
+}
+
+// ModelLink 是实例关联的一个共享仓库模型。
+export interface ModelLink {
+  category: string
+  name: string
+}
+
+export interface ModelLinksView {
+  instance: string
+  /** false 表示实例由旧版本创建、缺少关联挂载，需重建后使用。 */
+  supported: boolean
+  links: ModelLink[]
+}
+
+export interface ModelLinksUpdateResult extends ModelLinksView {
+  added: number
+  removed: number
+  hint?: string
+}
+
+export async function getModelLinks(name: string): Promise<ModelLinksView> {
+  return getJSON<ModelLinksView>(`/api/v1/instances/${encodeURIComponent(name)}/model-links`, AbortSignal.timeout(6000))
+}
+
+export async function putModelLinks(name: string, links: ModelLink[]): Promise<ModelLinksUpdateResult> {
+  return sendJSON<ModelLinksUpdateResult>('PUT', `/api/v1/instances/${encodeURIComponent(name)}/model-links`, { links })
 }

@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -268,5 +270,165 @@ func TestModelCatalogEndpointDisabled(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d", response.Code)
+	}
+}
+
+// newFakeDockerEngine 在临时 unix socket 上启动假 Docker 引擎并返回客户端。
+func newFakeDockerEngine(t *testing.T, handler http.Handler) *docker.Client {
+	t.Helper()
+	socketPath := filepath.Join(t.TempDir(), "docker.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: handler}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = os.Remove(socketPath)
+	})
+	return docker.NewClient(socketPath)
+}
+
+// multiplexFrame 构造一个 Docker multiplex 日志帧。
+func multiplexFrame(stream byte, payload string) []byte {
+	header := make([]byte, 8)
+	header[0] = stream
+	binary.BigEndian.PutUint32(header[4:8], uint32(len(payload)))
+	return append(header, []byte(payload)...)
+}
+
+func runningInstanceLabels(name string, withLinks bool) map[string]string {
+	labels := map[string]string{
+		"flowpilot.instance":               "true",
+		"flowpilot.instance.name":          name,
+		"flowpilot.instance.gpu":           "0",
+		"flowpilot.instance.port":          "18188",
+		"flowpilot.instance.models-target": "/data/models",
+	}
+	if withLinks {
+		labels["flowpilot.instance.model-links"] = "true"
+	}
+	return labels
+}
+
+// 实例日志 SSE：首帧 meta、stdout/stderr 行、结束 end 事件均应按序输出。
+func TestInstanceLogsSSE(t *testing.T) {
+	client := newFakeDockerEngine(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/json"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "abc", "Config": map[string]any{"Tty": false}})
+		case strings.HasSuffix(r.URL.Path, "/logs"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(multiplexFrame(1, "2026-11-10T08:00:00Z server started\n"))
+			_, _ = w.Write(multiplexFrame(2, "2026-11-10T08:00:01Z warning line\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	fake := &fakeInstanceDocker{containers: []docker.Container{{
+		ID: "abc", Names: []string{"/flowpilot-comfyui-demo"}, State: "running", Labels: runningInstanceLabels("demo", true),
+	}}}
+	manager := instance.NewManager(fake, func() int { return 1 }, "/host/data", "comfyui:test", 8188, "", "", "")
+	handler := New(t.TempDir(), client, nil, manager, nil, nil, nil, "127.0.0.1", catalog.NewManager(""), nil)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/instances/demo/logs?tail=50", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", response.Code, response.Body.String())
+	}
+	if contentType := response.Header().Get("Content-Type"); contentType != "text/event-stream" {
+		t.Fatalf("unexpected content type %q", contentType)
+	}
+	body := response.Body.String()
+	for _, want := range []string{"event: meta", `"stream":"stdout"`, "server started", `"stream":"stderr"`, "warning line", "event: end"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("SSE 响应缺少 %q：%s", want, body)
+		}
+	}
+}
+
+// 实例不存在时应返回普通 JSON 404，而不是 SSE 流。
+func TestInstanceLogsNotFound(t *testing.T) {
+	fake := &fakeInstanceDocker{}
+	manager := instance.NewManager(fake, func() int { return 0 }, "/host/data", "comfyui:test", 8188, "", "", "")
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, manager, nil, nil, nil, "", catalog.NewManager(""), nil)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/instances/missing/logs", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", response.Code)
+	}
+	if contentType := response.Header().Get("Content-Type"); strings.Contains(contentType, "text/event-stream") {
+		t.Fatalf("404 不应以 SSE 响应，Content-Type=%q", contentType)
+	}
+}
+
+// 模型关联端点：PUT 全量设置、GET 回读一致；非法模型 400；旧实例 409。
+func TestModelLinksEndpoints(t *testing.T) {
+	base := t.TempDir()
+	modelRoot := filepath.Join(base, "models")
+	if err := os.MkdirAll(filepath.Join(modelRoot, "loras"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(modelRoot, "loras", "a.safetensors"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeInstanceDocker{containers: []docker.Container{
+		{ID: "abc", Names: []string{"/flowpilot-comfyui-demo"}, State: "running", Labels: runningInstanceLabels("demo", true)},
+		{ID: "def", Names: []string{"/flowpilot-comfyui-old"}, State: "running", Labels: runningInstanceLabels("old", false)},
+	}}
+	manager := instance.NewManager(fake, func() int { return 1 }, "/host/data", "comfyui:test", 8188, "", "", "")
+	manager.SetModelLinks(filepath.Join(base, "hostlinks"), filepath.Join(base, "instance-links"), modelRoot)
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, manager, nil, nil, nil, "", catalog.NewManager(""), nil)
+
+	putBody := `{"links":[{"category":"loras","name":"a.safetensors"}]}`
+	putRequest := httptest.NewRequest(http.MethodPut, "/api/v1/instances/demo/model-links", strings.NewReader(putBody))
+	putResponse := httptest.NewRecorder()
+	handler.ServeHTTP(putResponse, putRequest)
+	if putResponse.Code != http.StatusOK {
+		t.Fatalf("PUT 应成功，得到 %d：%s", putResponse.Code, putResponse.Body.String())
+	}
+	var putResult struct {
+		Added   int `json:"added"`
+		Removed int `json:"removed"`
+	}
+	if err := json.NewDecoder(putResponse.Body).Decode(&putResult); err != nil {
+		t.Fatal(err)
+	}
+	if putResult.Added != 1 || putResult.Removed != 0 {
+		t.Fatalf("首次设置应新增 1 个，得到 %+v", putResult)
+	}
+
+	getRequest := httptest.NewRequest(http.MethodGet, "/api/v1/instances/demo/model-links", nil)
+	getResponse := httptest.NewRecorder()
+	handler.ServeHTTP(getResponse, getRequest)
+	var getResult struct {
+		Supported bool                 `json:"supported"`
+		Links     []instance.ModelLink `json:"links"`
+	}
+	if err := json.NewDecoder(getResponse.Body).Decode(&getResult); err != nil {
+		t.Fatal(err)
+	}
+	if !getResult.Supported || len(getResult.Links) != 1 || getResult.Links[0].Name != "a.safetensors" {
+		t.Fatalf("GET 回读不一致：%+v", getResult)
+	}
+
+	badBody := `{"links":[{"category":"loras","name":"missing.safetensors"}]}`
+	badRequest := httptest.NewRequest(http.MethodPut, "/api/v1/instances/demo/model-links", strings.NewReader(badBody))
+	badResponse := httptest.NewRecorder()
+	handler.ServeHTTP(badResponse, badRequest)
+	if badResponse.Code != http.StatusBadRequest {
+		t.Fatalf("不存在的模型应返回 400，得到 %d", badResponse.Code)
+	}
+
+	oldRequest := httptest.NewRequest(http.MethodPut, "/api/v1/instances/old/model-links", strings.NewReader(`{"links":[]}`))
+	oldResponse := httptest.NewRecorder()
+	handler.ServeHTTP(oldResponse, oldRequest)
+	if oldResponse.Code != http.StatusConflict {
+		t.Fatalf("旧实例应返回 409，得到 %d", oldResponse.Code)
 	}
 }

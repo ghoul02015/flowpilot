@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.9.3') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.9.4') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
@@ -51,26 +51,61 @@ try {
 
   await page.goto(baseURL, { waitUntil: 'networkidle' })
   await page.getByRole('heading', { name: /凌晨好|上午好|下午好|晚上好/ }).waitFor()
-  await page.getByRole('heading', { name: '硬件与实时监控' }).waitFor()
-  check('首页看板与完整硬件信息加载')
+  const hardwareBrief = page.getByTestId('hardware-brief')
+  await hardwareBrief.waitFor()
+  const briefText = await hardwareBrief.innerText()
+  for (const marker of ['每 2 秒自动刷新', '点击机器名进入硬件管理']) {
+    if (!briefText.includes(marker)) throw new Error(`首页硬件简述条缺少提示：${marker}`)
+  }
+  check('首页看板与硬件简述条（精简指标）')
   await screenshot('01-dashboard')
 
-  const firstCollected = await page.locator('[data-hardware-collected]').getAttribute('data-hardware-collected')
-  await page.waitForFunction((previous) => {
-    const current = document.querySelector('[data-hardware-collected]')?.getAttribute('data-hardware-collected')
-    return current && current !== previous && current !== ''
-  }, firstCollected, { timeout: 6000 })
-  check('GPU 遥测每 2 秒自动刷新')
+  if (hasRealHardware) {
+    await hardwareBrief.getByText(hardware.hostName, { exact: false }).first().waitFor()
+    if (await hardwareBrief.locator('[role="progressbar"]').count() < 3) throw new Error('首页硬件简述缺少 CPU／内存／存储三条使用率')
+    check('首页硬件简述条展示主机名与三条使用率')
+  }
 
+  // 0.0.9.4：首页机器名 → 硬件管理页（只读）；一台物理机多卡时按卡单行分组展示。
+  await hardwareBrief.getByRole('button', { name: '打开硬件管理' }).click()
+  await page.getByRole('heading', { name: '硬件管理', exact: true }).waitFor()
+  const machinePanel = page.getByTestId('hardware-machine')
+  await machinePanel.waitFor()
+  check('首页机器名跳转硬件管理页')
+
+  const firstCollected = await machinePanel.getAttribute('data-hardware-collected')
+  await page.waitForFunction((previous) => {
+    const current = document.querySelector('[data-testid="hardware-machine"]')?.getAttribute('data-hardware-collected')
+    return Boolean(current) && current !== '' && current !== previous
+  }, firstCollected, { timeout: 8000 })
+  check('硬件数据每 2 秒自动刷新')
+
+  const normalized = (value) => value.replace(/\s+/g, ' ').trim()
   if (hasRealHardware && hardware.gpuAvailable) {
-    await page.locator('[data-hardware-source="real"]').waitFor()
-    await page.getByText(hardware.hostName, { exact: false }).first().waitFor()
+    await machinePanel.getByText(hardware.hostName, { exact: false }).first().waitFor()
     if (hardware.machineModel) {
-      await page.getByText(hardware.machineModel, { exact: false }).first().waitFor()
+      await machinePanel.getByText(hardware.machineModel, { exact: false }).first().waitFor()
     }
+    const gpuTable = page.getByTestId('hardware-gpu-table')
+    await gpuTable.waitFor()
+    for (const gpu of hardware.gpus) {
+      const row = page.getByTestId(`hardware-gpu-${gpu.index}`)
+      await row.waitFor()
+      const rowText = normalized(await row.innerText())
+      if (!rowText.includes(`GPU ${gpu.index}`) || !rowText.includes(normalized(gpu.name))) throw new Error(`GPU 行与采集数据不一致：${rowText}`)
+    }
+    check(`GPU 逐卡单行表格（${hardware.gpus.length} 卡同属一台物理机）`)
     if (hardware.gpuMemoryMode === 'unified') {
-      await page.getByText('CPU／GPU 共享，不重复累计', { exact: false }).waitFor()
-      await page.getByText('独立显存占用不适用；此处显示系统统一内存使用率。', { exact: true }).first().waitFor()
+      await gpuTable.getByRole('columnheader', { name: '统一内存' }).waitFor()
+      check('统一内存架构列头（GPU 显存为系统共享）')
+    }
+    if (hardware.driverVersion) {
+      await machinePanel.getByText(hardware.driverVersion, { exact: false }).first().waitFor()
+      check(`驱动版本展示（${hardware.driverVersion}）`)
+    }
+    if (hardware.cudaVersion) {
+      await machinePanel.getByText(hardware.cudaVersion, { exact: false }).first().waitFor()
+      check(`CUDA 版本展示（${hardware.cudaVersion}）`)
     }
     check('真实硬件面板展示宿主机数据')
     await screenshot('01-hardware-real')
@@ -91,6 +126,79 @@ try {
   await page.getByRole('button', { name: 'ComfyUI 实例', exact: true }).click()
   await page.getByRole('heading', { name: '实例管理' }).waitFor()
   check('实例导航')
+
+  // 0.0.9.4：首页实例名 → 实例管理并自动打开详情；实例日志实时流；模型关联弹窗。
+  const preInstancesBody = await page.request.get(`${baseURL}/api/v1/instances`)
+  const preInstances = preInstancesBody.ok() ? ((await preInstancesBody.json()).instances ?? []) : []
+  if (preInstances.length > 0) {
+    const focusName = preInstances[0].name
+    await page.getByRole('button', { name: '首页看板', exact: true }).click()
+    await page.getByRole('heading', { name: /凌晨好|上午好|下午好|晚上好/ }).waitFor()
+    await page.getByRole('button', { name: focusName, exact: true }).first().click()
+    // 详情弹窗是 Radix 模态：打开时其余界面被标记 aria-hidden，因此先断言弹窗再断言页面标题。
+    const focusDialog = page.getByRole('dialog')
+    await focusDialog.waitFor()
+    await focusDialog.getByText(focusName, { exact: true }).first().waitFor()
+    check('首页点击实例名跳转实例管理并打开详情')
+    await focusDialog.getByRole('button', { name: '完成' }).click()
+    await focusDialog.waitFor({ state: 'detached' })
+    await page.getByRole('heading', { name: '实例管理', exact: true }).waitFor()
+    await page.getByTestId(`instance-row-${focusName}`).waitFor()
+
+    // 日志弹窗：SSE 直读（meta 帧先行）＋ 界面 role="log" 日志区。
+    const sseProbe = await page.evaluate(async (name) => {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 5000)
+      let text = ''
+      try {
+        const response = await fetch(`/api/v1/instances/${encodeURIComponent(name)}/logs?tail=20`, { signal: controller.signal })
+        if (!response.ok || !response.body) return `HTTP ${response.status}`
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        while (!text.includes('event: meta') && !text.includes('event: end')) {
+          const { value, done } = await reader.read()
+          if (done) break
+          text += decoder.decode(value, { stream: true })
+        }
+      } catch {
+        // abort 属预期：拿到首帧后主动断开长连接
+      } finally {
+        clearTimeout(timer)
+        controller.abort()
+      }
+      return text
+    }, focusName)
+    if (!sseProbe.includes('event: meta')) throw new Error(`实例日志 SSE 未返回 meta 帧：${sseProbe.slice(0, 200)}`)
+    check('实例日志 SSE 端点（meta 帧先行）')
+
+    await page.getByRole('button', { name: `查看 ${focusName} 日志`, exact: true }).click()
+    const logsDialog = page.getByRole('dialog')
+    await logsDialog.waitFor()
+    await logsDialog.locator('[role="log"]').waitFor()
+    await logsDialog.getByTestId('instance-log-count').waitFor()
+    check('实例日志弹窗（role=log 实时日志区）')
+    await screenshot('02-instance-logs')
+    await page.keyboard.press('Escape')
+    await logsDialog.waitFor({ state: 'detached' })
+
+    // 模型关联弹窗：接口 supported 与界面「旧实例重建提示」必须一致。
+    const linksApiBody = await page.request.get(`${baseURL}/api/v1/instances/${encodeURIComponent(focusName)}/model-links`)
+    const linksApi = linksApiBody.ok() ? await linksApiBody.json() : null
+    if (!linksApi || typeof linksApi.supported !== 'boolean' || !Array.isArray(linksApi.links)) throw new Error(`模型关联接口异常：${JSON.stringify(linksApi)}`)
+    await page.getByRole('button', { name: `关联 ${focusName} 模型`, exact: true }).click()
+    const linksDialog = page.getByRole('dialog')
+    await linksDialog.waitFor()
+    await linksDialog.getByText(`模型关联 - ${focusName}`, { exact: false }).waitFor()
+    const linksDialogText = await linksDialog.innerText()
+    const legacyNotice = linksDialogText.includes('该实例由旧版本创建')
+    if (legacyNotice === linksApi.supported) throw new Error(`模型关联弹窗与接口状态不一致：supported=${linksApi.supported}`)
+    check(`实例模型关联弹窗（${linksApi.supported ? '可在线关联' : '旧实例提示重建'}）`)
+    await screenshot('02-instance-model-links')
+    await page.keyboard.press('Escape')
+    await linksDialog.waitFor({ state: 'detached' })
+  } else {
+    console.log('SKIP 实例日志／模型关联／首页跳转断言（当前无任何实例）')
+  }
 
   await page.getByRole('button', { name: '新建实例', exact: true }).click()
   const createDialog = page.getByRole('dialog')
@@ -580,7 +688,13 @@ try {
     }
     if (!importDone) throw new Error('本地导入任务未完成或文件未写入共享仓库')
     check('真实本地导入写入共享仓库')
-    await page.getByRole('row').filter({ hasText: 'regress-import.safetensors' }).getByText('就绪', { exact: true }).waitFor({ timeout: 15000 })
+    // 界面每 3 秒刷新且后端扫描有秒级缓存：以 DOM 为准等待「文件行出现 + 就绪徽章 + 导入任务行退场」。
+    await page.waitForFunction(() => {
+      const name = 'regress-import.safetensors'
+      const deleteButtons = document.querySelectorAll(`button[aria-label="删除 ${name}"]`)
+      const readyRow = [...document.querySelectorAll('tbody tr')].some((row) => row.innerText.includes(name) && row.innerText.includes('就绪'))
+      return deleteButtons.length === 1 && readyRow
+    }, undefined, { timeout: 30000 })
 
     await page.getByRole('button', { name: '删除 regress-import.safetensors', exact: true }).click()
     await page.getByRole('dialog').getByRole('button', { name: '确认删除' }).click()

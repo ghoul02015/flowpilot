@@ -99,8 +99,13 @@ func TestWriteExtraModelPaths(t *testing.T) {
 		t.Fatalf("宿主机路径文件应可读：%v", err)
 	}
 	content := string(data)
-	if !strings.Contains(content, "base_path: /app/ComfyUI/models-net") {
-		t.Fatalf("extra_model_paths 缺少 base_path：%s", content)
+
+	// 模型关联快捷层恒存在，与网络存储是否启用无关。
+	if !strings.Contains(content, "flowpilot_linked:") {
+		t.Fatalf("extra_model_paths 缺少 flowpilot_linked 节：%s", content)
+	}
+	if !strings.Contains(content, "base_path: /app/ComfyUI/models-linked") {
+		t.Fatalf("extra_model_paths 缺少 linked base_path：%s", content)
 	}
 	for _, category := range []string{"checkpoints", "loras", "text_encoders", "diffusion_models", "clip_vision", "model_patches"} {
 		if !strings.Contains(content, category+": "+category) {
@@ -108,8 +113,36 @@ func TestWriteExtraModelPaths(t *testing.T) {
 		}
 	}
 	if strings.Contains(content, "custom_nodes") {
-		t.Fatal("网络仓库不应映射 custom_nodes（可执行代码风险）")
+		t.Fatal("附加来源不应映射 custom_nodes（可执行代码风险）")
 	}
+	// 网络存储未启用时不应出现 models-net 来源。
+	if strings.Contains(content, "models-net") {
+		t.Fatalf("未启用网络存储时不应出现 network 节：%s", content)
+	}
+
+	// 启用网络存储并落标记文件后，yaml 追加 flowpilot_network 节。
+	if err := manager.Save(Config{Enabled: true, Type: "nfs", Address: "192.168.0.10", RemotePath: "/volume1/models"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(manager.NetworkContainerPath(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(manager.NetworkContainerPath(), MarkerFile), []byte("flowpilot"), 0o644); err != nil {
+		t.Fatalf("写入挂载标记失败：%v", err)
+	}
+	hostFile, err = manager.WriteExtraModelPaths("comfy-01", "/app/ComfyUI")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(hostFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content = string(data)
+	if !strings.Contains(content, "flowpilot_network:") || !strings.Contains(content, "base_path: /app/ComfyUI/models-net") {
+		t.Fatalf("启用网络存储后应追加 network 节：%s", content)
+	}
+
 	manager.RemoveExtraModelPaths("comfy-01")
 	if _, err := os.Stat(hostFile); !os.IsNotExist(err) {
 		t.Fatal("清理后 yaml 应被删除")

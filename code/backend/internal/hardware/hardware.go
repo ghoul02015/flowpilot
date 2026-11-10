@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -49,7 +50,10 @@ type Report struct {
 	GPUAvailable      bool      `json:"gpuAvailable"`
 	GPUError          string    `json:"gpuError,omitempty"`
 	GPUMemoryMode     string    `json:"gpuMemoryMode"` // discrete | unified | none
-	GPUs              []GPU     `json:"gpus"`
+	// DriverVersion / CUDAVersion 来自 nvidia-smi 头部，解析失败或不可用时为空。
+	DriverVersion string `json:"driverVersion,omitempty"`
+	CUDAVersion   string `json:"cudaVersion,omitempty"`
+	GPUs          []GPU  `json:"gpus"`
 }
 
 // Config 控制采集器的数据来源，便于容器挂载和测试替换。
@@ -73,6 +77,8 @@ type Collector struct {
 
 	// queryGPU 可替换用于测试；默认执行 nvidia-smi。
 	queryGPU func(ctx context.Context) (string, error)
+	// queryVersions 可替换用于测试；默认执行 nvidia-smi 读取驱动/CUDA 版本。
+	queryVersions func(ctx context.Context) (string, error)
 
 	mu        sync.Mutex
 	prevIdle  uint64
@@ -89,6 +95,7 @@ func NewCollector(config Config) *Collector {
 		nvidiaSMIBin: orDefault(config.NvidiaSMIBin, "nvidia-smi"),
 	}
 	collector.queryGPU = collector.execNvidiaSMI
+	collector.queryVersions = collector.execNvidiaSMIHeader
 	return collector
 }
 
@@ -116,6 +123,9 @@ func (c *Collector) Collect(ctx context.Context) Report {
 	report.MemoryTotalMB, report.MemoryUsedMB = c.memory()
 	report.StoragePath, report.StorageTotalBytes, report.StorageUsedBytes = c.storage()
 	report.GPUs, report.GPUAvailable, report.GPUMemoryMode, report.GPUError = c.gpus(ctx)
+	if report.GPUAvailable {
+		report.DriverVersion, report.CUDAVersion = c.versions(ctx)
+	}
 	return report
 }
 
@@ -315,6 +325,49 @@ func (c *Collector) execNvidiaSMI(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("执行 nvidia-smi 失败：%w", err)
 	}
 	return string(output), nil
+}
+
+// execNvidiaSMIHeader 执行不带参数的 nvidia-smi，读取头部驱动与 CUDA 版本行。
+func (c *Collector) execNvidiaSMIHeader(ctx context.Context) (string, error) {
+	if c.nvidiaSMIBin == "" {
+		return "", fmt.Errorf("nvidia-smi 已禁用")
+	}
+	commandContext, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(commandContext, c.nvidiaSMIBin).Output()
+	if err != nil {
+		return "", fmt.Errorf("执行 nvidia-smi 失败：%w", err)
+	}
+	return string(output), nil
+}
+
+var (
+	driverVersionPattern = regexp.MustCompile(`Driver Version:\s*([0-9.]+)`)
+	cudaVersionPattern   = regexp.MustCompile(`CUDA Version:\s*([0-9.]+)`)
+)
+
+// versions 解析 nvidia-smi 头部的驱动与 CUDA 版本；失败时返回空串而非报错。
+func (c *Collector) versions(ctx context.Context) (string, string) {
+	if c.queryVersions == nil {
+		return "", ""
+	}
+	output, err := c.queryVersions(ctx)
+	if err != nil {
+		return "", ""
+	}
+	return parseVersions(output)
+}
+
+// parseVersions 从 nvidia-smi 完整输出中提取驱动与 CUDA 版本。
+func parseVersions(output string) (string, string) {
+	driver, cuda := "", ""
+	if match := driverVersionPattern.FindStringSubmatch(output); len(match) == 2 {
+		driver = match[1]
+	}
+	if match := cudaVersionPattern.FindStringSubmatch(output); len(match) == 2 {
+		cuda = match[1]
+	}
+	return driver, cuda
 }
 
 func (c *Collector) gpus(ctx context.Context) ([]GPU, bool, string, string) {

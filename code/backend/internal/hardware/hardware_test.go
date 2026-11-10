@@ -171,3 +171,42 @@ func TestCPUModelFallbackOnARM(t *testing.T) {
 		t.Fatalf("unexpected fallback model %q", model)
 	}
 }
+
+const nvidiaSMIHeaderSample = `Tue Nov 10 08:00:00 2026
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 570.124.06              Driver Version: 570.124.06      CUDA Version: 12.8     |
+|-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+`
+
+// nvidia-smi 头部的驱动与 CUDA 版本应被正确解析；缺字段时为空串。
+func TestParseVersions(t *testing.T) {
+	driver, cuda := parseVersions(nvidiaSMIHeaderSample)
+	if driver != "570.124.06" || cuda != "12.8" {
+		t.Fatalf("版本解析错误：driver=%q cuda=%q", driver, cuda)
+	}
+	driver, cuda = parseVersions("no version info here")
+	if driver != "" || cuda != "" {
+		t.Fatalf("无版本信息时应为空串，得到 driver=%q cuda=%q", driver, cuda)
+	}
+}
+
+// Collect 在 GPU 可用时应带上版本字段；版本查询失败不影响 GPU 指标。
+func TestCollectIncludesVersions(t *testing.T) {
+	collector := NewCollector(Config{ProcRoot: t.TempDir(), HostRoot: t.TempDir(), DataDir: t.TempDir(), NvidiaSMIBin: "disabled"})
+	collector.queryGPU = func(context.Context) (string, error) { return dualL40SSMI, nil }
+	collector.queryVersions = func(context.Context) (string, error) { return nvidiaSMIHeaderSample, nil }
+	report := collector.Collect(context.Background())
+	if report.DriverVersion != "570.124.06" || report.CUDAVersion != "12.8" {
+		t.Fatalf("报告应包含驱动/CUDA 版本：%q %q", report.DriverVersion, report.CUDAVersion)
+	}
+
+	collector.queryVersions = func(context.Context) (string, error) { return "", errors.New("boom") }
+	report = collector.Collect(context.Background())
+	if !report.GPUAvailable || len(report.GPUs) != 2 {
+		t.Fatal("版本查询失败不应影响 GPU 采集")
+	}
+	if report.DriverVersion != "" || report.CUDAVersion != "" {
+		t.Fatalf("版本查询失败时应为空串：%q %q", report.DriverVersion, report.CUDAVersion)
+	}
+}

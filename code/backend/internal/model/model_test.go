@@ -175,3 +175,33 @@ func TestNetworkUnavailableDoesNotFailScan(t *testing.T) {
 		t.Fatal("本地仓库文件不应受网络仓库影响")
 	}
 }
+
+// 删除模型文件应级联清理各实例指向它的符号链接，并保留其余链接。
+func TestDeleteCascadesInstanceLinks(t *testing.T) {
+	local := t.TempDir()
+	writeFile(t, local, "loras/a.safetensors", 2)
+	writeFile(t, local, "loras/b.safetensors", 2)
+	manager := NewManager(local)
+
+	linksRoot := t.TempDir()
+	instanceDir := filepath.Join(linksRoot, "demo", "loras")
+	if err := os.MkdirAll(instanceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a.safetensors", "b.safetensors"} {
+		if err := os.Symlink("/data/models/loras/"+name, filepath.Join(instanceDir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manager.SetLinksRoot(linksRoot)
+
+	if err := manager.Delete("loras/a.safetensors"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(instanceDir, "a.safetensors")); !os.IsNotExist(err) {
+		t.Fatalf("被删模型的关联链接应被清理，得到 %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(instanceDir, "b.safetensors")); err != nil {
+		t.Fatalf("其余关联不应受影响：%v", err)
+	}
+}

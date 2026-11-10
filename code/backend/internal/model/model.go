@@ -74,6 +74,9 @@ type Manager struct {
 	root string
 	// networkSource 返回网络仓库（容器内路径）与是否可用；nil 表示未配置。
 	networkSource func() (string, bool)
+	// linksRoot 是实例「模型关联」符号链接根目录（容器内视角）；
+	// 删除模型时级联清理各实例指向该文件的链接。
+	linksRoot string
 
 	mu       sync.Mutex
 	cached   *Report
@@ -90,6 +93,12 @@ func NewManager(root string) *Manager {
 // SetNetworkSource 注册网络仓库来源（NAS 只读），由网络存储管理器提供。
 func (m *Manager) SetNetworkSource(provider func() (string, bool)) {
 	m.networkSource = provider
+}
+
+// SetLinksRoot 注册实例模型关联的符号链接根目录（容器内视角），
+// 删除模型文件时级联清理各实例中指向它的链接。
+func (m *Manager) SetLinksRoot(root string) {
+	m.linksRoot = root
 }
 
 // Root 返回仓库根目录。
@@ -216,7 +225,58 @@ func (m *Manager) Delete(relPath string) error {
 	m.mu.Lock()
 	m.cached = nil
 	m.mu.Unlock()
+	m.cleanupInstanceLinks(relPath)
 	return nil
+}
+
+// cleanupInstanceLinks 级联清理各实例模型中指向被删文件的符号链接。
+// 链接目录结构为 <linksRoot>/<实例>/<类别>/<相对路径>；
+// 清理失败不阻塞删除本身（残留链接在 ComfyUI 中表现为失效项，可手动重设关联清除）。
+func (m *Manager) cleanupInstanceLinks(relPath string) {
+	if m.linksRoot == "" {
+		return
+	}
+	cleaned := filepath.Clean(filepath.FromSlash(relPath))
+	if cleaned == "." || filepath.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return
+	}
+	instances, err := os.ReadDir(m.linksRoot)
+	if err != nil {
+		return
+	}
+	for _, instanceEntry := range instances {
+		if !instanceEntry.IsDir() {
+			continue
+		}
+		linkPath := filepath.Join(m.linksRoot, instanceEntry.Name(), cleaned)
+		info, statErr := os.Lstat(linkPath)
+		if statErr != nil || info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		if os.Remove(linkPath) != nil {
+			continue
+		}
+		pruneEmptyParents(filepath.Dir(linkPath), filepath.Join(m.linksRoot, instanceEntry.Name()))
+	}
+}
+
+// pruneEmptyParents 自底向上删除空目录，直到停在 root（不含）。
+func pruneEmptyParents(dir, root string) {
+	for {
+		cleanedDir := filepath.Clean(dir)
+		cleanedRoot := filepath.Clean(root)
+		if cleanedDir == cleanedRoot || !strings.HasPrefix(cleanedDir, cleanedRoot+string(filepath.Separator)) {
+			return
+		}
+		entries, err := os.ReadDir(cleanedDir)
+		if err != nil || len(entries) > 0 {
+			return
+		}
+		if os.Remove(cleanedDir) != nil {
+			return
+		}
+		dir = filepath.Dir(cleanedDir)
+	}
 }
 
 // resolve 将相对路径解析为仓库内的绝对路径，拒绝路径穿越。

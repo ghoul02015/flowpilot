@@ -1,7 +1,10 @@
-import { useMemo, useState } from 'react'
-import { ExternalLink, Play, Plus, RefreshCw, Search, Settings2, Square, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { ExternalLink, Link2, Play, Plus, RefreshCw, ScrollText, Search, Settings2, Square, Trash2 } from 'lucide-react'
+import type { ModelReport } from '@/api'
 import { EmptyState, PageHeader, Panel, StatusBadge } from '@/components/common'
 import { ImageManager } from '@/components/ImageManager'
+import { InstanceLogsDialog } from '@/components/InstanceLogsDialog'
+import { ModelLinksDialog } from '@/components/ModelLinksDialog'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { Instance } from '@/types'
 
@@ -10,6 +13,13 @@ interface Props {
   gpuNames: string[]
   realMode: boolean
   busyIds: string[]
+  /**
+   * 首页跳转带来的目标实例名：作为本页的「初始定位」直接打开详情并高亮。
+   * 父级以 token 拼进 key，每次带定位跳转都会重新挂载本组件，初始定位因此自然生效。
+   */
+  initialFocus?: string
+  /** 共享仓库当前扫描结果（模型关联弹窗的候选来源）。 */
+  models?: ModelReport | null
   onCreate: () => void
   onAction: (id: string, action: 'start' | 'stop' | 'restart') => void
   onDelete: (id: string) => void
@@ -17,16 +27,28 @@ interface Props {
 
 type InstanceTab = 'instances' | 'images'
 
-export function Instances({ instances, gpuNames, realMode, busyIds, onCreate, onAction, onDelete }: Props) {
+export function Instances({ instances, gpuNames, realMode, busyIds, initialFocus, models, onCreate, onAction, onDelete }: Props) {
+  // 初始定位（仅首次渲染生效）：命中则直接打开详情弹窗并高亮该行。
+  const initialId = initialFocus ? instances.find((item) => item.name === initialFocus)?.id ?? null : null
   const [tab, setTab] = useState<InstanceTab>('instances')
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all')
-  const [detailId, setDetailId] = useState<string | null>(null)
+  const [detailId, setDetailId] = useState<string | null>(initialId)
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [confirmName, setConfirmName] = useState('')
+  const [logsInstance, setLogsInstance] = useState<{ name: string; status: string } | null>(null)
+  const [linksInstance, setLinksInstance] = useState<{ name: string; status: string } | null>(null)
+  const [highlightId, setHighlightId] = useState<string | null>(initialId)
   const filtered = useMemo(() => instances.filter((item) => item.name.toLowerCase().includes(query.toLowerCase()) && (status === 'all' || item.status === status)), [instances, query, status])
   const detail = instances.find((item) => item.id === detailId)
   const deleting = instances.find((item) => item.id === deleteId)
+
+  // 跳转高亮 3 秒后自动消退；定时器回调属异步更新，不产生级联渲染。
+  useEffect(() => {
+    if (!highlightId) return
+    const timer = window.setTimeout(() => setHighlightId(null), 3000)
+    return () => window.clearTimeout(timer)
+  }, [highlightId])
 
   function closeDelete() {
     setDeleteId(null)
@@ -45,7 +67,7 @@ export function Instances({ instances, gpuNames, realMode, busyIds, onCreate, on
         <select className="field-input sm:w-44" aria-label="按状态筛选" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">全部状态</option><option value="running">运行中</option><option value="stopped">已停止</option><option value="error">异常</option></select>
       </div>
       <div className="overflow-x-auto"><table className="data-table min-w-[1080px]"><thead><tr><th>实例名称</th><th>状态</th><th>资源</th><th>访问端口</th><th>ComfyUI 队列</th><th>操作</th></tr></thead><tbody>
-        {filtered.map((item) => { const busy = busyIds.includes(item.id); return <tr key={item.id}>
+        {filtered.map((item) => { const busy = busyIds.includes(item.id); return <tr key={item.id} className={highlightId === item.id ? 'bg-teal-50 transition-colors' : undefined} data-testid={`instance-row-${item.name}`}>
           <td><button type="button" className="cursor-pointer text-left font-medium text-slate-900 hover:text-teal-700" onClick={() => setDetailId(item.id)}>{item.name}</button><div className="mt-1 text-xs text-slate-500">{item.template} · {item.version}</div></td>
           <td><StatusBadge status={item.status} /></td><td>{item.gpu >= 0 ? `GPU ${item.gpu}` : '不分配'}<div className="mt-1 max-w-48 truncate text-xs text-slate-500" title={item.gpu >= 0 ? gpuNames[item.gpu] ?? 'GPU' : undefined}>{item.gpu >= 0 ? gpuNames[item.gpu] ?? 'GPU' : '仅 CPU 运行'}</div></td><td className="font-mono text-xs">{item.port}</td>
           <td>{item.status === 'running'
@@ -58,6 +80,8 @@ export function Instances({ instances, gpuNames, realMode, busyIds, onCreate, on
           <td><div className="flex items-center gap-1">
             {item.status === 'running' ? <><button type="button" className="icon-button" aria-label={`停止 ${item.name}`} title="停止" disabled={busy} onClick={() => onAction(item.id, 'stop')}><Square className="size-4" /></button><button type="button" className="icon-button" aria-label={`重启 ${item.name}`} title="重启" disabled={busy} onClick={() => onAction(item.id, 'restart')}><RefreshCw className={`size-4 ${busy ? 'animate-spin' : ''}`} /></button></> : <button type="button" className="icon-button" aria-label={`启动 ${item.name}`} title="启动" disabled={busy} onClick={() => onAction(item.id, 'start')}><Play className="size-4" /></button>}
             {realMode && item.status === 'running' && <button type="button" className="icon-button text-teal-700 hover:bg-teal-50" aria-label={`打开 ${item.name} ComfyUI`} title="打开 ComfyUI 应用" onClick={() => window.open(`http://${window.location.hostname}:${item.port}`, '_blank', 'noopener')}><ExternalLink className="size-4" /></button>}
+            <button type="button" className="icon-button" aria-label={`查看 ${item.name} 日志`} title="实例日志（实时流）" onClick={() => setLogsInstance({ name: item.name, status: item.status })}><ScrollText className="size-4" /></button>
+            <button type="button" className="icon-button" aria-label={`关联 ${item.name} 模型`} title="模型关联" disabled={!realMode} onClick={() => setLinksInstance({ name: item.name, status: item.status })}><Link2 className="size-4" /></button>
             <button type="button" className="icon-button" aria-label={`查看 ${item.name} 详情`} title="实例详情" onClick={() => setDetailId(item.id)}><Settings2 className="size-4" /></button>
             <span className="mx-0.5 h-5 w-px bg-slate-200" aria-hidden="true" />
             <button type="button" className="icon-button text-rose-600 hover:bg-rose-50" aria-label={`删除 ${item.name}`} title="删除" disabled={busy} onClick={() => setDeleteId(item.id)}><Trash2 className="size-4" /></button>
@@ -94,5 +118,9 @@ export function Instances({ instances, gpuNames, realMode, busyIds, onCreate, on
         <DialogFooter><button type="button" className="btn-secondary" onClick={closeDelete}>取消</button><button type="button" className="btn-danger" disabled={confirmName !== deleting.name} onClick={() => { onDelete(deleting.id); closeDelete() }}><Trash2 className="size-4" />确认删除</button></DialogFooter>
       </>}</DialogContent>
     </Dialog>
+
+    {/* 日志与关联弹窗按实例名重挂载：切换实例时内部状态（日志缓冲、勾选集）自然归零，无需 effect 内重置。 */}
+    <InstanceLogsDialog key={`logs-${logsInstance?.name ?? 'idle'}`} instance={logsInstance} onClose={() => setLogsInstance(null)} />
+    <ModelLinksDialog key={`links-${linksInstance?.name ?? 'idle'}`} instance={linksInstance} models={models ?? null} onClose={() => setLinksInstance(null)} />
   </>
 }

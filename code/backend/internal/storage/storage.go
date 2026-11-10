@@ -130,7 +130,9 @@ func (m *Manager) NetworkContainerPath() string { return m.containerPath }
 // NetworkHostPath 返回宿主机网络仓库路径（实例 bind 挂载源）。
 func (m *Manager) NetworkHostPath() string { return m.hostPath }
 
-// WriteExtraModelPaths 为实例生成 extra_model_paths.yaml，
+// WriteExtraModelPaths 为实例生成 extra_model_paths.yaml。
+// flowpilot_linked 节恒存在（实例「模型关联」快捷层，见 instance 包的 links 功能）；
+// 网络存储（NAS）已挂载时额外追加 flowpilot_network 节。
 // basePath 是 ComfyUI 在实例容器内的根目录（如 /app/ComfyUI），
 // 返回宿主机侧文件路径供 bind 挂载。
 func (m *Manager) WriteExtraModelPaths(name, basePath string) (string, error) {
@@ -138,7 +140,7 @@ func (m *Manager) WriteExtraModelPaths(name, basePath string) (string, error) {
 		return "", err
 	}
 	containerFile := filepath.Join(m.yamlDir, name+".yaml")
-	content := renderExtraModelPaths(basePath)
+	content := renderExtraModelPaths(basePath, m.Detected())
 	tmp := containerFile + ".tmp"
 	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
 		return "", err
@@ -168,12 +170,25 @@ var extraModelCategories = []string{
 	"photomaker", "classifiers", "audio_encoders",
 }
 
-func renderExtraModelPaths(basePath string) string {
+// renderExtraModelPaths 生成 extra_model_paths.yaml 内容。
+// flowpilot_linked 为实例模型关联快捷层（符号链接目录，恒生成）；
+// withNetwork 为 true 时追加 NAS 网络仓库来源。
+func renderExtraModelPaths(basePath string, withNetwork bool) string {
 	var builder strings.Builder
-	builder.WriteString("# 由 FlowPilot 生成：实例容器内 ComfyUI 自动加载本文件，\n# 将网络存储仓库（NAS）追加为只读模型来源。\nflowpilot_network:\n")
-	builder.WriteString("    base_path: " + basePath + "/models-net\n")
+	builder.WriteString("# 由 FlowPilot 生成：实例容器内 ComfyUI 自动加载本文件。\n")
+	builder.WriteString("# flowpilot_linked：实例「模型关联」快捷层（平台维护的符号链接目录）。\n")
+	builder.WriteString("flowpilot_linked:\n")
+	builder.WriteString("    base_path: " + basePath + "/models-linked\n")
 	for _, category := range extraModelCategories {
 		builder.WriteString("    " + category + ": " + category + "\n")
+	}
+	if withNetwork {
+		builder.WriteString("\n# flowpilot_network：网络存储（NAS）只读模型仓库。\n")
+		builder.WriteString("flowpilot_network:\n")
+		builder.WriteString("    base_path: " + basePath + "/models-net\n")
+		for _, category := range extraModelCategories {
+			builder.WriteString("    " + category + ": " + category + "\n")
+		}
 	}
 	return builder.String()
 }

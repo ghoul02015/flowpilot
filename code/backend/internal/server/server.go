@@ -25,7 +25,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/storage"
 )
 
-const Version = "0.0.9.3"
+const Version = "0.0.9.4"
 
 type Handler struct {
 	docker       *docker.Client
@@ -66,6 +66,10 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("POST /api/v1/instances/{name}/restart", handler.instanceAction("restart"))
 	mux.HandleFunc("DELETE /api/v1/instances/{name}", handler.deleteInstance)
 	mux.HandleFunc("GET /api/v1/instances/{name}/comfy/status", handler.comfyStatus)
+	// 实例日志（SSE 实时流）与模型关联（符号链接快捷层）。
+	mux.HandleFunc("GET /api/v1/instances/{name}/logs", handler.instanceLogs)
+	mux.HandleFunc("GET /api/v1/instances/{name}/model-links", handler.getModelLinks)
+	mux.HandleFunc("PUT /api/v1/instances/{name}/model-links", handler.putModelLinks)
 	mux.HandleFunc("GET /api/v1/models", handler.listModels)
 	mux.HandleFunc("DELETE /api/v1/models", handler.deleteModel)
 	mux.HandleFunc("GET /api/v1/models/catalog", handler.modelCatalog)
@@ -267,6 +271,169 @@ func (h *Handler) comfyGet(rawURL string) ([]byte, error) {
 		return nil, fmt.Errorf("ComfyUI 返回 HTTP %d", response.StatusCode)
 	}
 	return io.ReadAll(io.LimitReader(response.Body, 1<<20))
+}
+
+// writeSSE 输出一条 server-sent event；event 为空时省略 event 行。
+func writeSSE(w io.Writer, event string, payload any) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	if event != "" {
+		_, _ = fmt.Fprintf(w, "event: %s\n", event)
+	}
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+}
+
+// instanceLogs 以 SSE 推送实例容器日志：先回放最近 tail 行，再实时 follow。
+// 事件序列：meta（首帧）→ 若干日志 data 行 → end（结束原因 eof／container_gone）；
+// 每 15 秒发送注释心跳，避免反向代理断开空闲连接。
+// 实例停止时 Docker 仍会回放历史日志后结束流，便于排查启动失败与挂起。
+func (h *Handler) instanceLogs(w http.ResponseWriter, r *http.Request) {
+	if h.instances == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "实例管理未启用"})
+		return
+	}
+	target, err := h.instances.Get(r.Context(), r.PathValue("name"))
+	if err != nil {
+		h.writeInstanceError(w, err, "读取实例失败")
+		return
+	}
+	tail := 200
+	if raw := r.URL.Query().Get("tail"); raw != "" {
+		if parsed, convErr := strconv.Atoi(raw); convErr == nil && parsed >= 0 {
+			if parsed > 1000 {
+				parsed = 1000
+			}
+			tail = parsed
+		}
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "当前环境不支持流式响应"})
+		return
+	}
+	// 非 TTY 容器的日志流带 multiplex header，需按 inspect 结果决定是否剥离。
+	tty, ttyErr := h.docker.ContainerTTY(r.Context(), target.ContainerID)
+	if ttyErr != nil {
+		slog.Warn("inspect instance tty failed", "name", target.Name, "error", ttyErr)
+	}
+	stream, err := h.docker.ContainerLogs(r.Context(), target.ContainerID, tail)
+	if err != nil {
+		h.writeInstanceError(w, err, "读取实例日志失败")
+		return
+	}
+	defer stream.Close()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	writeSSE(w, "meta", map[string]any{"instance": target.Name, "tail": tail, "tty": tty, "status": target.Status})
+	flusher.Flush()
+
+	reader := docker.NewDemuxReader(stream, tty)
+	lineCh := make(chan docker.LogLine, 64)
+	errCh := make(chan error, 1)
+	go func() {
+		defer close(lineCh)
+		for {
+			line, readErr := reader.ReadLine()
+			if readErr != nil {
+				if readErr != io.EOF {
+					select {
+					case errCh <- readErr:
+					default:
+					}
+				}
+				return
+			}
+			select {
+			case lineCh <- line:
+			case <-r.Context().Done():
+				return
+			}
+		}
+	}()
+
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-heartbeat.C:
+			if _, writeErr := io.WriteString(w, ": ping\n\n"); writeErr != nil {
+				return
+			}
+			flusher.Flush()
+		case readErr := <-errCh:
+			writeSSE(w, "end", map[string]string{"reason": "error", "detail": readErr.Error()})
+			flusher.Flush()
+			return
+		case line, open := <-lineCh:
+			if !open {
+				reason := "eof"
+				if _, getErr := h.instances.Get(r.Context(), target.Name); getErr != nil {
+					reason = "container_gone" // 流因容器删除而结束
+				}
+				writeSSE(w, "end", map[string]string{"reason": reason})
+				flusher.Flush()
+				return
+			}
+			writeSSE(w, "", line)
+			flusher.Flush()
+		}
+	}
+}
+
+// getModelLinks 返回实例是否支持模型关联（旧版本实例不支持）及当前关联列表。
+func (h *Handler) getModelLinks(w http.ResponseWriter, r *http.Request) {
+	if h.instances == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "实例管理未启用"})
+		return
+	}
+	name := r.PathValue("name")
+	supported, links, err := h.instances.ListModelLinks(r.Context(), name)
+	if err != nil {
+		h.writeInstanceError(w, err, "读取模型关联失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"instance": name, "supported": supported, "links": links})
+}
+
+// putModelLinks 以全量集合语义更新实例的模型关联：
+// 新增/移除即时生效，ComfyUI 页面刷新即可见，无需重启实例。
+func (h *Handler) putModelLinks(w http.ResponseWriter, r *http.Request) {
+	if h.instances == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "实例管理未启用"})
+		return
+	}
+	name := r.PathValue("name")
+	var body struct {
+		Links []instance.ModelLink `json:"links"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误", "detail": err.Error()})
+		return
+	}
+	added, removed, err := h.instances.SetModelLinksFor(r.Context(), name, body.Links)
+	if err != nil {
+		h.writeInstanceError(w, err, "更新模型关联失败")
+		return
+	}
+	supported, links, err := h.instances.ListModelLinks(r.Context(), name)
+	if err != nil {
+		h.writeInstanceError(w, err, "读取模型关联失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"instance":  name,
+		"supported": supported,
+		"links":     links,
+		"added":     added,
+		"removed":   removed,
+		"hint":      "ComfyUI 页面刷新后即可在对应类别看到关联模型（无需重启实例）",
+	})
 }
 
 func (h *Handler) deleteInstance(w http.ResponseWriter, r *http.Request) {
@@ -874,11 +1041,14 @@ func (h *Handler) writeDownloadError(w http.ResponseWriter, err error, prefix st
 func (h *Handler) writeInstanceError(w http.ResponseWriter, err error, prefix string) {
 	var validationError *instance.ValidationError
 	var notFoundError *instance.NotFoundError
+	var notSupportedError *instance.NotSupportedError
 	switch {
 	case errors.As(err, &validationError):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationError.Message})
 	case errors.As(err, &notFoundError):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": notFoundError.Error()})
+	case errors.As(err, &notSupportedError):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": notSupportedError.Error()})
 	default:
 		slog.Warn(prefix, "error", err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": prefix, "detail": err.Error()})

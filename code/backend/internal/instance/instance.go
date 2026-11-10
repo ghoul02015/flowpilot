@@ -8,11 +8,14 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ghoul02015/flowpilot/internal/docker"
@@ -30,8 +33,12 @@ const (
 	labelModelsTarget    = "flowpilot.instance.models-target"
 	labelOutputsTarget   = "flowpilot.instance.outputs-target"
 	labelWorkflowsTarget = "flowpilot.instance.workflows-target"
-	containerPrefix      = "flowpilot-comfyui-"
-	stopTimeoutSecond    = 10
+	// labelModelLinks 标记实例具备模型关联挂载（models-linked 目录 + extra_model_paths.yaml）。
+	// 0.0.9.4 之前创建的实例无此标签，模型关联功能对它们不可用（挂载创建时固定，重启不生效）。
+	labelModelLinks    = "flowpilot.instance.model-links"
+	containerPrefix    = "flowpilot-comfyui-"
+	stopTimeoutSecond  = 10
+	modelsLinkedSubdir = "models-linked"
 )
 
 var (
@@ -55,18 +62,20 @@ type Spec struct {
 
 // Instance 是实例的对外视图。
 type Instance struct {
-	Name            string    `json:"name"`
-	ContainerID     string    `json:"containerId"`
-	ContainerName   string    `json:"containerName"`
-	Image           string    `json:"image"`
-	Status          string    `json:"status"` // running | stopped | error
-	GPU             int       `json:"gpu"`
-	Port            int       `json:"port"`
-	AutoStart       bool      `json:"autoStart"`
-	ModelsTarget    string    `json:"modelsTarget"`
-	OutputsTarget   string    `json:"outputsTarget"`
-	WorkflowsTarget string    `json:"workflowsTarget"`
-	CreatedAt       time.Time `json:"createdAt"`
+	Name            string `json:"name"`
+	ContainerID     string `json:"containerId"`
+	ContainerName   string `json:"containerName"`
+	Image           string `json:"image"`
+	Status          string `json:"status"` // running | stopped | error
+	GPU             int    `json:"gpu"`
+	Port            int    `json:"port"`
+	AutoStart       bool   `json:"autoStart"`
+	ModelsTarget    string `json:"modelsTarget"`
+	OutputsTarget   string `json:"outputsTarget"`
+	WorkflowsTarget string `json:"workflowsTarget"`
+	// ModelLinks 表示该实例是否支持「模型关联」（带 models-linked 挂载）。
+	ModelLinks bool      `json:"modelLinks"`
+	CreatedAt  time.Time `json:"createdAt"`
 }
 
 // Defaults 是创建实例时的推荐默认值，随列表接口返回。
@@ -109,6 +118,15 @@ type Manager struct {
 	netHostDir  string
 	yamlWriter  func(name, basePath string) (string, error)
 	yamlCleaner func(name string)
+
+	// 模型关联快捷层：每个实例独立的符号链接目录。
+	// linksHostDir 是挂载源（宿主机视角，bind 用），
+	// linksContainerDir 是平台容器内同目录（os 操作用，二者指向同一物理目录）。
+	linksHostDir      string
+	linksContainerDir string
+	// modelRoot 是平台容器内的本地模型仓库根目录，用于关联时的存在性校验。
+	modelRoot string
+	linksMu   sync.Mutex
 }
 
 // NewManager 创建实例管理器；hostDataDir 是宿主机共享数据目录（绑定挂载用宿主机路径），
@@ -145,6 +163,16 @@ func (m *Manager) SetNetworkStorage(hostDir string, active func() bool, writer f
 	m.netActive = active
 	m.yamlWriter = writer
 	m.yamlCleaner = cleaner
+}
+
+// SetModelLinks 注册模型关联快捷层的目录：
+// hostDir 为宿主机侧链接根目录（bind 挂载源，如 <hostDataDir>/instance-links），
+// containerDir 为平台容器内同一目录（如 <dataDir>/instance-links，os 操作使用），
+// modelRoot 为平台容器内本地模型仓库根（关联存在性校验）。
+func (m *Manager) SetModelLinks(hostDir, containerDir, modelRoot string) {
+	m.linksHostDir = hostDir
+	m.linksContainerDir = containerDir
+	m.modelRoot = modelRoot
 }
 
 // Defaults 返回创建表单的推荐默认值。
@@ -230,18 +258,35 @@ func (m *Manager) Create(ctx context.Context, spec Spec) (Instance, error) {
 		m.hostDataDir + "/workflows:" + spec.WorkflowsTarget,
 		m.hostDataDir + "/outputs:" + spec.OutputsTarget,
 	}
-	// 网络存储已启用并完成挂载时：追加 NAS 只读仓库与 extra_model_paths.yaml，
-	// ComfyUI 原生把网络仓库合并为模型来源，模型无需拷贝到本机。
-	if m.netActive != nil && m.netActive() && m.yamlWriter != nil {
-		basePath := path.Dir(spec.ModelsTarget)
+	basePath := path.Dir(spec.ModelsTarget)
+	// extra_model_paths.yaml 恒生成：含 flowpilot_linked 节（模型关联快捷层），
+	// 网络存储挂载时另含 flowpilot_network 节，由 writer 内部判定。
+	var yamlHostFile string
+	if m.yamlWriter != nil {
 		hostFile, err := m.yamlWriter(spec.Name, basePath)
 		if err != nil {
-			return Instance{}, fmt.Errorf("生成网络模型路径配置失败：%w", err)
+			return Instance{}, fmt.Errorf("生成模型路径配置失败：%w", err)
 		}
-		binds = append(binds,
-			m.netHostDir+":"+basePath+"/models-net:ro",
-			hostFile+":"+basePath+"/extra_model_paths.yaml:ro",
-		)
+		yamlHostFile = hostFile
+		binds = append(binds, hostFile+":"+basePath+"/extra_model_paths.yaml:ro")
+	}
+	// 模型关联快捷层：每实例独立的符号链接目录（只读挂载），
+	// 被勾选的共享模型在 ComfyUI 内以 flowpilot_linked 来源出现；增删链接热生效。
+	modelLinks := false
+	if m.linksHostDir != "" && m.linksContainerDir != "" && yamlHostFile != "" {
+		// 目录在平台容器内创建（与宿主机 bind 源是同一物理目录）。
+		if err := os.MkdirAll(filepath.Join(m.linksContainerDir, spec.Name), 0o755); err != nil {
+			return Instance{}, fmt.Errorf("创建模型关联目录失败：%w", err)
+		}
+		binds = append(binds, filepath.Join(m.linksHostDir, spec.Name)+":"+basePath+"/"+modelsLinkedSubdir+":ro")
+		modelLinks = true
+	}
+	// 网络存储已启用并完成挂载时：追加 NAS 只读仓库（yaml 的 network 节由 writer 判定）。
+	if m.netActive != nil && m.netActive() && m.netHostDir != "" {
+		binds = append(binds, m.netHostDir+":"+basePath+"/models-net:ro")
+	}
+	if modelLinks {
+		labels[labelModelLinks] = "true"
 	}
 	hostConfig := map[string]any{
 		"PortBindings": map[string]any{portKey: []map[string]string{{"HostPort": strconv.Itoa(spec.Port)}}},
@@ -393,6 +438,10 @@ func (m *Manager) Delete(ctx context.Context, name string, force bool) error {
 	if m.yamlCleaner != nil {
 		m.yamlCleaner(name)
 	}
+	if m.linksContainerDir != "" {
+		// 关联目录仅含平台创建的符号链接，随实例一并清理。
+		_ = os.RemoveAll(filepath.Join(m.linksContainerDir, name))
+	}
 	return m.docker.RemoveContainer(ctx, target.ContainerID, force)
 }
 
@@ -411,6 +460,7 @@ func fromContainer(container docker.Container) Instance {
 		ModelsTarget:    container.Labels[labelModelsTarget],
 		OutputsTarget:   container.Labels[labelOutputsTarget],
 		WorkflowsTarget: container.Labels[labelWorkflowsTarget],
+		ModelLinks:      container.Labels[labelModelLinks] == "true",
 		CreatedAt:       time.Unix(container.Created, 0),
 	}
 }

@@ -1,28 +1,33 @@
 import { useEffect, useRef, useState } from 'react'
-import { Activity, Box, ChevronRight, Database, LayoutDashboard, Menu, Server, Settings, Waves, X } from 'lucide-react'
+import { Activity, Box, ChevronRight, Cpu, Database, LayoutDashboard, Menu, Server, Settings, Waves, X } from 'lucide-react'
 import { Toaster, toast } from 'sonner'
 import { createDownloadApi, createImportApi, createInstanceApi, deleteDownloadApi, deleteInstanceApi, deleteModelApi, downloadActionApi, formatBytes, getComfyStatus, getDownloads, getHardware, getHealth, getInstances, getModels, modelTypeToCategory, postInstanceAction, type CatalogEntry, type ComfyStatus, type DownloadTask, type InstanceDefaults, type ModelReport, type OnlineFile, type RealInstance } from '@/api'
 import { CreateInstanceDialog } from '@/components/CreateInstanceDialog'
 import { AddModelDialog } from '@/components/AddModelDialog'
 import { Dashboard } from '@/pages/Dashboard'
+import { Hardware } from '@/pages/Hardware'
 import { Instances } from '@/pages/Instances'
 import { Models } from '@/pages/Models'
 import { Tasks } from '@/pages/Tasks'
 import { System } from '@/pages/System'
-import type { AddModelInput, CreateInstanceInput, Instance, ModelItem, PageKey, TaskItem } from '@/types'
+import type { AddModelInput, CreateInstanceInput, Instance, ModelItem, NavigateOptions, PageKey, TaskItem } from '@/types'
 
 const navigation: { key: PageKey; label: string; icon: typeof LayoutDashboard }[] = [
   { key: 'dashboard', label: '首页看板', icon: LayoutDashboard },
   { key: 'instances', label: 'ComfyUI 实例', icon: Box },
   { key: 'models', label: '模型中心', icon: Database },
   { key: 'tasks', label: '任务中心', icon: Activity },
+  { key: 'hardware', label: '硬件管理', icon: Cpu },
   { key: 'system', label: '系统管理', icon: Settings },
 ]
 
-const pageNames: Record<PageKey, string> = { dashboard: '首页看板', instances: 'ComfyUI 实例', models: '模型中心', tasks: '任务中心', system: '系统管理' }
+const pageNames: Record<PageKey, string> = { dashboard: '首页看板', instances: 'ComfyUI 实例', models: '模型中心', tasks: '任务中心', hardware: '硬件管理', system: '系统管理' }
 
 export default function App() {
-  const [page, setPage] = useState<PageKey>('dashboard')
+  // 页面状态机：page 决定当前视图，focus 承载跨页定位（如跳转实例页并打开某实例详情）。
+  // token 用于区分「连续的同类定位跳转」，页面把它拼进 key 触发重挂载，从而重新应用初始定位。
+  const [route, setRoute] = useState<{ page: PageKey; focus?: string; token: number }>({ page: 'dashboard', token: 0 })
+  const page = route.page
   const [mobileOpen, setMobileOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [addModelOpen, setAddModelOpen] = useState(false)
@@ -41,7 +46,7 @@ export default function App() {
   // 同步镜像 busyIds，避免同一帧内双击穿透渲染快照的 includes 检查。
   const busyRef = useRef<Set<string>>(new Set())
   // 界面版本号跟随后端 /health，避免硬编码漂移；离线时回退常量。
-  const [backendVersion, setBackendVersion] = useState('0.0.9.3')
+  const [backendVersion, setBackendVersion] = useState('0.0.9.4')
 
   const realMode = realInstances !== null
   const realModelMode = realModels !== null
@@ -232,8 +237,10 @@ export default function App() {
     message: task.totalBytes > 0 ? `${task.message} · ${formatBytes(task.downloadedBytes)}／${formatBytes(task.totalBytes)}` : task.message,
   }))
 
-  function navigate(target: PageKey) {
-    setPage(target)
+  function navigate(target: PageKey, options?: NavigateOptions) {
+    const focus = options?.focus
+    // 带定位的跳转递增 token：即使连续点击同一个实例名，目标页也会重新挂载并命中初始定位。
+    setRoute((previous) => ({ page: target, focus, token: focus ? previous.token + 1 : previous.token }))
     setMobileOpen(false)
   }
 
@@ -482,9 +489,10 @@ export default function App() {
       <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-slate-200 bg-[oklch(0.995_0.003_220)]/95 px-4 backdrop-blur md:px-8"><button type="button" className="icon-button md:hidden" aria-label="打开菜单" onClick={() => setMobileOpen(true)}><Menu className="size-5" /></button><div className="hidden items-center gap-2 text-sm text-slate-500 sm:flex"><Server className="size-4" /><span>{hostInfo.name}</span><ChevronRight className="size-3.5" /><span className="text-slate-800">{pageNames[page]}</span></div><div className="ml-auto flex items-center gap-2"><span className={`hidden rounded-full border px-3 py-1.5 text-xs font-medium sm:inline ${backendOnline ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-rose-200 bg-rose-50 text-rose-800'}`}>{backendOnline ? '后端已连接' : '后端连接失败'}</span><button type="button" className="btn-quiet" onClick={() => navigate('tasks')}><Activity className="size-4" /><span className="hidden sm:inline">任务</span>{activeTasks > 0 && <span className="rounded-full bg-teal-100 px-1.5 text-xs text-teal-800">{activeTasks}</span>}</button><div className="flex size-9 items-center justify-center rounded-full bg-slate-900 text-xs font-semibold text-white" title="管理员">AD</div></div></header>
       <main className="mx-auto max-w-[1600px] p-4 md:p-8">
         {page === 'dashboard' && <Dashboard instances={displayInstances} models={displayModels} tasks={displayTasks} gpuCount={gpuNames.length} gpuSummary={hostInfo.gpuSummary} modelsTotal={realModels ? formatBytes(realModels.totalBytes) : undefined} onNavigate={navigate} onCreate={openCreateDialog} onAddModel={openAddModelDialog} />}
-        {page === 'instances' && <Instances instances={displayInstances} gpuNames={gpuNames} realMode={realMode} busyIds={busyIds} onCreate={openCreateDialog} onAction={instanceAction} onDelete={deleteInstance} />}
+        {page === 'instances' && <Instances key={route.focus ? `instance-focus-${route.token}` : 'instances'} instances={displayInstances} gpuNames={gpuNames} realMode={realMode} busyIds={busyIds} initialFocus={route.focus} models={realModels} onCreate={openCreateDialog} onAction={instanceAction} onDelete={deleteInstance} />}
         {page === 'models' && <Models models={displayModels} realMode={realModelMode} modelsRoot={realModels?.root} totalBytes={realModels?.totalBytes} network={realModels?.network} runningInstanceNames={displayInstances.filter((item) => item.status === 'running').map((item) => item.name)} onAdd={openAddModelDialog} onPause={pauseModel} onDelete={deleteModel} onLocalize={localizeModel} onBatchDelete={batchDeleteModels} onBatchLocalize={batchLocalizeModels} />}
         {page === 'tasks' && <Tasks tasks={displayTasks} onAction={taskAction} />}
+        {page === 'hardware' && <Hardware />}
         {page === 'system' && <System instances={displayInstances} models={displayModels} tasks={displayTasks} version={backendVersion} />}
       </main>
     </div>

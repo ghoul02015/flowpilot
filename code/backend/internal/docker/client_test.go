@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -98,5 +99,67 @@ func TestDockerErrorIncludesStatus(t *testing.T) {
 	_, err := client.Engine(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "401 Unauthorized") || !strings.Contains(err.Error(), "permission denied") {
 		t.Fatalf("expected Docker status error, got %v", err)
+	}
+}
+
+// ContainerLogs 应携带 stdout/stderr/follow/timestamps/tail 参数并返回可读流。
+func TestContainerLogsQueryAndStream(t *testing.T) {
+	var gotURI string
+	client := newFakeEngine(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/containers/demo/logs"):
+			gotURI = r.URL.RequestURI()
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("log-body"))
+		case strings.HasPrefix(r.URL.Path, "/containers/gone/logs"):
+			http.Error(w, `{"message":"No such container: gone"}`, http.StatusNotFound)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+
+	body, err := client.ContainerLogs(context.Background(), "demo", 150)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer body.Close()
+	content, _ := io.ReadAll(body)
+	if string(content) != "log-body" {
+		t.Fatalf("unexpected log body: %q", content)
+	}
+	for _, want := range []string{"stdout=1", "stderr=1", "follow=1", "timestamps=1", "tail=150"} {
+		if !strings.Contains(gotURI, want) {
+			t.Fatalf("logs 请求缺少参数 %s，实际 %s", want, gotURI)
+		}
+	}
+
+	if _, err := client.ContainerLogs(context.Background(), "gone", 10); !IsNotFound(err) {
+		t.Fatalf("容器不存在应映射为 NotFound，得到 %v", err)
+	}
+}
+
+// ContainerTTY 应如实反映 inspect 的 Config.Tty。
+func TestContainerTTY(t *testing.T) {
+	client := newFakeEngine(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/containers/tty/json"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "tty", "Config": map[string]any{"Tty": true}})
+		case strings.HasPrefix(r.URL.Path, "/containers/pipe/json"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "pipe", "Config": map[string]any{"Tty": false}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+
+	tty, err := client.ContainerTTY(context.Background(), "tty")
+	if err != nil || !tty {
+		t.Fatalf("tty 容器应返回 true，得到 %v, %v", tty, err)
+	}
+	tty, err = client.ContainerTTY(context.Background(), "pipe")
+	if err != nil || tty {
+		t.Fatalf("非 tty 容器应返回 false，得到 %v, %v", tty, err)
+	}
+	if _, err := client.ContainerTTY(context.Background(), "gone"); !IsNotFound(err) {
+		t.Fatalf("容器不存在应映射为 NotFound，得到 %v", err)
 	}
 }

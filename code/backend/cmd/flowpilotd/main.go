@@ -57,6 +57,10 @@ func main() {
 	modelManager := model.NewManager(filepath.Join(dataDir, "models"))
 	modelManager.SetNetworkSource(func() (string, bool) { return storageManager.NetworkContainerPath(), storageManager.Detected() })
 	instanceManager.SetNetworkStorage(storageManager.NetworkHostPath(), storageManager.Detected, storageManager.WriteExtraModelPaths, storageManager.RemoveExtraModelPaths)
+	// 模型关联快捷层：宿主机侧目录作 bind 源，容器内同目录作读写路径（二者为同一物理目录）。
+	instanceLinksContainerDir := filepath.Join(dataDir, "instance-links")
+	instanceManager.SetModelLinks(filepath.Join(hostDataDir, "instance-links"), instanceLinksContainerDir, filepath.Join(dataDir, "models"))
+	modelManager.SetLinksRoot(instanceLinksContainerDir)
 	imageManager := image.NewManager(dockerClient, filepath.Join(dataDir, "image-tasks.json"))
 	// 网络仓库路径同时作为导入白名单：「本地化」任务即把 NAS 模型复制进本地仓库。
 	importDirs := strings.Split(environment("FLOWPILOT_IMPORT_DIRS", "/data/import"), ":")
