@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.9.2') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.9.3') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   const dockerResponse = await page.request.get(`${baseURL}/api/v1/docker/info`)
@@ -129,7 +129,7 @@ try {
     const diskUsageResponse = await page.request.get(`${baseURL}/api/v1/images/disk-usage`)
     if (!diskUsageResponse.ok()) throw new Error(`镜像磁盘占用接口异常：HTTP ${diskUsageResponse.status()}`)
     check('镜像磁盘占用接口')
-    // 0.0.9.2：网络存储配置接口（未配置时应返回 enabled=false 且不报错）。
+    // 0.0.9.3：网络存储配置接口（未配置时应返回 enabled=false 且不报错）。
     const storageResponse = await page.request.get(`${baseURL}/api/v1/storage/network`)
     const storageBody = storageResponse.ok() ? await storageResponse.json() : null
     if (!storageResponse.ok() || typeof storageBody.enabled !== 'boolean' || typeof storageBody.detected !== 'boolean' || !storageBody.mountPoint) throw new Error(`网络存储接口异常：${JSON.stringify(storageBody)}`)
@@ -258,8 +258,8 @@ try {
 
     const comfyURL = new URL(baseURL)
     comfyURL.port = '18189'
-    // ComfyUI-Manager 首次启动需在线安装依赖，实测冷启动可超过 3 分钟。
-    const comfyDeadline = Date.now() + 420000
+    // ComfyUI-Manager 首次启动需在线安装依赖，实测冷启动可超过 9 分钟（Spark 2026-11-10 实测 581 秒）。
+    const comfyDeadline = Date.now() + 900000
     let comfyReady = false
     while (Date.now() < comfyDeadline && !comfyReady) {
       try {
@@ -271,7 +271,7 @@ try {
       } catch { /* 容器尚未就绪，继续等待 */ }
       if (!comfyReady) await page.waitForTimeout(5000)
     }
-    if (!comfyReady) throw new Error('ComfyUI 实例 420 秒内未就绪')
+    if (!comfyReady) throw new Error('ComfyUI 实例 900 秒内未就绪')
     check('ComfyUI 服务就绪（/system_stats）')
     await screenshot('02-instances-comfyui')
 
@@ -346,7 +346,7 @@ try {
     check('模型中心分组统计条')
     if (seedFile) {
       // 预置的回归文件（部署时在目标机 seed）：checkpoints/regress-test.safetensors
-      // 0.0.9.2 起按类别分组：类别在组头，行内不再重复展示。
+      // 0.0.9.3 起按类别分组：类别在组头，行内不再重复展示。
       await page.getByRole('button', { name: /Checkpoints/ }).first().waitFor()
       const seedRow = page.getByRole('row').filter({ hasText: 'regress-test.safetensors' })
       await seedRow.waitFor()
@@ -370,6 +370,46 @@ try {
     } else {
       check('真实模型仓库为空（跳过种子文件删除验证）')
       await screenshot('03-models-real')
+    }
+
+    // 0.0.9.3 第二批：僵尸模型检测 / 重复检测 / 批量删除。
+    // 预置种子（部署时在目标机 seed）：
+    //   checkpoints/regress-stale.safetensors（1.2 GB、mtime 40 天前）→ 疑似闲置
+    //   checkpoints/regress-dup.safetensors + loras/regress-dup.safetensors（同名同大小）→ 重复×2
+    const staleSeed = modelsReport?.files?.find((file) => file.path === 'checkpoints/regress-stale.safetensors')
+    const dupSeeds = modelsReport?.files?.filter((file) => file.path.endsWith('regress-dup.safetensors')) ?? []
+    if (staleSeed && dupSeeds.length === 2) {
+      await page.getByText('疑似闲置', { exact: true }).first().waitFor()
+      check('僵尸模型徽章（疑似闲置）')
+      await page.getByText('重复×2', { exact: true }).first().waitFor()
+      check('重复模型徽章（重复×2）')
+
+      // 筛选 chips：仅看疑似闲置 / 仅看重复。
+      await page.getByRole('button', { name: '仅看疑似闲置', exact: true }).click()
+      await page.getByRole('row').filter({ hasText: 'regress-stale.safetensors' }).waitFor()
+      await page.getByRole('button', { name: '仅看疑似闲置', exact: true }).click()
+      await page.getByRole('button', { name: '仅看重复', exact: true }).click()
+      await page.getByRole('row').filter({ hasText: 'regress-dup.safetensors' }).first().waitFor()
+      await page.getByRole('button', { name: '仅看重复', exact: true }).click()
+      check('闲置/重复筛选切换')
+
+      // 批量删除：勾选三个种子文件 → 确认 → 轮询仓库清空。
+      await page.getByRole('checkbox', { name: '选择 regress-stale.safetensors', exact: true }).click()
+      await page.getByRole('checkbox', { name: '选择 regress-dup.safetensors', exact: true }).first().click()
+      await page.getByRole('checkbox', { name: '选择 regress-dup.safetensors', exact: true }).nth(1).click()
+      await page.getByRole('button', { name: /批量删除/ }).click()
+      await page.getByRole('dialog').getByRole('button', { name: /确认删除 3 个/ }).click()
+      const batchDeadline = Date.now() + 20000
+      let batchRemoved = false
+      while (Date.now() < batchDeadline && !batchRemoved) {
+        const modelsBody = await (await page.request.get(`${baseURL}/api/v1/models`)).json()
+        batchRemoved = !modelsBody.files?.some((file) => file.path.includes('regress-stale') || file.path.includes('regress-dup'))
+        if (!batchRemoved) await page.waitForTimeout(500)
+      }
+      if (!batchRemoved) throw new Error('批量删除后种子文件仍在仓库中')
+      check('批量删除模型文件')
+    } else {
+      check('模型中心第二批种子缺失（跳过徽章与批量删除验证）')
     }
 
     // 模型市场链路（0.0.6.0）：目录接口 → 界面筛选 → 选择 SDXL Offset LoRA（约 50 MB）

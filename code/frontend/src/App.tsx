@@ -41,7 +41,7 @@ export default function App() {
   // 同步镜像 busyIds，避免同一帧内双击穿透渲染快照的 includes 检查。
   const busyRef = useRef<Set<string>>(new Set())
   // 界面版本号跟随后端 /health，避免硬编码漂移；离线时回退常量。
-  const [backendVersion, setBackendVersion] = useState('0.0.9.2')
+  const [backendVersion, setBackendVersion] = useState('0.0.9.3')
 
   const realMode = realInstances !== null
   const realModelMode = realModels !== null
@@ -215,6 +215,7 @@ export default function App() {
         createdAt: new Date(file.modifiedAt).toLocaleString('zh-CN', { hour12: false }),
         origin: file.origin,
         rawPath: file.path,
+        modifiedRaw: file.modifiedAt,
       })),
     ]
     : []
@@ -384,6 +385,41 @@ export default function App() {
       })
   }
 
+  // 批量删除（仅本地仓库文件）：逐个真实删除并汇总结果。
+  async function batchDeleteModels(ids: string[]) {
+    if (!requireBackend('批量删除模型')) return
+    const running = displayInstances.filter((item) => item.status === 'running').map((item) => item.name)
+    if (running.length > 0) {
+      toast.error('当前无法删除模型', { description: `保护策略：请先停止运行中的实例（${running.join('、')}）。` })
+      return
+    }
+    const localIds = ids.filter((id) => id.startsWith('local:'))
+    const results = await Promise.allSettled(localIds.map((id) => deleteModelApi(id.slice('local:'.length))))
+    const failed = results.filter((item) => item.status === 'rejected').length
+    if (failed === 0) {
+      toast.success(`已删除 ${localIds.length} 个模型文件`)
+    } else {
+      toast.error('批量删除部分失败', { description: `成功 ${localIds.length - failed} 个，失败 ${failed} 个。` })
+    }
+    void refreshModels()
+  }
+
+  // 批量本地化（仅网络存储文件）。
+  async function batchLocalizeModels(ids: string[]) {
+    if (!requireBackend('批量本地化')) return
+    const networkRoot = realModels?.network?.root
+    if (!networkRoot) return
+    const files = ids.map((id) => realModels?.files.find((item) => `network:${item.path}` === id)).filter((item): item is NonNullable<typeof item> => Boolean(item))
+    const results = await Promise.allSettled(files.map((file) => createImportApi({ path: `${networkRoot}/${file.path}`, category: file.category, name: file.name })))
+    const failed = results.filter((item) => item.status === 'rejected').length
+    if (failed === 0) {
+      toast.success(`已创建 ${files.length} 个本地化任务`, { description: '进度见任务中心。' })
+    } else {
+      toast.error('批量本地化部分失败', { description: `成功 ${files.length - failed} 个，失败 ${failed} 个。` })
+    }
+    void refreshDownloads()
+  }
+
   // 模型市场：选中目录条目直接下载（ModelScope 主源，HF 镜像备选）。
   function marketDownload(entry: CatalogEntry, useFallback: boolean) {
     if (!requireBackend('创建下载任务')) return
@@ -447,7 +483,7 @@ export default function App() {
       <main className="mx-auto max-w-[1600px] p-4 md:p-8">
         {page === 'dashboard' && <Dashboard instances={displayInstances} models={displayModels} tasks={displayTasks} gpuCount={gpuNames.length} gpuSummary={hostInfo.gpuSummary} modelsTotal={realModels ? formatBytes(realModels.totalBytes) : undefined} onNavigate={navigate} onCreate={openCreateDialog} onAddModel={openAddModelDialog} />}
         {page === 'instances' && <Instances instances={displayInstances} gpuNames={gpuNames} realMode={realMode} busyIds={busyIds} onCreate={openCreateDialog} onAction={instanceAction} onDelete={deleteInstance} />}
-        {page === 'models' && <Models models={displayModels} realMode={realModelMode} modelsRoot={realModels?.root} totalBytes={realModels?.totalBytes} network={realModels?.network} runningInstanceNames={displayInstances.filter((item) => item.status === 'running').map((item) => item.name)} onAdd={openAddModelDialog} onPause={pauseModel} onDelete={deleteModel} onLocalize={localizeModel} />}
+        {page === 'models' && <Models models={displayModels} realMode={realModelMode} modelsRoot={realModels?.root} totalBytes={realModels?.totalBytes} network={realModels?.network} runningInstanceNames={displayInstances.filter((item) => item.status === 'running').map((item) => item.name)} onAdd={openAddModelDialog} onPause={pauseModel} onDelete={deleteModel} onLocalize={localizeModel} onBatchDelete={batchDeleteModels} onBatchLocalize={batchLocalizeModels} />}
         {page === 'tasks' && <Tasks tasks={displayTasks} onAction={taskAction} />}
         {page === 'system' && <System instances={displayInstances} models={displayModels} tasks={displayTasks} version={backendVersion} />}
       </main>

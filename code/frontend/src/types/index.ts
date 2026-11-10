@@ -41,6 +41,8 @@ export interface ModelItem {
   origin?: 'local' | 'network'
   /** 仓库相对路径（删除/本地化 API 用）。 */
   rawPath?: string
+  /** 原始修改时间（ISO），僵尸检测用；createdAt 为展示用本地化字符串。 */
+  modifiedRaw?: string
 }
 
 export interface TaskItem {

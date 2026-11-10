@@ -18,7 +18,13 @@ interface Props {
   onPause: (id: string) => void
   onDelete: (id: string) => void
   onLocalize: (id: string) => void
+  onBatchDelete: (ids: string[]) => void
+  onBatchLocalize: (ids: string[]) => void
 }
+
+// 僵尸模型阈值：超过 30 天未更新且大于 1 GB 的本地模型标记为「疑似闲置」。
+const STALE_DAYS = 30
+const STALE_MIN_BYTES = 1024 ** 3
 
 // 类别展示顺序：常用类型在前，其余字典序追加。
 const categoryOrder = ['Checkpoints', 'LoRA', 'VAE', 'Text Encoders', 'Diffusion Models', 'CLIP Vision', 'Model Patches', 'ControlNet', 'Upscale Models', 'Embeddings', '其他']
@@ -43,9 +49,29 @@ function formatTotal(bytes: number): string {
   return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)} ${unit}`
 }
 
-function ModelRow({ item, onPause, onDelete, onLocalize }: { item: ModelItem; onPause: Props['onPause']; onDelete: (id: string) => void; onLocalize: Props['onLocalize'] }) {
+function isStale(item: ModelItem): boolean {
+  if (item.origin !== 'local' || !item.modifiedRaw) return false
+  const modified = Date.parse(item.modifiedRaw)
+  if (Number.isNaN(modified)) return false
+  return parseSize(item.size) > STALE_MIN_BYTES && modified < Date.now() - STALE_DAYS * 86400_000
+}
+
+function ModelRow({ item, duplicateCount, selected, onToggleSelect, onPause, onDelete, onLocalize }: { item: ModelItem; duplicateCount: number; selected: boolean; onToggleSelect: (id: string) => void; onPause: Props['onPause']; onDelete: (id: string) => void; onLocalize: Props['onLocalize'] }) {
+  const selectable = Boolean(item.origin)
+  const stale = isStale(item)
   return <tr>
-    <td><div className="flex items-center gap-3"><Download className="size-4 shrink-0 text-slate-400" /><div><div className="max-w-72 truncate font-medium text-slate-800" title={item.rawPath ?? item.name}>{item.name}</div><div className="mt-1 text-xs text-slate-500">{item.createdAt}</div></div></div></td>
+    <td><div className="flex items-center gap-3">
+      {selectable
+        ? <input type="checkbox" className="size-4 shrink-0 accent-teal-600" aria-label={`选择 ${item.name}`} checked={selected} onChange={() => onToggleSelect(item.id)} />
+        : <span className="size-4 shrink-0" />}
+      <Download className="size-4 shrink-0 text-slate-400" />
+      <div><div className="max-w-72 truncate font-medium text-slate-800" title={item.rawPath ?? item.name}>{item.name}</div><div className="mt-1 text-xs text-slate-500">{item.createdAt}</div>
+        {(stale || duplicateCount > 1) && <div className="mt-1 flex gap-1">
+          {stale && <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700" title={`超过 ${STALE_DAYS} 天未更新且大于 1 GB，建议评估清理`}>疑似闲置</span>}
+          {duplicateCount > 1 && <span className="inline-flex items-center rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-700" title={`存在 ${duplicateCount} 个同名同大小的模型文件`}>重复×{duplicateCount}</span>}
+        </div>}
+      </div>
+    </div></td>
     <td>{item.size}</td>
     <td><div className="w-40"><StatusBadge status={item.status} />{['downloading', 'paused'].includes(item.status) && <div className="mt-2 flex items-center gap-2"><ProgressBar value={item.progress} /><span className="text-xs text-slate-500">{item.progress}%</span></div>}</div></td>
     <td>{item.origin === 'network'
@@ -61,13 +87,38 @@ function ModelRow({ item, onPause, onDelete, onLocalize }: { item: ModelItem; on
   </tr>
 }
 
-export function Models({ models, realMode, modelsRoot, totalBytes, network, runningInstanceNames, onAdd, onPause, onDelete, onLocalize }: Props) {
+export function Models({ models, realMode, modelsRoot, totalBytes, network, runningInstanceNames, onAdd, onPause, onDelete, onLocalize, onBatchDelete, onBatchLocalize }: Props) {
   const [query, setQuery] = useState('')
   const [type, setType] = useState('all')
   const [sort, setSort] = useState<'default' | 'size' | 'time'>('default')
+  const [onlyStale, setOnlyStale] = useState(false)
+  const [onlyDuplicate, setOnlyDuplicate] = useState(false)
   const [collapsed, setCollapsed] = useState<string[]>([])
   const [deleteId, setDeleteId] = useState<string | null>(null)
-  const filtered = useMemo(() => models.filter((item) => item.name.toLowerCase().includes(query.toLowerCase()) && (type === 'all' || item.type === type)), [models, query, type])
+  const [selected, setSelected] = useState<string[]>([])
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false)
+
+  // 重复检测：按「名称 + 大小」分组，同名同大小多于 1 个即视为重复。
+  const duplicateCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const item of models) {
+      if (!item.origin || item.status !== 'ready') continue
+      const key = `${item.name}|${item.size}`
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    return counts
+  }, [models])
+  const duplicateOf = (item: ModelItem) => item.origin && item.status === 'ready' ? duplicateCounts.get(`${item.name}|${item.size}`) ?? 0 : 0
+
+  const filtered = useMemo(() => {
+    const dupOf = (item: ModelItem) => item.origin && item.status === 'ready' ? duplicateCounts.get(`${item.name}|${item.size}`) ?? 0 : 0
+    return models.filter((item) =>
+      item.name.toLowerCase().includes(query.toLowerCase())
+      && (type === 'all' || item.type === type)
+      && (!onlyStale || isStale(item))
+      && (!onlyDuplicate || dupOf(item) > 1)
+    )
+  }, [models, query, type, onlyStale, onlyDuplicate, duplicateCounts])
   const deleting = models.find((item) => item.id === deleteId)
 
   // 分组：进行中下载任务归入「进行中任务」组置顶，仓库文件按类别分组。
@@ -106,6 +157,29 @@ export function Models({ models, realMode, modelsRoot, totalBytes, network, runn
     setCollapsed((previous) => previous.includes(name) ? previous.filter((item) => item !== name) : [...previous, name])
   }
 
+  // 勾选状态派生修剪：仓库刷新后已消失的 id 自动失效，不进入批量范围。
+  const selectedIds = selected.filter((id) => models.some((item) => item.id === id))
+
+  function toggleSelect(id: string) {
+    setSelected((previous) => previous.includes(id) ? previous.filter((item) => item !== id) : [...previous, id])
+  }
+
+  const selectedItems = models.filter((item) => selectedIds.includes(item.id))
+  const selectedLocal = selectedItems.filter((item) => item.origin === 'local').map((item) => item.id)
+  const selectedNetwork = selectedItems.filter((item) => item.origin === 'network').map((item) => item.id)
+
+  function requestBatchDelete() {
+    if (runningInstanceNames.length > 0) {
+      toast.error('当前无法删除模型', { description: `保护策略：请先停止运行中的实例（${runningInstanceNames.join('、')}）。` })
+      return
+    }
+    if (selectedLocal.length === 0) {
+      toast.info('未选择本地模型', { description: '批量删除仅支持本地仓库文件；网络存储为只读。' })
+      return
+    }
+    setBatchDeleteOpen(true)
+  }
+
   const stats = realMode
     ? [
       { label: '本地仓库', value: `${localFiles.length} 个 · ${formatTotal(totalBytes ?? 0)}`, note: modelsRoot ?? '' },
@@ -129,7 +203,15 @@ export function Models({ models, realMode, modelsRoot, totalBytes, network, runn
       <label className="relative flex-1"><span className="sr-only">搜索模型</span><Search className="absolute top-3.5 left-3 size-4 text-slate-400" /><input className="field-input pl-9" placeholder="搜索模型文件" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
       <select className="field-input sm:w-52" aria-label="按模型类型筛选" value={type} onChange={(event) => setType(event.target.value)}><option value="all">全部类型</option>{[...categoryOrder].map((item) => <option key={item}>{item}</option>)}</select>
       <select className="field-input sm:w-40" aria-label="排序方式" value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}><option value="default">默认排序</option><option value="size">按大小（大到小）</option><option value="time">按时间（新到旧）</option></select>
+      <button type="button" className={`rounded-lg border px-3 text-sm transition ${onlyStale ? 'border-amber-300 bg-amber-50 font-medium text-amber-700' : 'border-slate-200 text-slate-500 hover:border-slate-300'}`} aria-pressed={onlyStale} onClick={() => setOnlyStale((value) => !value)}>仅看疑似闲置</button>
+      <button type="button" className={`rounded-lg border px-3 text-sm transition ${onlyDuplicate ? 'border-rose-300 bg-rose-50 font-medium text-rose-700' : 'border-slate-200 text-slate-500 hover:border-slate-300'}`} aria-pressed={onlyDuplicate} onClick={() => setOnlyDuplicate((value) => !value)}>仅看重复</button>
     </div>
+    {selectedIds.length > 0 && <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-teal-200 bg-teal-50/60 px-4 py-3">
+      <span className="text-sm font-medium text-teal-800">已选 {selectedIds.length} 个</span>
+      <button type="button" className="btn-secondary text-sm" disabled={selectedNetwork.length === 0} onClick={() => { onBatchLocalize(selectedNetwork); setSelected([]) }}>批量本地化{selectedNetwork.length > 0 ? `（${selectedNetwork.length}）` : '（仅网络存储）'}</button>
+      <button type="button" className="btn-danger text-sm" disabled={selectedLocal.length === 0} onClick={requestBatchDelete}>批量删除{selectedLocal.length > 0 ? `（${selectedLocal.length}）` : '（仅本地仓库）'}</button>
+      <button type="button" className="text-sm text-slate-500 underline-offset-2 hover:underline" onClick={() => setSelected([])}>取消选择</button>
+    </div>}
     <div className="grid gap-4">
       {groups.map((group) => {
         const isCollapsed = collapsed.includes(group.name)
@@ -140,12 +222,13 @@ export function Models({ models, realMode, modelsRoot, totalBytes, network, runn
             <span className="text-xs text-slate-500">{group.items.length} 个{group.bytes > 0 ? ` · ${formatTotal(group.bytes)}` : ''}</span>
           </button>
           {!isCollapsed && <div className="overflow-x-auto border-t border-slate-100"><table className="data-table min-w-[980px]"><thead><tr><th>模型名称</th><th>大小</th><th>状态／进度</th><th>来源</th><th>操作</th></tr></thead><tbody>
-            {group.items.map((item) => <ModelRow key={item.id} item={item} onPause={onPause} onDelete={requestDelete} onLocalize={onLocalize} />)}
+            {group.items.map((item) => <ModelRow key={item.id} item={item} duplicateCount={duplicateOf(item)} selected={selectedIds.includes(item.id)} onToggleSelect={toggleSelect} onPause={onPause} onDelete={requestDelete} onLocalize={onLocalize} />)}
           </tbody></table></div>}
         </Panel>
       })}
       {groups.length === 0 && <Panel><EmptyState title="没有匹配的模型" description="请调整搜索词或模型类型筛选。" /></Panel>}
     </div>
     <Dialog open={Boolean(deleting)} onOpenChange={(open) => !open && setDeleteId(null)}><DialogContent>{deleting && <><DialogHeader><DialogTitle>{deleting.id.startsWith('dl-') ? '移除下载任务' : '删除模型文件'}</DialogTitle><DialogDescription>{deleting.id.startsWith('dl-') ? `将取消并移除 ${deleting.name} 的下载任务，已下载的临时分片会一并清理。` : `将从本地共享仓库物理删除 ${deleting.name}，实例工作流和输出不受影响。`}</DialogDescription></DialogHeader><div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{deleting.id.startsWith('dl-') ? '任务记录移除后不可恢复，已入库的模型文件不受影响。' : `此操作不可撤销，将真实删除本地仓库中的文件 ${deleting.rawPath ?? deleting.id}。`}</div><DialogFooter><button type="button" className="btn-secondary" onClick={() => setDeleteId(null)}>取消</button><button type="button" className="btn-danger" onClick={() => { onDelete(deleting.id); setDeleteId(null) }}><Trash2 className="size-4" />确认删除</button></DialogFooter></>}</DialogContent></Dialog>
+    <Dialog open={batchDeleteOpen} onOpenChange={setBatchDeleteOpen}><DialogContent><DialogHeader><DialogTitle>批量删除模型文件</DialogTitle><DialogDescription>将从本地共享仓库物理删除选中的 {selectedLocal.length} 个模型文件，实例工作流和输出不受影响。</DialogDescription></DialogHeader><div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">此操作不可撤销；网络存储（只读）和下载任务不在批量删除范围内，已自动排除。</div><DialogFooter><button type="button" className="btn-secondary" onClick={() => setBatchDeleteOpen(false)}>取消</button><button type="button" className="btn-danger" onClick={() => { onBatchDelete(selectedLocal); setSelected([]); setBatchDeleteOpen(false) }}><Trash2 className="size-4" />确认删除 {selectedLocal.length} 个</button></DialogFooter></DialogContent></Dialog>
   </>
 }
