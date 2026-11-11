@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.0.9.13"
+VERSION="0.0.9.14"
 IMAGE="flowpilot-web:${VERSION}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -40,7 +40,21 @@ cp "${BUNDLE_DIR}/VERSION" "${INSTALL_HOME}/releases/${VERSION}/VERSION"
 chmod +x "${INSTALL_HOME}/bin/flowpilot-uninstall"
 
 if docker ps -a --format '{{.Names}}' | grep -Fxq "${CONTAINER_NAME}"; then
-  docker rm -f "${CONTAINER_NAME}" >/dev/null
+  # 升级保护（0.0.9.14）：已有容器存在视为升级——记录旧镜像、备份 SQLite。
+PREVIOUS_IMAGE=""
+if docker inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
+  PREVIOUS_IMAGE="$(docker inspect "${CONTAINER_NAME}" --format '{{.Config.Image}}' 2>/dev/null || true)"
+  printf '升级模式：保留旧镜像 %s 用于回滚
+' "${PREVIOUS_IMAGE}"
+  if [ -f "${INSTALL_HOME}/shared/flowpilot.db" ]; then
+    UPGRADE_STAMP="$(date +%Y%m%d-%H%M%S)"
+    if docker run --rm -v "${INSTALL_HOME}/shared:/data" alpine:3 cp "/data/flowpilot.db" "/data/backups/pre-upgrade-${UPGRADE_STAMP}.db" >/dev/null 2>&1; then
+      printf '升级前 SQLite 快照：shared/backups/pre-upgrade-%s.db
+' "${UPGRADE_STAMP}"
+    fi
+  fi
+fi
+docker rm -f "${CONTAINER_NAME}" >/dev/null
 fi
 
 # GPU 透传：优先使用 NVIDIA Container Toolkit；缺失时手动挂载
@@ -142,4 +156,18 @@ for _ in $(seq 1 30); do
 done
 
 docker logs --tail 80 "${CONTAINER_NAME}" >&2 || true
+# 健康门失败自动回滚（0.0.9.14）。
+if [ -n "${PREVIOUS_IMAGE}" ]; then
+  printf '健康门失败——自动回滚到 %s\n' "${PREVIOUS_IMAGE}"
+  docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+  docker run -d --name "${CONTAINER_NAME}" --restart unless-stopped \
+    --label flowpilot.managed=true --add-host host.docker.internal:host-gateway \
+    -p "${PORT}:18080" -v "${DOCKER_SOCKET}:/var/run/docker.sock" \
+    -v "${INSTALL_HOME}/shared:/data/flowpilot" -v "${INSTALL_HOME}/import:/data/import:ro" \
+    -e FLOWPILOT_HOST_DATA_DIR="${INSTALL_HOME}/shared" \
+    ${COMFYUI_ENVS[*]:+${COMFYUI_ENVS[*]}} ${GPU_ARGS[*]:+${GPU_ARGS[*]}} \
+    "${PREVIOUS_IMAGE}" >/dev/null
+  printf '已回滚到旧版本 %s（失败日志见上）\n' "${PREVIOUS_IMAGE}"
+  exit 1
+fi
 fail '容器启动后未进入 healthy 状态'
