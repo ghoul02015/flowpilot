@@ -76,6 +76,9 @@ type Task struct {
 	Logs      []string            `json:"logs"`
 	CreatedAt time.Time           `json:"createdAt"`
 	UpdatedAt time.Time           `json:"updatedAt"`
+	// StartedAt/FinishedAt 供任务中心展示真实起止时间；旧记录为空表示未记录。
+	StartedAt  time.Time `json:"startedAt,omitempty"`
+	FinishedAt time.Time `json:"finishedAt,omitempty"`
 
 	cancel context.CancelFunc `json:"-"`
 	// stopRequested 处理取消先于 goroutine 注册 cancelFunc 的竞态。
@@ -187,6 +190,7 @@ func (m *Manager) SubmitBuild(params BuildParams) (Task, error) {
 		task.State = TaskRunning
 		task.Message = "正在准备 Docker 构建上下文"
 		task.Progress = 1
+		task.StartedAt = time.Now()
 	}
 	m.mu.Unlock()
 	m.save()
@@ -224,6 +228,7 @@ func (m *Manager) SubmitPull(image string) (Task, error) {
 	if shouldRun {
 		task.State = TaskRunning
 		task.Message = "正在连接镜像仓库"
+		task.StartedAt = now
 	}
 	m.mu.Unlock()
 	m.save()
@@ -247,6 +252,7 @@ func (m *Manager) Cancel(id string) (Task, error) {
 		task.State = TaskCancelled
 		task.Message = "已在排队中取消"
 		task.UpdatedAt = time.Now()
+		task.FinishedAt = task.UpdatedAt
 		m.mu.Unlock()
 		m.save()
 		return snapshotTask(task), nil
@@ -412,6 +418,7 @@ func (m *Manager) finish(task *Task, err error, successMessage string) {
 		task.Message = err.Error()
 	}
 	task.UpdatedAt = time.Now()
+	task.FinishedAt = task.UpdatedAt
 	task.cancel = nil
 	task.Logs = append(task.Logs, task.Message)
 	if len(task.Logs) > maxTaskLogLines {
@@ -437,6 +444,7 @@ func (m *Manager) pumpQueue(kind string) {
 		if next != nil {
 			next.State = TaskRunning
 			next.UpdatedAt = time.Now()
+			next.StartedAt = next.UpdatedAt
 			if kind == TaskKindBuild {
 				next.Message = "正在准备 Docker 构建上下文"
 				next.Progress = 1
@@ -610,6 +618,7 @@ func (m *Manager) load() {
 			task.State = TaskInterrupted
 			task.Message = "服务重启，任务已中断"
 			task.UpdatedAt = time.Now()
+			task.FinishedAt = task.UpdatedAt
 			changed = true
 		}
 		m.tasks = append(m.tasks, &task)

@@ -2,6 +2,22 @@
 
 所有重要变更均记录于此。详细内容见 `context/changes/`。
 
+## 0.1.0.3 — 2026-11-11（镜像构建稳定性修复）
+
+### 修复
+
+- **APT 源加固**：构建镜像默认轮询华为云／清华／阿里云 http 镜像源，全部不可用时回退官方源；基础镜像不带 CA 证书，故不使用 https 源。
+- **失败判定**：`apt-get update` 在索引全部拉取失败时仍返回 0，改为按日志（`Err:`/`E:`/`Failed to fetch`/`Some index files failed`）判定，索引不可用直接终止并输出最近日志。
+- **包名兼容**：Ubuntu 24.04 已将 `libglib2.0-0` 更名为 `libglib2.0-0t64`，改为按索引实际存在的包名安装。
+- **pip 长下载**：为 torch 与 requirements 安装补 `--timeout`／`--retries`，避免大 wheel 下载被默认 15 秒超时中断。
+- **任务时间**：镜像构建／拉取任务记录真实开始与结束时间，任务中心不再显示“—”。
+
+### 验证
+
+- 后端 15 包全绿；前端 lint/build 通过。
+- Spark 实机以相同 Dockerfile 片段验证：APT 层 58 秒安装完成，`libgl1`／`python3-dev`／`ffmpeg` 正常。
+- Spark 实机 cu130 构建成功：`flowpilot/comfyui:cu130-fix-0103`，22.2GB；镜像标签、源码档案与 `git rev-parse HEAD` 一致（`989d93d` / `v0.45.0`）；`torch 2.14.1+cu130`／`cuda 13.0`；`main.py --quick-test-for-ci` 退出码 0。
+
 ## 0.1.0.2 — 2026-11-11（ComfyUI 版本固定与可追溯）
 
 ### 新增

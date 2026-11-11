@@ -108,9 +108,55 @@ func BuildContext(params BuildParams, recipe Recipe) (io.Reader, error) {
 }
 
 // BuildDockerfile 返回平台内构建 ComfyUI 镜像的 Dockerfile。
+// aptSources 镜像源加固：依次尝试国内 http 镜像，全部失败才回退官方源。
+// 两个关键约束：
+//  1. 基础镜像不带 CA 证书，必须用 http，否则 https 源全部握手失败；
+//  2. apt-get update 在索引全部拉取失败时仍会返回 0（只打印 W:/Err:），
+//     因此必须按日志判定成败，不能依赖退出码。
+func aptSources() string {
+	return `RUN set -eux; \
+    SOURCES=/etc/apt/sources.list.d/ubuntu.sources; \
+    [ -f "$SOURCES" ] || SOURCES=/etc/apt/sources.list; \
+    cp -a "$SOURCES" /tmp/apt-orig; \
+    apt_try() { \
+      apt-get update -o Acquire::Retries=3 >/tmp/apt-update.log 2>&1 || true; \
+      ! grep -qE '^(Err|E):|Failed to fetch|Some index files failed' /tmp/apt-update.log; \
+    }; \
+    apt_ok=0; \
+    for MIRROR in http://mirrors.huaweicloud.com http://mirrors.tuna.tsinghua.edu.cn http://mirrors.aliyun.com; do \
+      cp -a /tmp/apt-orig "$SOURCES"; \
+      sed -i -e "s|http://ports.ubuntu.com/ubuntu-ports|$MIRROR/ubuntu-ports|g" \
+             -e "s|http://archive.ubuntu.com/ubuntu|$MIRROR/ubuntu|g" \
+             -e "s|http://security.ubuntu.com/ubuntu|$MIRROR/ubuntu|g" \
+             "$SOURCES"; \
+      echo "尝试 APT 镜像：$MIRROR"; \
+      if apt_try; then echo "APT 镜像可用：$MIRROR"; apt_ok=1; break; fi; \
+      echo "该镜像索引不完整，继续下一个"; \
+    done; \
+    if [ "$apt_ok" = "0" ]; then \
+      echo "国内镜像均不可用，回退官方源"; \
+      cp -a /tmp/apt-orig "$SOURCES"; \
+      if apt_try; then apt_ok=1; fi; \
+    fi; \
+    if [ "$apt_ok" = "0" ]; then \
+      echo "APT 索引不可用，最近一次输出如下："; \
+      tail -30 /tmp/apt-update.log; \
+      exit 1; \
+    fi`
+}
+
+// aptInstall 安装运行期依赖：glib 在 Ubuntu 24.04 已改名为 t64，按索引实际存在的包名选择。
+func aptInstall(packages string) string {
+	return "RUN set -eux; \\\n" +
+		"    GLIB=\"$(apt-cache show libglib2.0-0t64 >/dev/null 2>&1 && echo libglib2.0-0t64 || echo libglib2.0-0)\"; \\\n" +
+		"    apt-get install -y --no-install-recommends " + packages + " \"$GLIB\"; \\\n" +
+		"    rm -rf /var/lib/apt/lists/*"
+}
+
 func BuildDockerfile(params BuildParams, recipe Recipe) string {
 	labels := buildLabels(params, recipe)
 	sourceFile := buildSourceFileCommand(params)
+	sources := aptSources()
 	commonEnv := `ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     HF_ENDPOINT=https://hf-mirror.com \
@@ -145,47 +191,44 @@ RUN set -eux; \
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 %s
 %s
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      git curl ca-certificates ffmpeg libgl1 libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
+%s
+%s
 %s
 WORKDIR /app/ComfyUI
 RUN grep -vE '^(torch|torchvision|torchaudio)\b' requirements.txt > /tmp/req.txt \
-    && ( pip install -r /tmp/req.txt -i $PIP_INDEX_URL \
-      || pip install -r /tmp/req.txt -i https://mirrors.aliyun.com/pypi/simple/ \
-      || pip install -r /tmp/req.txt -i https://pypi.org/simple )
-RUN pip install accelerate sentencepiece einops opencv-python-headless gitpython -i $PIP_INDEX_URL \
+    && ( pip install --timeout 120 --retries 5 -r /tmp/req.txt -i $PIP_INDEX_URL \
+      || pip install --timeout 120 --retries 5 -r /tmp/req.txt -i https://mirrors.aliyun.com/pypi/simple/ \
+      || pip install --timeout 120 --retries 5 -r /tmp/req.txt -i https://pypi.org/simple )
+RUN pip install --timeout 120 --retries 5 accelerate sentencepiece einops opencv-python-headless gitpython -i $PIP_INDEX_URL \
     && python -c "import torch; print('torch', torch.__version__, 'hip', torch.version.hip)" \
     && python -c "import torchsde, einops, safetensors, transformers, aiohttp; print('依赖自检通过')"
 EXPOSE 8188
 CMD ["python", "main.py", "--listen", "0.0.0.0", "--port", "8188"]
-`, labels, commonEnv, clone)
+`, labels, commonEnv, sources, aptInstall("git curl ca-certificates ffmpeg libgl1"), clone)
 	}
 	return fmt.Sprintf(`FROM ubuntu:24.04
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ARG TORCH_INDEX_URL=%s
 %s
 %s
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 python3-venv python3-dev git curl ca-certificates \
-      ffmpeg libgl1 libglib2.0-0 build-essential \
-    && rm -rf /var/lib/apt/lists/*
+%s
+%s
 %s
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-RUN pip install -U pip setuptools wheel -i $PIP_INDEX_URL
-RUN pip install torch torchvision torchaudio --index-url $TORCH_INDEX_URL
+RUN pip install --timeout 120 --retries 5 -U pip setuptools wheel -i $PIP_INDEX_URL
+RUN pip install --timeout 300 --retries 5 torch torchvision torchaudio --index-url $TORCH_INDEX_URL
 WORKDIR /app/ComfyUI
 RUN grep -vE '^(torch|torchvision|torchaudio)\b' requirements.txt > /tmp/req.txt \
-    && ( pip install -r /tmp/req.txt -i $PIP_INDEX_URL \
-      || pip install -r /tmp/req.txt -i https://mirrors.aliyun.com/pypi/simple/ \
-      || pip install -r /tmp/req.txt -i https://pypi.org/simple )
-RUN pip install accelerate sentencepiece einops opencv-python-headless gitpython -i $PIP_INDEX_URL \
+    && ( pip install --timeout 120 --retries 5 -r /tmp/req.txt -i $PIP_INDEX_URL \
+      || pip install --timeout 120 --retries 5 -r /tmp/req.txt -i https://mirrors.aliyun.com/pypi/simple/ \
+      || pip install --timeout 120 --retries 5 -r /tmp/req.txt -i https://pypi.org/simple )
+RUN pip install --timeout 120 --retries 5 accelerate sentencepiece einops opencv-python-headless gitpython -i $PIP_INDEX_URL \
     && python -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda)" \
     && python -c "import torchsde, einops, safetensors, transformers, aiohttp; print('依赖自检通过')"
 EXPOSE 8188
 CMD ["python", "main.py", "--listen", "0.0.0.0", "--port", "8188"]
-`, torchIndexURL(recipe), labels, commonEnv, clone)
+`, torchIndexURL(recipe), labels, commonEnv, sources, aptInstall("python3 python3-venv python3-dev git curl ca-certificates ffmpeg libgl1 build-essential"), clone)
 }
 
 func buildLabels(params BuildParams, recipe Recipe) string {

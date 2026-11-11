@@ -200,3 +200,45 @@ func TestInstallScriptPinsCommitAndAddsKindLabel(t *testing.T) {
 		}
 	}
 }
+
+// TestDockerfileAptHardening 锁定 apt 层加固：必须走 http 国内镜像、
+// 按日志判定 update 成败（apt 全失败仍返回 0）、并兼容 Ubuntu 24.04 的 t64 改名。
+func TestDockerfileAptHardening(t *testing.T) {
+	source := testSource()
+	params := BuildParams{
+		Variant: "nvidia-cu130", ImageName: "flowpilot/comfyui:apt", ComfyUIRef: "master",
+		Source: source, PipIndexURL: "tsinghua", WithManager: "1", Platform: "host",
+	}
+	recipe, err := params.validate()
+	if err != nil {
+		t.Fatalf("配方解析失败：%v", err)
+	}
+	dockerfile := BuildDockerfile(params, recipe)
+	mustContain := map[string]string{
+		"多镜像轮询":    `for MIRROR in http://mirrors.huaweicloud.com`,
+		"日志判定成败":   `Some index files failed`,
+		"官方源回退":    `国内镜像均不可用，回退官方源`,
+		"索引不可用即失败": `APT 索引不可用，最近一次输出如下`,
+		"t64 包名兼容": `libglib2.0-0t64`,
+		"安装索引后清理":  `/var/lib/apt/lists/*`,
+	}
+	for name, fragment := range mustContain {
+		if !strings.Contains(dockerfile, fragment) {
+			t.Fatalf("%s 片段缺失：%s", name, fragment)
+		}
+	}
+	// 基础镜像不带 CA 证书，https 源会导致全部握手失败（pip 走 certifi，不受影响）。
+	for _, bad := range []string{
+		"https://mirrors.huaweicloud.com/ubuntu",
+		"https://mirrors.tuna.tsinghua.edu.cn/ubuntu",
+		"https://mirrors.aliyun.com/ubuntu",
+	} {
+		if strings.Contains(dockerfile, bad) {
+			t.Fatalf("APT 镜像必须使用 http，基础镜像缺少 CA 证书：%s", bad)
+		}
+	}
+	// 旧写法直接硬编码包名，noble 上会因改名安装失败。
+	if strings.Contains(dockerfile, "--no-install-recommends python3 python3-venv python3-dev git curl ca-certificates ffmpeg libgl1 libglib2.0-0 ") {
+		t.Fatal("不应硬编码 libglib2.0-0，需按索引选择 t64 包名")
+	}
+}

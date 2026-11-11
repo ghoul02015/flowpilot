@@ -101,6 +101,8 @@ func (h *Handler) listUnifiedTasks(w http.ResponseWriter, r *http.Request) {
 				Progress: item.Progress, Message: item.Message,
 				Cancelable: item.State == "queued" || item.State == "active",
 				CreatedAt:  item.CreatedAt.UTC().Format(time.RFC3339),
+				StartedAt:  formatOptionalTime(item.StartedAt),
+				FinishedAt: formatOptionalTime(item.FinishedAt),
 			})
 		}
 	}
@@ -346,4 +348,12 @@ func (h *Handler) cleanupFinishedTasks(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted, "failed": failed})
+}
+
+// formatOptionalTime 输出 RFC3339 时间；零值返回空串，便于前端显示“未记录”。
+func formatOptionalTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
 }
