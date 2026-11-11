@@ -87,4 +87,25 @@ var Migrations = []Migration{
 		);
 		CREATE INDEX IF NOT EXISTS idx_events_uuid_ts ON instance_events(instance_uuid, id);`,
 	},
+	{
+		Version: 4,
+		Name:    "unified-tasks",
+		SQL: `CREATE TABLE IF NOT EXISTS tasks (
+			id TEXT PRIMARY KEY,
+			type TEXT NOT NULL,
+			name TEXT NOT NULL,
+			object_type TEXT NOT NULL DEFAULT '',
+			object_ref TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			progress INTEGER NOT NULL DEFAULT -1,
+			message TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			cancelable INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			started_at TEXT NOT NULL DEFAULT '',
+			finished_at TEXT NOT NULL DEFAULT ''
+		);
+		CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+		CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at);`,
+	},
 }

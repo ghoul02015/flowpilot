@@ -51,7 +51,7 @@ export default function App() {
   // 同步镜像 busyIds，避免同一帧内双击穿透渲染快照的 includes 检查。
   const busyRef = useRef<Set<string>>(new Set())
   // 界面版本号跟随后端 /health，避免硬编码漂移；离线时回退常量。
-  const [backendVersion, setBackendVersion] = useState('0.0.9.8')
+  const [backendVersion, setBackendVersion] = useState('0.0.9.9')
 
   const realMode = realInstances !== null
   const realModelMode = realModels !== null
@@ -506,8 +506,10 @@ export default function App() {
     ...(realDownloads ?? []).filter((task) => ['running', 'paused'].includes(task.status)).map((task) => task.path),
   ]
 
-  function taskAction(id: string, action: 'cancel' | 'retry') {
+  function taskAction(unifiedId: string, action: 'cancel' | 'retry') {
     if (!requireBackend('任务操作')) return
+    // 统一任务 ID 带 dl- 前缀（下载/导入任务）；操作路由到下载子系统。
+    const id = unifiedId.replace(/^dl-/, '')
     downloadActionApi(id, action)
       .then(() => {
         toast.success(action === 'cancel' ? '任务已取消' : '任务已重试')
@@ -548,7 +550,7 @@ export default function App() {
         {page === 'dashboard' && <Dashboard instances={displayInstances} models={displayModels} tasks={displayTasks} gpuCount={gpuNames.length} gpuSummary={hostInfo.gpuSummary} modelsTotal={realModels ? formatBytes(realModels.totalBytes) : undefined} onNavigate={navigate} onCreate={openCreateDialog} onAddModel={openAddModelDialog} />}
         {page === 'instances' && <Instances key={route.focus ? `instance-focus-${route.token}` : 'instances'} instances={displayInstances} gpuNames={gpuNames} realMode={realMode} busyIds={busyIds} initialFocus={route.focus} models={realModels} onCreate={openCreateDialog} onAction={instanceAction} onDelete={deleteInstance} />}
         {page === 'models' && <Models models={displayModels} realMode={realModelMode} modelsRoot={realModels?.root} totalBytes={realModels?.totalBytes} network={realModels?.network} runningInstanceNames={displayInstances.filter((item) => item.status === 'running').map((item) => item.name)} onAdd={openAddModelDialog} onPause={pauseModel} onDelete={deleteModel} onLocalize={localizeModel} onBatchDelete={batchDeleteModels} onBatchLocalize={batchLocalizeModels} />}
-        {page === 'tasks' && <Tasks tasks={displayTasks} onAction={taskAction} />}
+        {page === 'tasks' && <Tasks onAction={taskAction} />}
         {page === 'hardware' && <Hardware />}
         {page === 'system' && <System instances={displayInstances} models={displayModels} tasks={displayTasks} version={backendVersion} onLoggedOut={handleLogout} />}
       </main>

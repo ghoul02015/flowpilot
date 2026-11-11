@@ -26,6 +26,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/model"
 	"github.com/ghoul02015/flowpilot/internal/server"
 	"github.com/ghoul02015/flowpilot/internal/storage"
+	"github.com/ghoul02015/flowpilot/internal/tasks"
 )
 
 func main() {
@@ -90,6 +91,7 @@ func main() {
 	var dataStore *database.Store
 	var authManager *auth.Manager
 	var healthChecker *health.Checker
+	var taskStore *tasks.Store
 	backupDir := filepath.Join(dataDir, "backups")
 	if err := os.MkdirAll(dataDir, 0o755); err == nil {
 		if db, openErr := database.Open(dbPath); openErr == nil {
@@ -101,6 +103,7 @@ func main() {
 					slog.Info("数据底座迁移完成", "applied", applied)
 				}
 				dataStore = database.NewStore(db)
+				taskStore = tasks.NewStore(db)
 				// 实例重建沿用历史 workspace（孤儿记录复用 UUID）。
 				instanceManager.SetOrphanMarker(func(name string) { dataStore.MarkOrphanByName(name) })
 				instanceManager.SetWorkspaceReuse(func(name string) string {
@@ -142,7 +145,7 @@ func main() {
 
 	httpServer := &http.Server{
 		Addr:    address,
-		Handler: server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imageManager, downloadManager, environment("FLOWPILOT_HOST_GATEWAY", "host.docker.internal"), catalogManager, storageManager, dataStore, backupDir, authManager, authDisabledFlag, migrationManager, workspacesContainerRoot, healthChecker),
+		Handler: server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imageManager, downloadManager, environment("FLOWPILOT_HOST_GATEWAY", "host.docker.internal"), catalogManager, storageManager, dataStore, backupDir, authManager, authDisabledFlag, migrationManager, workspacesContainerRoot, healthChecker, taskStore),
 		// 镜像导入/导出可能是 GB 级长连接；保留请求头超时，正文与响应不设置固定上限。
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,

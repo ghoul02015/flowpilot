@@ -27,9 +27,10 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/migration"
 	"github.com/ghoul02015/flowpilot/internal/model"
 	"github.com/ghoul02015/flowpilot/internal/storage"
+	"github.com/ghoul02015/flowpilot/internal/tasks"
 )
 
-const Version = "0.0.9.8"
+const Version = "0.0.9.9"
 
 type Handler struct {
 	docker        *docker.Client
@@ -48,11 +49,12 @@ type Handler struct {
 	migrations    *migration.Manager
 	workspaceRoot string
 	healthChecker *health.Checker
+	taskStore     *tasks.Store
 	comfyGateway  string
 	comfyClient   *http.Client
 }
 
-func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imageManager *image.Manager, downloadManager *download.Manager, comfyGateway string, catalogManager *catalog.Manager, storageManager *storage.Manager, dataStore *database.Store, backupDir string, authManager *auth.Manager, authDisabled bool, migrationManager *migration.Manager, workspaceRoot string, healthChecker *health.Checker) http.Handler {
+func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imageManager *image.Manager, downloadManager *download.Manager, comfyGateway string, catalogManager *catalog.Manager, storageManager *storage.Manager, dataStore *database.Store, backupDir string, authManager *auth.Manager, authDisabled bool, migrationManager *migration.Manager, workspaceRoot string, healthChecker *health.Checker, unifiedTasks *tasks.Store) http.Handler {
 	if comfyGateway == "" {
 		comfyGateway = "host.docker.internal"
 	}
@@ -67,6 +69,7 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 		migrations:    migrationManager,
 		workspaceRoot: workspaceRoot,
 		healthChecker: healthChecker,
+		taskStore:     unifiedTasks,
 		comfyGateway:  comfyGateway,
 		// ComfyUI 状态探测是秒级接口，必须有整体超时，避免拖住轮询。
 		comfyClient: &http.Client{Timeout: 4 * time.Second},
@@ -133,6 +136,9 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("DELETE /api/v1/images/tasks/{id}", handler.deleteImageTask)
 	mux.HandleFunc("GET /api/v1/images/disk-usage", handler.imageDiskUsage)
 	mux.HandleFunc("POST /api/v1/images/cache/prune", handler.pruneBuildCache)
+	// 统一任务（0.0.9.9）。
+	mux.HandleFunc("GET /api/v1/tasks", handler.listUnifiedTasks)
+	mux.HandleFunc("GET /api/v1/tasks/{id}", handler.getUnifiedTask)
 	mux.HandleFunc("GET /api/v1/downloads", handler.listDownloads)
 	mux.HandleFunc("POST /api/v1/downloads", handler.createDownload)
 	mux.HandleFunc("POST /api/v1/imports", handler.createImport)
@@ -146,7 +152,7 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("GET /api/v1/instances/workspaces", handler.listWorkspaces)
 	mux.HandleFunc("GET /api/v1/migration/scan", handler.migrationScan)
 	mux.HandleFunc("GET /api/v1/migration/preview", handler.migrationPreview)
-	mux.HandleFunc("POST /api/v1/migration/run", handler.migrationRun)
+	mux.HandleFunc("POST /api/v1/migration/run", handler.runMigrationAsync)
 	// 数据底座（0.0.9.5）：状态、一致性检查与备份。
 	mux.HandleFunc("GET /api/v1/database", handler.databaseStatus)
 	mux.HandleFunc("POST /api/v1/database/check", handler.databaseCheck)

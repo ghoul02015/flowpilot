@@ -656,8 +656,9 @@ export async function migrationPreview(instance: string): Promise<MigrationPrevi
   return getJSON<MigrationPreviewPlan>(`/api/v1/migration/preview?instance=${encodeURIComponent(instance)}`, AbortSignal.timeout(10000))
 }
 
-export async function migrationRun(instance: string, scope: string[], mode: 'copy' | 'move'): Promise<MigrationRunResult> {
-  return sendJSON<MigrationRunResult>('POST', '/api/v1/migration/run', { instance, scope, mode })
+// 0.0.9.9 起迁移任务化：立即返回任务 ID，进度与结果经统一任务接口查询。
+export async function migrationRun(instance: string, scope: string[], mode: 'copy' | 'move'): Promise<{ taskId: string; status: string }> {
+  return sendJSON<{ taskId: string; status: string }>('POST', '/api/v1/migration/run', { instance, scope, mode })
 }
 
 // ---- 实例日志（SSE 实时流）与模型关联（0.0.9.4）----
@@ -958,4 +959,43 @@ export async function getInstanceEvents(name: string, limit = 50): Promise<{ eve
 
 export async function getRebuildPlan(name: string): Promise<RebuildPlan> {
   return getJSON<RebuildPlan>(`/api/v1/instances/${encodeURIComponent(name)}/rebuild/plan`, AbortSignal.timeout(6000))
+}
+
+// 统一任务（0.0.9.9）。
+
+export interface UnifiedTaskView {
+  id: string
+  type: 'download' | 'import' | 'image-pull' | 'image-build' | 'migration' | string
+  name: string
+  objectType: string
+  objectRef: string
+  status: 'queued' | 'running' | 'paused' | 'succeeded' | 'failed' | 'cancelled' | 'partial' | string
+  progress: number
+  message: string
+  error?: string
+  cancelable: boolean
+  createdAt: string
+  startedAt?: string
+  finishedAt?: string
+}
+
+export interface UnifiedTaskPage {
+  tasks: UnifiedTaskView[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export async function getUnifiedTasks(params?: { type?: string; status?: string; limit?: number; offset?: number }): Promise<UnifiedTaskPage> {
+  const query = new URLSearchParams()
+  if (params?.type) query.set('type', params.type)
+  if (params?.status) query.set('status', params.status)
+  if (params?.limit) query.set('limit', String(params.limit))
+  if (params?.offset) query.set('offset', String(params.offset))
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+  return getJSON<UnifiedTaskPage>(`/api/v1/tasks${suffix}`, AbortSignal.timeout(6000))
+}
+
+export async function getUnifiedTask(id: string): Promise<UnifiedTaskView> {
+  return getJSON<UnifiedTaskView>(`/api/v1/tasks/${encodeURIComponent(id)}`, AbortSignal.timeout(6000))
 }

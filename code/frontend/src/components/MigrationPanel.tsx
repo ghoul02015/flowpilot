@@ -3,6 +3,7 @@ import { ArrowRightLeft, FolderInput, Loader2, RefreshCw, ShieldAlert } from 'lu
 import { toast } from 'sonner'
 import {
   formatBytes,
+  getUnifiedTask,
   migrationPreview,
   migrationRun,
   migrationScan,
@@ -48,13 +49,38 @@ export function MigrationPanel({ instances }: Props) {
   function run() {
     if (!instance) return
     setBusy(true)
+    // 0.0.9.9：迁移任务化——创建任务后轮询统一任务状态直至终态。
     migrationRun(instance, ['outputs', 'workflows'], mode)
-      .then((runResult) => {
-        setResult(runResult)
-        toast.success('迁移完成', { description: `${runResult.copiedFiles.outputs ?? 0}＋${runResult.copiedFiles.workflows ?? 0} 个文件 · 校验${runResult.verified ? '通过' : '有告警'} · 耗时 ${runResult.duration}` })
+      .then(async (accepted) => {
+        toast.success('迁移任务已创建', { description: `任务 ${accepted.taskId} 执行中（进度见任务中心）。` })
+        for (let attempt = 0; attempt < 120; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 2000))
+          try {
+            const task = await getUnifiedTask(accepted.taskId)
+            if (task.status === 'succeeded' || task.status === 'partial' || task.status === 'failed') {
+              setResult({
+                instance: task.objectRef,
+                mode,
+                scope: ['outputs', 'workflows'],
+                backupDir: '',
+                copiedFiles: {},
+                copiedBytes: {},
+                verified: task.status === 'succeeded',
+                duration: '',
+                warnings: task.error ? [task.error] : task.status === 'partial' ? ['校验有告警，详见任务详情'] : [],
+              })
+              if (task.status === 'failed') {
+                toast.error('迁移失败', { description: task.error || '源数据未受影响，可重试' })
+              } else {
+                toast.success('迁移完成', { description: task.message })
+              }
+              break
+            }
+          } catch { /* 轮询失败继续 */ }
+        }
         return migrationPreview(instance).then(setPlan)
       })
-      .catch((reason: unknown) => toast.error('迁移失败', { description: reason instanceof Error ? reason.message : '源数据未受影响，可重试' }))
+      .catch((reason: unknown) => toast.error('创建迁移任务失败', { description: reason instanceof Error ? reason.message : '未知错误' }))
       .finally(() => setBusy(false))
   }
 

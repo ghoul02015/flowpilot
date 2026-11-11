@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.9.8') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.9.9') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   // 认证（0.0.9.6）：未登录先看到登录页 → 初始化 → 登录 → 会话恢复。
@@ -870,8 +870,9 @@ try {
 
   await page.getByRole('button', { name: /^任务中心/ }).first().click()
   await page.getByRole('heading', { name: '任务中心' }).waitFor()
-  await page.getByText('下载 index.html', { exact: true }).first().waitFor()
-  await page.getByText('下载完成，已写入共享仓库', { exact: false }).first().waitFor()
+  await page.getByText('index.html', { exact: true }).first().waitFor()
+  await page.getByTestId('task-type-badge-download').first().waitFor()
+  await page.getByText('已写入共享仓库', { exact: false }).first().waitFor()
   check('任务中心展示真实下载任务')
   await screenshot('04-tasks')
 
@@ -894,8 +895,8 @@ try {
   // 数据底座（0.0.9.5）：状态卡 + 一致性检查 + 备份。
   const databaseResponse = await page.request.get(`${baseURL}/api/v1/database`)
   const databaseStatus = await databaseResponse.json()
-  if (!databaseResponse.ok() || databaseStatus.schemaVersion !== 3 || !databaseStatus.integrity.ok) throw new Error(`数据底座状态异常：${JSON.stringify(databaseStatus)}`)
-  check('数据底座状态接口（schema v3 · integrity ok）')
+  if (!databaseResponse.ok() || databaseStatus.schemaVersion !== 4 || !databaseStatus.integrity.ok) throw new Error(`数据底座状态异常：${JSON.stringify(databaseStatus)}`)
+  check('数据底座状态接口（schema v4 · integrity ok）')
   await page.getByRole('tab', { name: '数据底座' }).click()
   await page.getByTestId('database-panel').waitFor()
   await page.getByText('integrity_check 通过', { exact: true }).waitFor()
@@ -933,6 +934,19 @@ try {
   await page.getByRole('button', { name: '扫描共享目录' }).click()
   await page.getByTestId('migration-scan').waitFor({ timeout: 15000 })
   check('数据迁移面板与共享目录扫描')
+
+  // 统一任务（0.0.9.9）：聚合下载/导入/镜像/迁移任务。
+  const unifiedTasksResponse = await page.request.get(`${baseURL}/api/v1/tasks?limit=50`)
+  const unifiedTasks = await unifiedTasksResponse.json()
+  if (!unifiedTasksResponse.ok() || !Array.isArray(unifiedTasks.tasks)) throw new Error(`统一任务接口异常：${JSON.stringify(unifiedTasks)}`)
+  const downloadInUnified = unifiedTasks.tasks.some((task) => task.type === 'download' || task.type === 'import')
+  check(`统一任务列表（含下载任务：${downloadInUnified}）`)
+  await page.getByRole('button', { name: '任务中心', exact: true }).click()
+  await page.getByTestId('unified-task-list').waitFor({ timeout: 15000 })
+  await page.getByTestId('task-type-filter').selectOption('download')
+  await page.waitForTimeout(600)
+  check('任务中心统一列表与类型筛选')
+  await page.getByRole('button', { name: '系统管理', exact: true }).click()
 
   // 退出登录：回到登录页，业务 API 再次 401。
   await page.getByRole('tab', { name: '安全与会话' }).click()

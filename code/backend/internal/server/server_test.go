@@ -25,7 +25,7 @@ func newTestHandler(t *testing.T, instances *instance.Manager) http.Handler {
 	t.Helper()
 	return New(t.TempDir(), docker.NewClient("/unused/docker.sock"),
 		hardware.NewCollector(hardware.Config{ProcRoot: t.TempDir(), HostRoot: t.TempDir(), DataDir: t.TempDir(), NvidiaSMIBin: ""}),
-		instances, nil, nil, nil, "", catalog.NewManager(""), nil, nil, "", nil, true, nil, "", nil)
+		instances, nil, nil, nil, "", catalog.NewManager(""), nil, nil, "", nil, true, nil, "", nil, nil)
 }
 
 func TestHealth(t *testing.T) {
@@ -87,7 +87,7 @@ func TestHardwareEndpoint(t *testing.T) {
 }
 
 func TestHardwareEndpointWithoutCollector(t *testing.T) {
-	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, nil, nil, nil, "", catalog.NewManager(""), nil, nil, "", nil, true, nil, "", nil)
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, nil, nil, nil, "", catalog.NewManager(""), nil, nil, "", nil, true, nil, "", nil, nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/hardware", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -115,7 +115,7 @@ func TestModelsEndpointLifecycle(t *testing.T) {
 	if err := os.WriteFile(target, []byte("weights"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, model.NewManager(root), nil, nil, "", catalog.NewManager(""), nil, nil, "", nil, true, nil, "", nil)
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, model.NewManager(root), nil, nil, "", catalog.NewManager(""), nil, nil, "", nil, true, nil, "", nil, nil)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/models", nil)
 	response := httptest.NewRecorder()
@@ -208,7 +208,7 @@ func TestComfyStatusEndpoint(t *testing.T) {
 			}},
 	}}
 	manager := instance.NewManager(fake, func() int { return 1 }, "/host/data", "comfyui:test", 8188, "", "", "")
-	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, manager, nil, nil, nil, "127.0.0.1", catalog.NewManager(""), nil, nil, "", nil, true, nil, "", nil)
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, manager, nil, nil, nil, "127.0.0.1", catalog.NewManager(""), nil, nil, "", nil, true, nil, "", nil, nil)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/instances/draw/comfy/status", nil)
 	response := httptest.NewRecorder()
@@ -235,7 +235,7 @@ func TestComfyStatusEndpoint(t *testing.T) {
 }
 
 func TestModelCatalogEndpoint(t *testing.T) {
-	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, nil, nil, nil, "", catalog.NewManager(filepath.Join(t.TempDir(), "catalog.json")), nil, nil, "", nil, true, nil, "", nil)
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, nil, nil, nil, "", catalog.NewManager(filepath.Join(t.TempDir(), "catalog.json")), nil, nil, "", nil, true, nil, "", nil, nil)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/models/catalog", nil)
 	response := httptest.NewRecorder()
@@ -265,7 +265,7 @@ func TestModelCatalogEndpoint(t *testing.T) {
 }
 
 func TestModelCatalogEndpointDisabled(t *testing.T) {
-	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, nil, nil, nil, "", nil, nil, nil, "", nil, true, nil, "", nil)
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, nil, nil, nil, "", nil, nil, nil, "", nil, true, nil, "", nil, nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/models/catalog", nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -331,7 +331,7 @@ func TestInstanceLogsSSE(t *testing.T) {
 		ID: "abc", Names: []string{"/flowpilot-comfyui-demo"}, State: "running", Labels: runningInstanceLabels("demo", true),
 	}}}
 	manager := instance.NewManager(fake, func() int { return 1 }, "/host/data", "comfyui:test", 8188, "", "", "")
-	handler := New(t.TempDir(), client, nil, manager, nil, nil, nil, "127.0.0.1", catalog.NewManager(""), nil, nil, "", nil, true, nil, "", nil)
+	handler := New(t.TempDir(), client, nil, manager, nil, nil, nil, "127.0.0.1", catalog.NewManager(""), nil, nil, "", nil, true, nil, "", nil, nil)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/instances/demo/logs?tail=50", nil)
 	response := httptest.NewRecorder()
@@ -355,7 +355,7 @@ func TestInstanceLogsSSE(t *testing.T) {
 func TestInstanceLogsNotFound(t *testing.T) {
 	fake := &fakeInstanceDocker{}
 	manager := instance.NewManager(fake, func() int { return 0 }, "/host/data", "comfyui:test", 8188, "", "", "")
-	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, manager, nil, nil, nil, "", catalog.NewManager(""), nil, nil, "", nil, true, nil, "", nil)
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, manager, nil, nil, nil, "", catalog.NewManager(""), nil, nil, "", nil, true, nil, "", nil, nil)
 
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/instances/missing/logs", nil)
 	response := httptest.NewRecorder()
@@ -384,7 +384,7 @@ func TestModelLinksEndpoints(t *testing.T) {
 	}}
 	manager := instance.NewManager(fake, func() int { return 1 }, "/host/data", "comfyui:test", 8188, "", "", "")
 	manager.SetModelLinks(filepath.Join(base, "hostlinks"), filepath.Join(base, "instance-links"), modelRoot)
-	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, manager, nil, nil, nil, "", catalog.NewManager(""), nil, nil, "", nil, true, nil, "", nil)
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, manager, nil, nil, nil, "", catalog.NewManager(""), nil, nil, "", nil, true, nil, "", nil, nil)
 
 	putBody := `{"links":[{"category":"loras","name":"a.safetensors"}]}`
 	putRequest := httptest.NewRequest(http.MethodPut, "/api/v1/instances/demo/model-links", strings.NewReader(putBody))
@@ -462,7 +462,7 @@ func TestDatabaseEndpointsWithStore(t *testing.T) {
 	}
 	store := database.NewStore(db)
 	backupDir := filepath.Join(t.TempDir(), "backups")
-	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, nil, nil, nil, "", catalog.NewManager(""), nil, store, backupDir, nil, true, nil, "", nil)
+	handler := New(t.TempDir(), docker.NewClient("/unused/docker.sock"), nil, nil, nil, nil, nil, "", catalog.NewManager(""), nil, store, backupDir, nil, true, nil, "", nil, nil)
 
 	// 状态：schema 版本 1、完整性通过。
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/database", nil)
@@ -481,8 +481,8 @@ func TestDatabaseEndpointsWithStore(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&status); err != nil {
 		t.Fatal(err)
 	}
-	if status.SchemaVersion != 3 || !status.Integrity.OK {
-		t.Fatalf("schema 版本应为 3 且完整性通过，实际 %+v", status)
+	if status.SchemaVersion != 4 || !status.Integrity.OK {
+		t.Fatalf("schema 版本应为 4 且完整性通过，实际 %+v", status)
 	}
 
 	// 检查：无实例时空报告。
