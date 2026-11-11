@@ -31,7 +31,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/tasks"
 )
 
-const Version = "0.0.9.16"
+const Version = "0.1.0.0"
 
 type Handler struct {
 	docker        *docker.Client
@@ -86,6 +86,9 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", handler.health)
+	// ComfyUI 兼容探测端点（0.1.0.0）：flowpilotd 兼作回归健康镜像时供实例健康检查器使用。
+	mux.HandleFunc("GET /queue", handler.compatQueue)
+	mux.HandleFunc("GET /system_stats", handler.compatSystemStats)
 	// 认证与初始化（0.0.9.6）。
 	mux.HandleFunc("GET /api/v1/auth/setup/status", handler.setupStatus)
 	mux.HandleFunc("POST /api/v1/auth/setup", handler.setupSubmit)
@@ -169,6 +172,19 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	})
 	mux.Handle("/", handler.spa())
 	return securityHeaders(handler.requireAuth(mux))
+}
+
+// compatQueue ComfyUI /queue 兼容端点（回归健康镜像语义：空闲队列）。
+func (h *Handler) compatQueue(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"queue_running": []any{}, "queue_pending": []any{}})
+}
+
+// compatSystemStats ComfyUI /system_stats 兼容端点（回归健康镜像语义）。
+func (h *Handler) compatSystemStats(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"system":  map[string]any{"comfyui_version": "flowpilot-regress", "python_version": "3", "os": "flowpilot"},
+		"devices": []any{},
+	})
 }
 
 func (h *Handler) health(w http.ResponseWriter, _ *http.Request) {

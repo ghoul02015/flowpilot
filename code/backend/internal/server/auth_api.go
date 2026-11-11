@@ -24,7 +24,10 @@ func intQuery(r *http.Request, key string, fallback int) int {
 
 // 豁免认证的 API 清单（方法+路径精确匹配）。
 var authExemptions = map[string]bool{
-	"GET /api/v1/health":            true,
+	"GET /api/v1/health": true,
+	// 只读探测端点：实例健康检查器使用（无敏感信息）。
+	"GET /queue":                    true,
+	"GET /system_stats":             true,
 	"GET /api/v1/auth/setup/status": true,
 	"POST /api/v1/auth/setup":       true,
 	"POST /api/v1/auth/login":       true,
