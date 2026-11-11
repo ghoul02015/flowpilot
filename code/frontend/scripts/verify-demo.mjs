@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.9.9') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.9.10') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   // 认证（0.0.9.6）：未登录先看到登录页 → 初始化 → 登录 → 会话恢复。
@@ -286,7 +286,7 @@ try {
     if (!scriptResponse.ok() || !scriptText.startsWith('#!/usr/bin/env bash') || !scriptText.includes('nvidia-cu130') || !scriptText.includes('amd-rocm')) throw new Error('安装脚本生成接口异常')
     if (scriptText.includes('modelscope download') || scriptText.includes('hf download')) throw new Error('安装脚本不应包含模型下载逻辑')
     check('一键安装脚本生成接口（独立分发保留）')
-    await page.getByRole('tab', { name: '镜像中心' }).click()
+    await page.getByRole('button', { name: '镜像中心', exact: true }).click()
     await page.getByRole('heading', { name: '镜像中心' }).waitFor()
     await page.getByRole('heading', { name: 'ComfyUI 镜像' }).waitFor()
     await page.getByRole('heading', { name: '机器其他镜像' }).waitFor()
@@ -304,7 +304,7 @@ try {
     await page.keyboard.press('Escape')
     await pullDialog.waitFor({ state: 'detached' })
     check('构建与拉取双弹窗（镜像中心入口）')
-    await page.getByRole('tab', { name: '实例列表' }).click()
+    await page.getByRole('button', { name: 'ComfyUI 实例', exact: true }).click()
     await page.getByRole('button', { name: '新建实例', exact: true }).click()
     await createDialog.waitFor()
     await createDialog.getByLabel('实例名称').fill(instanceName)

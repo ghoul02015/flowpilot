@@ -23,10 +23,18 @@ type fakeDocker struct {
 	removed       []string
 	createCounter int
 	failStart     bool
+	imageLabels   map[string]string
 }
 
 func (f *fakeDocker) Containers(context.Context) ([]docker.Container, error) {
 	return f.containers, nil
+}
+
+func (f *fakeDocker) InspectImageLabels(_ context.Context, image string) (map[string]string, error) {
+	if f.imageLabels != nil {
+		return f.imageLabels, nil
+	}
+	return map[string]string{"flowpilot.kind": "comfyui"}, nil
 }
 
 func (f *fakeDocker) ImageExists(_ context.Context, image string) (bool, error) {
@@ -453,5 +461,24 @@ func TestWorkspaceLifecycle(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, "instances", created.UUID)); !os.IsNotExist(err) {
 		t.Fatal("purge 应删除 workspace 全部数据")
+	}
+}
+
+func TestUnlabeledImageRejected(t *testing.T) {
+	dockerClient := &fakeDocker{images: map[string]bool{"plain:latest": true}, imageLabels: map[string]string{}}
+	hostShared := t.TempDir()
+	manager := NewManager(dockerClient, func() int { return 1 }, hostShared, "plain:latest", 8188, "/data/models", "/data/outputs", "/data/workflows")
+	spec := Spec{Name: "reject-01", Image: "plain:latest", GPU: -1, Port: 18250, ContainerPort: 8188}
+	if _, err := manager.Create(context.Background(), spec); err == nil {
+		t.Fatal("无 kind 标签镜像应被拒绝")
+	} else {
+		if !strings.Contains(err.Error(), "flowpilot.kind") {
+			t.Fatalf("错误信息应说明标签校验：%v", err)
+		}
+	}
+	// 逃生阀放行。
+	manager.SetAllowUnlabeledImages(true)
+	if _, err := manager.Create(context.Background(), spec); err != nil {
+		t.Fatalf("逃生阀开启后应放行：%v", err)
 	}
 }

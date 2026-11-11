@@ -616,3 +616,20 @@ func IsConflict(err error) bool {
 	var statusError *StatusError
 	return errors.As(err, &statusError) && statusError.StatusCode == http.StatusConflict
 }
+
+// InspectImageLabels 返回镜像标签（镜像不存在返回错误）。
+func (c *Client) InspectImageLabels(ctx context.Context, image string) (map[string]string, error) {
+	body, err := c.do(ctx, http.MethodGet, "/images/"+image+"/json", nil)
+	if err != nil {
+		return nil, err
+	}
+	var inspect struct {
+		Config struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"Config"`
+	}
+	if err := json.Unmarshal(body, &inspect); err != nil {
+		return nil, err
+	}
+	return inspect.Config.Labels, nil
+}

@@ -1,4 +1,4 @@
-export type PageKey = 'dashboard' | 'instances' | 'models' | 'tasks' | 'hardware' | 'system'
+export type PageKey = 'dashboard' | 'instances' | 'models' | 'images' | 'tasks' | 'hardware' | 'system'
 
 // NavigateOptions 承载跨页跳转的定位参数（如跳转到实例页并聚焦某实例）。
 export interface NavigateOptions {

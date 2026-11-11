@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Activity, Box, ChevronRight, Cpu, Database, LayoutDashboard, LogOut, Menu, Server, Settings, Waves, X } from 'lucide-react'
+import { Activity, Box, ChevronRight, Cpu, Database, Images, LayoutDashboard, LogOut, Menu, Server, Settings, Waves, X } from 'lucide-react'
 import { Toaster, toast } from 'sonner'
 import { createDownloadApi, createImportApi, createInstanceApi, deleteDownloadApi, deleteInstanceApi, deleteModelApi, downloadActionApi, formatBytes, getComfyStatus, getDownloads, getHardware, getHealth, getInstances, getModels, getSetupStatus, getSession, logout, modelTypeToCategory, postInstanceAction, setCSRFToken, setUnauthorizedHandler, type CatalogEntry, type ComfyStatus, type DownloadTask, type InstanceDefaults, type ModelReport, type OnlineFile, type RealInstance } from '@/api'
 import { CreateInstanceDialog } from '@/components/CreateInstanceDialog'
@@ -11,6 +11,7 @@ import { Hardware } from '@/pages/Hardware'
 import { Instances } from '@/pages/Instances'
 import { Models } from '@/pages/Models'
 import { Tasks } from '@/pages/Tasks'
+import { ImageManager } from '@/components/ImageManager'
 import { System } from '@/pages/System'
 import type { AddModelInput, CreateInstanceInput, Instance, ModelItem, NavigateOptions, PageKey, TaskItem } from '@/types'
 
@@ -18,12 +19,13 @@ const navigation: { key: PageKey; label: string; icon: typeof LayoutDashboard }[
   { key: 'dashboard', label: '首页看板', icon: LayoutDashboard },
   { key: 'instances', label: 'ComfyUI 实例', icon: Box },
   { key: 'models', label: '模型中心', icon: Database },
+  { key: 'images', label: '镜像中心', icon: Images },
   { key: 'tasks', label: '任务中心', icon: Activity },
   { key: 'hardware', label: '硬件管理', icon: Cpu },
   { key: 'system', label: '系统管理', icon: Settings },
 ]
 
-const pageNames: Record<PageKey, string> = { dashboard: '首页看板', instances: 'ComfyUI 实例', models: '模型中心', tasks: '任务中心', hardware: '硬件管理', system: '系统管理' }
+const pageNames: Record<PageKey, string> = { dashboard: '首页看板', instances: 'ComfyUI 实例', models: '模型中心', images: '镜像中心', tasks: '任务中心', hardware: '硬件管理', system: '系统管理' }
 
 export default function App() {
   // 认证门卫（0.0.9.6）：checking → setup（未初始化）→ login → ready。
@@ -51,7 +53,7 @@ export default function App() {
   // 同步镜像 busyIds，避免同一帧内双击穿透渲染快照的 includes 检查。
   const busyRef = useRef<Set<string>>(new Set())
   // 界面版本号跟随后端 /health，避免硬编码漂移；离线时回退常量。
-  const [backendVersion, setBackendVersion] = useState('0.0.9.9')
+  const [backendVersion, setBackendVersion] = useState('0.0.9.10')
 
   const realMode = realInstances !== null
   const realModelMode = realModels !== null
@@ -551,6 +553,7 @@ export default function App() {
         {page === 'instances' && <Instances key={route.focus ? `instance-focus-${route.token}` : 'instances'} instances={displayInstances} gpuNames={gpuNames} realMode={realMode} busyIds={busyIds} initialFocus={route.focus} models={realModels} onCreate={openCreateDialog} onAction={instanceAction} onDelete={deleteInstance} />}
         {page === 'models' && <Models models={displayModels} realMode={realModelMode} modelsRoot={realModels?.root} totalBytes={realModels?.totalBytes} network={realModels?.network} runningInstanceNames={displayInstances.filter((item) => item.status === 'running').map((item) => item.name)} onAdd={openAddModelDialog} onPause={pauseModel} onDelete={deleteModel} onLocalize={localizeModel} onBatchDelete={batchDeleteModels} onBatchLocalize={batchLocalizeModels} />}
         {page === 'tasks' && <Tasks onAction={taskAction} />}
+        {page === 'images' && <ImageManager />}
         {page === 'hardware' && <Hardware />}
         {page === 'system' && <System instances={displayInstances} models={displayModels} tasks={displayTasks} version={backendVersion} onLoggedOut={handleLogout} />}
       </main>

@@ -101,6 +101,8 @@ type Defaults struct {
 type DockerAPI interface {
 	Containers(ctx context.Context) ([]docker.Container, error)
 	ImageExists(ctx context.Context, image string) (bool, error)
+	// InspectImageLabels 0.0.9.10 起用于镜像可信校验（flowpilot.kind）。
+	InspectImageLabels(ctx context.Context, image string) (map[string]string, error)
 	CreateContainer(ctx context.Context, name string, config any) (string, error)
 	StartContainer(ctx context.Context, id string) error
 	StopContainer(ctx context.Context, id string, timeoutSeconds int) error
@@ -144,7 +146,9 @@ type Manager struct {
 	workspaceReuse func(name string) string
 	// markOrphan 保留数据删除后立即标记 DB 记录为孤儿（不等待下次同步）。
 	markOrphan func(name string)
-	linksMu    sync.Mutex
+	// allowUnlabeledImage 允许无 flowpilot.kind 标签的镜像（受控环境逃生阀，默认 false）。
+	allowUnlabeledImage bool
+	linksMu             sync.Mutex
 	// busyOps 实例操作互斥：同一实例的创建/启停/重启/删除串行化，
 	// 并发请求返回 BusyError（409）。
 	busyOps sync.Map
@@ -215,6 +219,11 @@ func (m *Manager) tryLockOp(name string) bool {
 
 // unlockOp 释放实例操作槽。
 func (m *Manager) unlockOp(name string) { m.busyOps.Delete(name) }
+
+// SetAllowUnlabeledImages 开启无标签镜像放行（受控环境逃生阀）。
+func (m *Manager) SetAllowUnlabeledImages(allow bool) {
+	m.allowUnlabeledImage = allow
+}
 
 // SetOrphanMarker 注册保留删除的孤儿标记钩子（数据底座）。
 func (m *Manager) SetOrphanMarker(mark func(name string)) {
@@ -475,6 +484,14 @@ func (m *Manager) validate(ctx context.Context, spec Spec) error {
 	exists, err := m.docker.ImageExists(ctx, spec.Image)
 	if err != nil {
 		return fmt.Errorf("检查镜像失败：%w", err)
+	}
+	// 可信供应链校验（0.0.9.10）：镜像须携带 flowpilot.kind=comfyui 标签；
+	// 受控环境（回归/演示）可经 SetAllowUnlabeledImages 放行无标签镜像。
+	if exists && !m.allowUnlabeledImage {
+		labels, inspectErr := m.docker.InspectImageLabels(ctx, spec.Image)
+		if inspectErr == nil && labels["flowpilot.kind"] != "comfyui" {
+			return &ValidationError{Message: "镜像未通过可信校验：缺少 flowpilot.kind=comfyui 标签（请使用镜像中心构建或已认证镜像）"}
+		}
 	}
 	if !exists {
 		return &ValidationError{Message: fmt.Sprintf("镜像 %s 不在本地；离线环境请先导入镜像", spec.Image)}

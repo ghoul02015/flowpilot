@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { ExternalLink, Link2, Play, Plus, RefreshCw, ScrollText, Search, Settings2, Square, Trash2 } from 'lucide-react'
 import { getInstanceEvents, getInstanceHealth, type InstanceEventEntry, type InstanceHealthView, type ModelReport } from '@/api'
 import { EmptyState, PageHeader, Panel, StatusBadge } from '@/components/common'
-import { ImageManager } from '@/components/ImageManager'
 import { InstanceLogsDialog } from '@/components/InstanceLogsDialog'
 import { ModelLinksDialog } from '@/components/ModelLinksDialog'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -25,7 +24,7 @@ interface Props {
   onDelete: (id: string, purge?: boolean) => void
 }
 
-type InstanceTab = 'instances' | 'images'
+type InstanceTab = 'instances'
 
 export function Instances({ instances, gpuNames, realMode, busyIds, initialFocus, models, onCreate, onAction, onDelete }: Props) {
   // 初始定位（仅首次渲染生效）：命中则直接打开详情弹窗并高亮该行。
@@ -79,12 +78,11 @@ export function Instances({ instances, gpuNames, realMode, busyIds, initialFocus
     setConfirmName('')
   }
 
-  const tabs: { key: InstanceTab; label: string }[] = [{ key: 'instances', label: '实例列表' }, { key: 'images', label: '镜像中心' }]
+  const tabs: { key: InstanceTab; label: string }[] = [{ key: 'instances', label: '实例列表' }]
 
   return <>
     <PageHeader eyebrow="COMFYUI" title="实例管理" description="创建独立 ComfyUI 容器，统一管理本机镜像、手动构建、在线拉取与实例生命周期。" action={tab === 'instances' ? <button type="button" className="btn-primary" onClick={onCreate}><Plus className="size-4" />新建实例</button> : undefined} />
     <div className="mb-5 flex gap-1 overflow-x-auto rounded-lg border border-slate-200 bg-white p-1" role="tablist" aria-label="实例管理子菜单">{tabs.map((item) => <button type="button" role="tab" aria-selected={tab === item.key} key={item.key} className={`min-h-11 flex-1 cursor-pointer rounded-md px-4 text-sm font-medium whitespace-nowrap transition-colors ${tab === item.key ? 'bg-teal-700 text-white' : 'text-slate-600 hover:bg-slate-100'}`} onClick={() => setTab(item.key)}>{item.label}</button>)}</div>
-    {tab === 'images' && <ImageManager />}
     {tab === 'instances' && <Panel>
       <div className="flex flex-col gap-3 border-b border-slate-200 p-4 sm:flex-row sm:items-center">
         <label className="relative flex-1"><span className="sr-only">搜索实例</span><Search className="absolute top-3.5 left-3 size-4 text-slate-400" /><input className="field-input pl-9" placeholder="搜索实例名称" value={query} onChange={(event) => setQuery(event.target.value)} /></label>

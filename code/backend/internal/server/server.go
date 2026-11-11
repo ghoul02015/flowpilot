@@ -30,7 +30,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/tasks"
 )
 
-const Version = "0.0.9.9"
+const Version = "0.0.9.10"
 
 type Handler struct {
 	docker        *docker.Client
@@ -727,6 +727,21 @@ func (h *Handler) deleteLocalImage(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "检查镜像失败", "detail": err.Error()})
 		return
+	}
+	// 引用保护（0.0.9.10）：被任何实例使用的镜像不可删除。
+	if h.instances != nil {
+		if instances, err := h.instances.List(r.Context()); err == nil {
+			references := []string{}
+			for _, item := range instances {
+				if item.Image == name {
+					references = append(references, item.Name+"（"+item.Status+"）")
+				}
+			}
+			if len(references) > 0 {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": "镜像正被实例使用，无法删除：" + strings.Join(references, "、")})
+				return
+			}
+		}
 	}
 	force := r.URL.Query().Get("force") == "1"
 	if err := h.docker.RemoveImage(r.Context(), name, force); err != nil {

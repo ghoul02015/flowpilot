@@ -62,6 +62,12 @@ func main() {
 	modelManager := model.NewManager(filepath.Join(dataDir, "models"))
 	modelManager.SetNetworkSource(func() (string, bool) { return storageManager.NetworkContainerPath(), storageManager.Detected() })
 	instanceManager.SetNetworkStorage(storageManager.NetworkHostPath(), storageManager.Detected, storageManager.WriteExtraModelPaths, storageManager.RemoveExtraModelPaths)
+	// 镜像可信校验逃生阀（0.0.9.10）：受控环境放行无 flowpilot.kind 标签镜像；
+	// 生产环境建议关闭（默认关闭），镜像应经镜像中心构建获得认证标签。
+	if os.Getenv("FLOWPILOT_IMAGE_ALLOW_UNLABELED") == "1" {
+		instanceManager.SetAllowUnlabeledImages(true)
+		slog.Warn("已放行无标签镜像（FLOWPILOT_IMAGE_ALLOW_UNLABELED=1），仅限受控环境")
+	}
 	// 模型关联快捷层：宿主机侧目录作 bind 源，容器内同目录作读写路径（二者为同一物理目录）。
 	instanceLinksContainerDir := filepath.Join(dataDir, "instance-links")
 	instanceManager.SetModelLinks(filepath.Join(hostDataDir, "instance-links"), instanceLinksContainerDir, filepath.Join(dataDir, "models"))

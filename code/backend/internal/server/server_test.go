@@ -168,6 +168,10 @@ type fakeInstanceDocker struct {
 func (f *fakeInstanceDocker) Containers(context.Context) ([]docker.Container, error) {
 	return f.containers, nil
 }
+func (f *fakeInstanceDocker) InspectImageLabels(_ context.Context, _ string) (map[string]string, error) {
+	return map[string]string{"flowpilot.kind": "comfyui"}, nil
+}
+
 func (f *fakeInstanceDocker) ImageExists(context.Context, string) (bool, error) { return true, nil }
 func (f *fakeInstanceDocker) CreateContainer(context.Context, string, any) (string, error) {
 	return "", nil
