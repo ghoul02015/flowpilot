@@ -18,8 +18,8 @@ import type { AddModelInput, CreateInstanceInput, Instance, ModelItem, NavigateO
 const navigation: { key: PageKey; label: string; icon: typeof LayoutDashboard }[] = [
   { key: 'dashboard', label: '首页看板', icon: LayoutDashboard },
   { key: 'instances', label: 'ComfyUI 实例', icon: Box },
-  { key: 'models', label: '模型中心', icon: Database },
   { key: 'images', label: '镜像中心', icon: Images },
+  { key: 'models', label: '模型中心', icon: Database },
   { key: 'tasks', label: '任务中心', icon: Activity },
   { key: 'hardware', label: '硬件管理', icon: Cpu },
   { key: 'system', label: '系统管理', icon: Settings },
@@ -53,7 +53,7 @@ export default function App() {
   // 同步镜像 busyIds，避免同一帧内双击穿透渲染快照的 includes 检查。
   const busyRef = useRef<Set<string>>(new Set())
   // 界面版本号跟随后端 /health，避免硬编码漂移；离线时回退常量。
-  const [backendVersion, setBackendVersion] = useState('0.0.9.14')
+  const [backendVersion, setBackendVersion] = useState('0.0.9.15')
 
   const realMode = realInstances !== null
   const realModelMode = realModels !== null
