@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.9.7') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.9.8') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   // 认证（0.0.9.6）：未登录先看到登录页 → 初始化 → 登录 → 会话恢复。
@@ -337,6 +337,8 @@ try {
     await page.getByRole('button', { name: /确认部署|正在创建容器/ }).click()
     await page.getByRole('button', { name: `停止 ${instanceName}`, exact: true }).waitFor({ timeout: 30000 })
     check('真实实例创建并启动（Docker API）')
+    await page.locator(`[data-testid="app-health-ready"], [data-testid="app-health-starting"]`).first().waitFor({ timeout: 20000 })
+    check('实例列表应用健康徽章')
 
     const instanceURL = new URL(baseURL)
     instanceURL.port = '18188'
@@ -352,6 +354,20 @@ try {
       throw new Error(`新实例应有 workspace：${JSON.stringify(workspacesBody)}`)
     }
     check('新实例独立 workspace（UUID 标识）')
+
+    // 应用健康（0.0.9.8）：三层状态 API + 事件时间线 + 重建差异预览。
+    const healthResponse = await page.request.get(`${baseURL}/api/v1/instances/${encodeURIComponent(instanceName)}/health`)
+    const healthBody = await healthResponse.json()
+    if (!healthResponse.ok() || !['ready', 'starting', 'degraded'].includes(healthBody.health?.app)) throw new Error(`应用健康异常：${JSON.stringify(healthBody)}`)
+    check(`应用健康三层状态（app=${healthBody.health.app}）`)
+    const eventsResponse = await page.request.get(`${baseURL}/api/v1/instances/${encodeURIComponent(instanceName)}/events?limit=20`)
+    const eventsBody = await eventsResponse.json()
+    if (!eventsResponse.ok() || !Array.isArray(eventsBody.events)) throw new Error(`事件接口异常：${JSON.stringify(eventsBody)}`)
+    check('实例事件时间线接口')
+    const planResponse = await page.request.post(`${baseURL}/api/v1/instances/${encodeURIComponent(instanceName)}/rebuild/plan`, { headers: { 'X-FlowPilot-CSRF': csrfToken } })
+    const planBody = await planResponse.json()
+    if (!planResponse.ok() || !Array.isArray(planBody.fields) || typeof planBody.workspaceKept !== 'boolean') throw new Error(`重建预览异常：${JSON.stringify(planBody)}`)
+    check('重建差异预览接口')
 
     await page.getByRole('button', { name: `停止 ${instanceName}`, exact: true }).click()
     await page.getByRole('button', { name: `启动 ${instanceName}`, exact: true }).waitFor({ timeout: 20000 })
@@ -878,8 +894,8 @@ try {
   // 数据底座（0.0.9.5）：状态卡 + 一致性检查 + 备份。
   const databaseResponse = await page.request.get(`${baseURL}/api/v1/database`)
   const databaseStatus = await databaseResponse.json()
-  if (!databaseResponse.ok() || databaseStatus.schemaVersion !== 2 || !databaseStatus.integrity.ok) throw new Error(`数据底座状态异常：${JSON.stringify(databaseStatus)}`)
-  check('数据底座状态接口（schema v2 · integrity ok）')
+  if (!databaseResponse.ok() || databaseStatus.schemaVersion !== 3 || !databaseStatus.integrity.ok) throw new Error(`数据底座状态异常：${JSON.stringify(databaseStatus)}`)
+  check('数据底座状态接口（schema v3 · integrity ok）')
   await page.getByRole('tab', { name: '数据底座' }).click()
   await page.getByTestId('database-panel').waitFor()
   await page.getByText('integrity_check 通过', { exact: true }).waitFor()

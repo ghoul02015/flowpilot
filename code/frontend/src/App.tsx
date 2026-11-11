@@ -51,7 +51,7 @@ export default function App() {
   // 同步镜像 busyIds，避免同一帧内双击穿透渲染快照的 includes 检查。
   const busyRef = useRef<Set<string>>(new Set())
   // 界面版本号跟随后端 /health，避免硬编码漂移；离线时回退常量。
-  const [backendVersion, setBackendVersion] = useState('0.0.9.7')
+  const [backendVersion, setBackendVersion] = useState('0.0.9.8')
 
   const realMode = realInstances !== null
   const realModelMode = realModels !== null
@@ -305,7 +305,10 @@ export default function App() {
     const actionName = action === 'stop' ? '停止' : action === 'start' ? '启动' : '重启'
     setBusyIds((previous) => [...previous, id])
     postInstanceAction(target.name, action)
-      .then(() => {
+      .then((result) => {
+        if (result.queueWarning) {
+          toast.warning(`${actionName}提示`, { description: result.queueWarning })
+        }
         toast.success(`实例已${actionName}`, { description: target.name })
       })
       .catch((error: unknown) => {

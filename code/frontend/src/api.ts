@@ -586,8 +586,14 @@ export async function createInstanceApi(spec: CreateInstanceSpec): Promise<RealI
   return sendJSON<RealInstance>('POST', '/api/v1/instances', spec)
 }
 
-export async function postInstanceAction(name: string, action: 'start' | 'stop' | 'restart'): Promise<RealInstance> {
-  return sendJSON<RealInstance>('POST', `/api/v1/instances/${encodeURIComponent(name)}/${action}`)
+// InstanceActionResponse 0.0.9.8 起含队列警告（停止/重启时有排队任务时非空）。
+export interface InstanceActionResponse {
+  instance: RealInstance
+  queueWarning?: string
+}
+
+export async function postInstanceAction(name: string, action: 'start' | 'stop' | 'restart'): Promise<InstanceActionResponse> {
+  return sendJSON<InstanceActionResponse>('POST', `/api/v1/instances/${encodeURIComponent(name)}/${action}`)
 }
 
 export async function deleteInstanceApi(name: string, force: boolean, purge = false): Promise<void> {
@@ -902,4 +908,54 @@ export async function getAuditLogs(params: { limit?: number; offset?: number; ac
   if (params.action) query.set('action', params.action)
   if (params.q) query.set('q', params.q)
   return getJSON<AuditLogPage>(`/api/v1/audit/logs?${query.toString()}`, AbortSignal.timeout(6000))
+}
+
+// 应用健康与生命周期（0.0.9.8）。
+
+export interface InstanceHealthView {
+  name: string
+  uuid?: string
+  container: string
+  app: 'ready' | 'starting' | 'degraded' | 'failed' | 'not_running' | 'unknown'
+  lastCheckAt?: string
+  latenciesMs: number[]
+  nextCheckAt?: string
+}
+
+export interface InstanceEventEntry {
+  id: number
+  instanceUuid: string
+  name: string
+  ts: string
+  kind: string
+  detail: string
+  latencyMs: number
+}
+
+export interface RebuildPlanField {
+  field: string
+  current: string
+  previous: string
+  changed: boolean
+}
+
+export interface RebuildPlan {
+  name: string
+  uuid: string
+  workspaceKept: boolean
+  interrupt: boolean
+  fields: RebuildPlanField[]
+  dataNote: string
+}
+
+export async function getInstanceHealth(name: string): Promise<{ health: InstanceHealthView; recentEvents: InstanceEventEntry[] }> {
+  return getJSON<{ health: InstanceHealthView; recentEvents: InstanceEventEntry[] }>(`/api/v1/instances/${encodeURIComponent(name)}/health`, AbortSignal.timeout(5000))
+}
+
+export async function getInstanceEvents(name: string, limit = 50): Promise<{ events: InstanceEventEntry[] }> {
+  return getJSON<{ events: InstanceEventEntry[] }>(`/api/v1/instances/${encodeURIComponent(name)}/events?limit=${limit}`, AbortSignal.timeout(6000))
+}
+
+export async function getRebuildPlan(name: string): Promise<RebuildPlan> {
+  return getJSON<RebuildPlan>(`/api/v1/instances/${encodeURIComponent(name)}/rebuild/plan`, AbortSignal.timeout(6000))
 }

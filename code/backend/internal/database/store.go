@@ -447,6 +447,74 @@ func (s *Store) RecordCreate(snapshot Snapshot, specJSON string) {
 	}
 }
 
+// InstanceEvent 实例健康/生命周期事件。
+type InstanceEvent struct {
+	ID           int64  `json:"id"`
+	InstanceUUID string `json:"instanceUuid"`
+	Name         string `json:"name"`
+	TS           string `json:"ts"`
+	Kind         string `json:"kind"`
+	Detail       string `json:"detail"`
+	LatencyMS    int    `json:"latencyMs"`
+}
+
+// RecordEvent 写入实例事件（失败仅日志，不阻断）。
+// 旧实例无 UUID 时以名称为关联键（instance_uuid 列存名称）。
+func (s *Store) RecordEvent(instanceUUID, name, kind, detail string, latencyMS int) {
+	key := instanceUUID
+	if key == "" {
+		key = name
+	}
+	if key == "" {
+		return
+	}
+	_, err := s.db.Exec(`INSERT INTO instance_events (instance_uuid, name, ts, kind, detail, latency_ms)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		key, name, nowRFC3339(), kind, detail, latencyMS)
+	if err != nil {
+		logSQLError("RecordEvent "+kind+" "+name, err)
+	}
+}
+
+// LoadSpecRaw 返回实例期望配置原始 JSON（instance_configs.spec_json）。
+func (s *Store) LoadSpecRaw(name string) (string, bool) {
+	var specJSON string
+	err := s.db.QueryRow("SELECT spec_json FROM instance_configs WHERE uuid = (SELECT uuid FROM instances WHERE name = ?)", name).Scan(&specJSON)
+	if err != nil || specJSON == "" {
+		return "", false
+	}
+	return specJSON, true
+}
+
+// ListEvents 按实例倒序查询事件；instanceUUID 为空时查全部。
+func (s *Store) ListEvents(instanceUUID string, limit int) []InstanceEvent {
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	query := "SELECT id, instance_uuid, name, ts, kind, detail, latency_ms FROM instance_events"
+	args := []any{}
+	if instanceUUID != "" {
+		query += " WHERE instance_uuid = ?"
+		args = append(args, instanceUUID)
+	}
+	query += " ORDER BY id DESC LIMIT ?"
+	args = append(args, limit)
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		logSQLError("ListEvents", err)
+		return []InstanceEvent{}
+	}
+	defer rows.Close()
+	list := []InstanceEvent{}
+	for rows.Next() {
+		var item InstanceEvent
+		if err := rows.Scan(&item.ID, &item.InstanceUUID, &item.Name, &item.TS, &item.Kind, &item.Detail, &item.LatencyMS); err == nil {
+			list = append(list, item)
+		}
+	}
+	return list
+}
+
 // MarkOrphanByName 将记录标记为孤儿（保留数据删除实例时调用，无需等待下次同步）。
 func (s *Store) MarkOrphanByName(name string) {
 	s.mu.Lock()

@@ -21,6 +21,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/docker"
 	"github.com/ghoul02015/flowpilot/internal/download"
 	"github.com/ghoul02015/flowpilot/internal/hardware"
+	"github.com/ghoul02015/flowpilot/internal/health"
 	"github.com/ghoul02015/flowpilot/internal/image"
 	"github.com/ghoul02015/flowpilot/internal/instance"
 	"github.com/ghoul02015/flowpilot/internal/migration"
@@ -28,7 +29,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/storage"
 )
 
-const Version = "0.0.9.7"
+const Version = "0.0.9.8"
 
 type Handler struct {
 	docker        *docker.Client
@@ -46,11 +47,12 @@ type Handler struct {
 	authDisabled  bool
 	migrations    *migration.Manager
 	workspaceRoot string
+	healthChecker *health.Checker
 	comfyGateway  string
 	comfyClient   *http.Client
 }
 
-func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imageManager *image.Manager, downloadManager *download.Manager, comfyGateway string, catalogManager *catalog.Manager, storageManager *storage.Manager, dataStore *database.Store, backupDir string, authManager *auth.Manager, authDisabled bool, migrationManager *migration.Manager, workspaceRoot string) http.Handler {
+func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imageManager *image.Manager, downloadManager *download.Manager, comfyGateway string, catalogManager *catalog.Manager, storageManager *storage.Manager, dataStore *database.Store, backupDir string, authManager *auth.Manager, authDisabled bool, migrationManager *migration.Manager, workspaceRoot string, healthChecker *health.Checker) http.Handler {
 	if comfyGateway == "" {
 		comfyGateway = "host.docker.internal"
 	}
@@ -64,6 +66,7 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 		authDisabled:  authDisabled,
 		migrations:    migrationManager,
 		workspaceRoot: workspaceRoot,
+		healthChecker: healthChecker,
 		comfyGateway:  comfyGateway,
 		// ComfyUI 状态探测是秒级接口，必须有整体超时，避免拖住轮询。
 		comfyClient: &http.Client{Timeout: 4 * time.Second},
@@ -135,6 +138,10 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("POST /api/v1/imports", handler.createImport)
 	mux.HandleFunc("POST /api/v1/downloads/{id}/{action}", handler.downloadAction)
 	mux.HandleFunc("DELETE /api/v1/downloads/{id}", handler.deleteDownload)
+	// 应用健康与生命周期（0.0.9.8）。
+	mux.HandleFunc("GET /api/v1/instances/{name}/health", handler.instanceHealth)
+	mux.HandleFunc("GET /api/v1/instances/{name}/events", handler.instanceEvents)
+	mux.HandleFunc("POST /api/v1/instances/{name}/rebuild/plan", handler.rebuildPlan)
 	// 实例数据隔离与历史迁移（0.0.9.7）。
 	mux.HandleFunc("GET /api/v1/instances/workspaces", handler.listWorkspaces)
 	mux.HandleFunc("GET /api/v1/migration/scan", handler.migrationScan)
@@ -238,12 +245,25 @@ func (h *Handler) instanceAction(action string) http.HandlerFunc {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "实例管理未启用"})
 			return
 		}
-		updated, err := h.instances.Action(r.Context(), r.PathValue("name"), action)
+		name := r.PathValue("name")
+		// 停止/重启前读取队列：有任务时附带警告（阶段 1 不阻断）。
+		warning := ""
+		if action == "stop" || action == "restart" {
+			if target, err := h.instances.Get(r.Context(), name); err == nil {
+				warning = h.queueSummary(r, target)
+			}
+		}
+		updated, err := h.instances.Action(r.Context(), name, action)
 		if err != nil {
 			h.writeInstanceError(w, err, "实例操作失败")
 			return
 		}
-		writeJSON(w, http.StatusOK, updated)
+		h.recordActionEvent(r, updated, action)
+		body := map[string]any{"instance": updated}
+		if warning != "" {
+			body["queueWarning"] = warning
+		}
+		writeJSON(w, http.StatusOK, body)
 	}
 }
 
@@ -1088,7 +1108,10 @@ func (h *Handler) writeInstanceError(w http.ResponseWriter, err error, prefix st
 	var validationError *instance.ValidationError
 	var notFoundError *instance.NotFoundError
 	var notSupportedError *instance.NotSupportedError
+	var busyError *instance.BusyError
 	switch {
+	case errors.As(err, &busyError):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": busyError.Error(), "code": "busy"})
 	case errors.As(err, &validationError):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationError.Message})
 	case errors.As(err, &notFoundError):

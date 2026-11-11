@@ -19,6 +19,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/docker"
 	"github.com/ghoul02015/flowpilot/internal/download"
 	"github.com/ghoul02015/flowpilot/internal/hardware"
+	"github.com/ghoul02015/flowpilot/internal/health"
 	"github.com/ghoul02015/flowpilot/internal/image"
 	"github.com/ghoul02015/flowpilot/internal/instance"
 	"github.com/ghoul02015/flowpilot/internal/migration"
@@ -88,6 +89,7 @@ func main() {
 	dbPath := filepath.Join(dataDir, "flowpilot.db")
 	var dataStore *database.Store
 	var authManager *auth.Manager
+	var healthChecker *health.Checker
 	backupDir := filepath.Join(dataDir, "backups")
 	if err := os.MkdirAll(dataDir, 0o755); err == nil {
 		if db, openErr := database.Open(dbPath); openErr == nil {
@@ -108,6 +110,19 @@ func main() {
 					}
 					return ""
 				})
+				// 应用健康检查器（0.0.9.8）：独立周期探测，事件写入数据底座。
+				startTimeout := 180 * time.Second
+				if raw := os.Getenv("FLOWPILOT_START_TIMEOUT"); raw != "" {
+					if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
+						startTimeout = parsed
+					}
+				}
+				healthChecker = health.NewChecker(func(ctx context.Context) ([]instance.Instance, error) {
+					return instanceManager.List(ctx)
+				}, environment("FLOWPILOT_HOST_GATEWAY", "host.docker.internal"), dataStore, startTimeout)
+				if dataStore != nil {
+					go healthChecker.Run(context.Background())
+				}
 				// 认证（0.0.9.6）：会话与审计存于数据底座；数据库不可用则认证不可用。
 				authManager = auth.NewManager(db, dataDir, os.Getenv("FLOWPILOT_INIT_TOKEN"))
 				authManager.CleanupStartup()
@@ -127,7 +142,7 @@ func main() {
 
 	httpServer := &http.Server{
 		Addr:    address,
-		Handler: server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imageManager, downloadManager, environment("FLOWPILOT_HOST_GATEWAY", "host.docker.internal"), catalogManager, storageManager, dataStore, backupDir, authManager, authDisabledFlag, migrationManager, workspacesContainerRoot),
+		Handler: server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imageManager, downloadManager, environment("FLOWPILOT_HOST_GATEWAY", "host.docker.internal"), catalogManager, storageManager, dataStore, backupDir, authManager, authDisabledFlag, migrationManager, workspacesContainerRoot, healthChecker),
 		// 镜像导入/导出可能是 GB 级长连接；保留请求头超时，正文与响应不设置固定上限。
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,

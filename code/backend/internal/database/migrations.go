@@ -73,4 +73,18 @@ var Migrations = []Migration{
 		);
 		CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_logs(ts);`,
 	},
+	{
+		Version: 3,
+		Name:    "instance-events",
+		SQL: `CREATE TABLE IF NOT EXISTS instance_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			instance_uuid TEXT NOT NULL,
+			name TEXT NOT NULL,
+			ts TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			detail TEXT NOT NULL DEFAULT '',
+			latency_ms INTEGER NOT NULL DEFAULT 0
+		);
+		CREATE INDEX IF NOT EXISTS idx_events_uuid_ts ON instance_events(instance_uuid, id);`,
+	},
 }

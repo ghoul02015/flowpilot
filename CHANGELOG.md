@@ -2,6 +2,19 @@
 
 所有重要变更均记录于此。详细内容见 `context/changes/`。
 
+## 0.0.9.8 — 2026-11-11（应用健康与实例生命周期）
+
+### 新增
+
+- **三层状态**：容器（running/stopped/error）＋应用（ready/starting/degraded/failed/not_running）＋队列（运行/排队）；独立健康检查器后台周期探测 /system_stats（启动期 3s／稳定期 10s／失败指数退避，有界并发 8），不依赖页面轮询。
+- **健康事件**：迁移 003 instance_events 表；ready/degraded/failed/recovered/stopped/started 全量记录（**恢复也记录**）；实例列表应用健康徽章、详情弹窗健康条＋事件时间线。
+- **生命周期防护**：操作互斥（同实例并发操作 409 busy）；启动超时可配（FLOWPILOT_START_TIMEOUT 默认 180s，超时保留容器与日志）；停止/重启前读取队列并附 queueWarning。
+- **重建差异预览**：`POST /rebuild/plan` 对比期望配置与当前容器标签，输出字段差异＋workspace 沿用说明。
+
+### 验证
+
+- 后端 13 包全绿（health 包 5 用例）；本机 E2E **80 项全部通过**；Spark 实机：comfy-01 三层状态 ready（延迟 1-2ms）、started/stopped/ready 事件序列完整、停止/重启/恢复全链路通过。
+
 ## 0.0.9.7 — 2026-11-11（实例数据隔离与历史迁移）
 
 ### 新增

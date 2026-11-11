@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ExternalLink, Link2, Play, Plus, RefreshCw, ScrollText, Search, Settings2, Square, Trash2 } from 'lucide-react'
-import type { ModelReport } from '@/api'
+import { getInstanceEvents, getInstanceHealth, type InstanceEventEntry, type InstanceHealthView, type ModelReport } from '@/api'
 import { EmptyState, PageHeader, Panel, StatusBadge } from '@/components/common'
 import { ImageManager } from '@/components/ImageManager'
 import { InstanceLogsDialog } from '@/components/InstanceLogsDialog'
@@ -34,6 +34,9 @@ export function Instances({ instances, gpuNames, realMode, busyIds, initialFocus
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('all')
   const [detailId, setDetailId] = useState<string | null>(initialId)
+  // 应用健康与事件（0.0.9.8）：详情弹窗打开时拉取，5 秒轮询健康。
+  const [detailHealth, setDetailHealth] = useState<InstanceHealthView | null>(null)
+  const [detailEvents, setDetailEvents] = useState<InstanceEventEntry[]>([])
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [confirmName, setConfirmName] = useState('')
   const [purgeMode, setPurgeMode] = useState(false)
@@ -42,6 +45,26 @@ export function Instances({ instances, gpuNames, realMode, busyIds, initialFocus
   const [highlightId, setHighlightId] = useState<string | null>(initialId)
   const filtered = useMemo(() => instances.filter((item) => item.name.toLowerCase().includes(query.toLowerCase()) && (status === 'all' || item.status === status)), [instances, query, status])
   const detail = instances.find((item) => item.id === detailId)
+  const detailName = detail?.name
+  const detailStatus = detail?.status
+  useEffect(() => {
+    const name: string = detailName ?? ''
+    if (!name) return
+    let cancelled = false
+    const loadAll = async (targetName: string): Promise<void> => {
+      try {
+        const healthResult = await getInstanceHealth(targetName)
+        if (!cancelled) setDetailHealth(healthResult.health)
+      } catch { /* 健康接口失败保持上次状态 */ }
+      try {
+        const eventResult = await getInstanceEvents(targetName, 20)
+        if (!cancelled) setDetailEvents(eventResult.events)
+      } catch { /* 忽略 */ }
+    }
+    void loadAll(name)
+    const timer = window.setInterval(() => void loadAll(name), 5000)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [detailName, detailStatus])
   const deleting = instances.find((item) => item.id === deleteId)
 
   // 跳转高亮 3 秒后自动消退；定时器回调属异步更新，不产生级联渲染。
@@ -67,10 +90,10 @@ export function Instances({ instances, gpuNames, realMode, busyIds, initialFocus
         <label className="relative flex-1"><span className="sr-only">搜索实例</span><Search className="absolute top-3.5 left-3 size-4 text-slate-400" /><input className="field-input pl-9" placeholder="搜索实例名称" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
         <select className="field-input sm:w-44" aria-label="按状态筛选" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">全部状态</option><option value="running">运行中</option><option value="stopped">已停止</option><option value="error">异常</option></select>
       </div>
-      <div className="overflow-x-auto"><table className="data-table min-w-[1080px]"><thead><tr><th>实例名称</th><th>状态</th><th>资源</th><th>访问端口</th><th>ComfyUI 队列</th><th>操作</th></tr></thead><tbody>
+      <div className="overflow-x-auto"><table className="data-table min-w-[1080px]"><thead><tr><th>实例名称</th><th>容器状态</th><th>应用健康</th><th>资源</th><th>访问端口</th><th>ComfyUI 队列</th><th>操作</th></tr></thead><tbody>
         {filtered.map((item) => { const busy = busyIds.includes(item.id); return <tr key={item.id} className={highlightId === item.id ? 'bg-teal-50 transition-colors' : undefined} data-testid={`instance-row-${item.name}`}>
           <td><button type="button" className="cursor-pointer text-left font-medium text-slate-900 hover:text-teal-700" onClick={() => setDetailId(item.id)}>{item.name}</button><div className="mt-1 text-xs text-slate-500">{item.template} · {item.version}</div></td>
-          <td><StatusBadge status={item.status} /></td><td>{item.gpu >= 0 ? `GPU ${item.gpu}` : '不分配'}<div className="mt-1 max-w-48 truncate text-xs text-slate-500" title={item.gpu >= 0 ? gpuNames[item.gpu] ?? 'GPU' : undefined}>{item.gpu >= 0 ? gpuNames[item.gpu] ?? 'GPU' : '仅 CPU 运行'}</div></td><td className="font-mono text-xs">{item.port}</td>
+          <td><StatusBadge status={item.status} /></td><td><AppHealthBadge status={item.status} reachable={item.comfy?.reachable} /></td><td>{item.gpu >= 0 ? `GPU ${item.gpu}` : '不分配'}<div className="mt-1 max-w-48 truncate text-xs text-slate-500" title={item.gpu >= 0 ? gpuNames[item.gpu] ?? 'GPU' : undefined}>{item.gpu >= 0 ? gpuNames[item.gpu] ?? 'GPU' : '仅 CPU 运行'}</div></td><td className="font-mono text-xs">{item.port}</td>
           <td>{item.status === 'running'
             ? item.comfy
               ? item.comfy.reachable
@@ -95,7 +118,20 @@ export function Instances({ instances, gpuNames, realMode, busyIds, initialFocus
     <Dialog open={Boolean(detail)} onOpenChange={(open) => !open && setDetailId(null)}>
       <DialogContent className="sm:max-w-xl">{detail && <>
         <DialogHeader><DialogTitle>{detail.name}</DialogTitle><DialogDescription>{detail.template} · {detail.version}</DialogDescription></DialogHeader>
-        <div className="flex items-center justify-between rounded-lg bg-slate-100 px-4 py-3"><StatusBadge status={detail.status} /><span className="text-xs text-slate-500">{detail.uptime}</span></div>
+        <div className="rounded-lg bg-slate-100 px-4 py-3">
+          <div className="flex items-center justify-between"><div className="flex items-center gap-2"><span className="text-xs text-slate-500">容器</span><StatusBadge status={detail.status} /></div><span className="text-xs text-slate-500">{detail.uptime}</span></div>
+          <div className="mt-2 flex items-center justify-between" data-testid="detail-app-health"><span className="text-xs text-slate-500">应用</span><div className="flex items-center gap-2"><AppHealthBadge status={detail.status} app={detailHealth?.app} reachable={detail.comfy?.reachable} />{detailHealth?.lastCheckAt && <span className="text-xs text-slate-400">检查于 {new Date(detailHealth.lastCheckAt).toLocaleTimeString('zh-CN', { hour12: false })}</span>}</div></div>
+        </div>
+        {detailEvents.length > 0 && <div className="max-h-40 overflow-y-auto rounded-lg border border-slate-200 p-3" data-testid="detail-events">
+          <div className="text-xs font-medium text-slate-500">最近事件</div>
+          <ol className="mt-2 space-y-1.5">
+            {detailEvents.slice(0, 8).map((event) => <li key={event.id} className="flex items-center gap-2 text-xs">
+              <span className="font-mono text-slate-400">{new Date(event.ts).toLocaleTimeString('zh-CN', { hour12: false })}</span>
+              <span className="rounded bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600">{event.kind}</span>
+              {event.detail && <span className="truncate text-slate-500" title={event.detail}>{event.detail}</span>}
+            </li>)}
+          </ol>
+        </div>}
         <dl className="grid grid-cols-2 gap-4 text-sm">{[
           ['GPU', detail.gpu >= 0 ? `GPU ${detail.gpu} · ${gpuNames[detail.gpu] ?? 'GPU'}` : '不分配 GPU'],
           ['访问端口', String(detail.port)],
@@ -134,4 +170,20 @@ export function Instances({ instances, gpuNames, realMode, busyIds, initialFocus
     <InstanceLogsDialog key={`logs-${logsInstance?.name ?? 'idle'}`} instance={logsInstance} onClose={() => setLogsInstance(null)} />
     <ModelLinksDialog key={`links-${linksInstance?.name ?? 'idle'}`} instance={linksInstance} models={models ?? null} onClose={() => setLinksInstance(null)} />
   </>
+}
+
+// AppHealthBadge 应用层健康徽章（0.0.9.8）。
+// app 为后端检查器权威状态；缺失时按容器状态与页面探测推导。
+function AppHealthBadge({ status, app, reachable }: { status: string; app?: string; reachable?: boolean }) {
+  const state = app ?? (status !== 'running' ? 'not_running' : reachable === undefined ? 'starting' : reachable ? 'ready' : 'degraded')
+  const meta: Record<string, { label: string; className: string }> = {
+    ready: { label: '就绪', className: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
+    starting: { label: '启动中', className: 'border-amber-200 bg-amber-50 text-amber-700' },
+    degraded: { label: '降级', className: 'border-orange-200 bg-orange-50 text-orange-700' },
+    failed: { label: '失败', className: 'border-rose-200 bg-rose-50 text-rose-700' },
+    not_running: { label: '未运行', className: 'border-slate-200 bg-slate-50 text-slate-500' },
+    unknown: { label: '未知', className: 'border-slate-200 bg-slate-50 text-slate-500' },
+  }
+  const item = meta[state] ?? meta.unknown
+  return <span data-testid={`app-health-${state}`} className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${item.className}`}>{item.label}</span>
 }

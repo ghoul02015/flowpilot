@@ -145,6 +145,9 @@ type Manager struct {
 	// markOrphan 保留数据删除后立即标记 DB 记录为孤儿（不等待下次同步）。
 	markOrphan func(name string)
 	linksMu    sync.Mutex
+	// busyOps 实例操作互斥：同一实例的创建/启停/重启/删除串行化，
+	// 并发请求返回 BusyError（409）。
+	busyOps sync.Map
 
 	// 数据底座钩子（0.0.9.5）：创建／删除后尽力即时写库，
 	// 遗漏由数据底座的下次同步修复；为空时无副作用（测试与旧装配兼容）。
@@ -198,6 +201,20 @@ func (m *Manager) SetModelLinks(hostDir, containerDir, modelRoot string) {
 	m.linksContainerDir = containerDir
 	m.modelRoot = modelRoot
 }
+
+// BusyError 操作进行中冲突。
+type BusyError struct{ Name string }
+
+func (e *BusyError) Error() string { return "实例操作进行中，请稍候再试" }
+
+// tryLockOp 尝试占用实例操作槽；已占用返回 false。
+func (m *Manager) tryLockOp(name string) bool {
+	_, loaded := m.busyOps.LoadOrStore(name, struct{}{})
+	return !loaded
+}
+
+// unlockOp 释放实例操作槽。
+func (m *Manager) unlockOp(name string) { m.busyOps.Delete(name) }
 
 // SetOrphanMarker 注册保留删除的孤儿标记钩子（数据底座）。
 func (m *Manager) SetOrphanMarker(mark func(name string)) {
@@ -273,6 +290,10 @@ func (e *ValidationError) Error() string { return e.Message }
 
 // Create 校验参数、创建并启动实例容器。
 func (m *Manager) Create(ctx context.Context, spec Spec) (Instance, error) {
+	if !m.tryLockOp(spec.Name) {
+		return Instance{}, &BusyError{Name: spec.Name}
+	}
+	defer m.unlockOp(spec.Name)
 	if spec.ContainerPort <= 0 {
 		spec.ContainerPort = m.containerPort
 	}
@@ -484,6 +505,10 @@ func (m *Manager) validate(ctx context.Context, spec Spec) error {
 
 // Action 对实例执行 start／stop／restart。
 func (m *Manager) Action(ctx context.Context, name, action string) (Instance, error) {
+	if !m.tryLockOp(name) {
+		return Instance{}, &BusyError{Name: name}
+	}
+	defer m.unlockOp(name)
 	target, err := m.Get(ctx, name)
 	if err != nil {
 		return Instance{}, err
@@ -538,6 +563,10 @@ func (m *Manager) checkGPUConflict(ctx context.Context, target Instance) error {
 //
 // force 为 true 时允许删除运行中的实例。
 func (m *Manager) Delete(ctx context.Context, name string, force, purge bool) error {
+	if !m.tryLockOp(name) {
+		return &BusyError{Name: name}
+	}
+	defer m.unlockOp(name)
 	target, err := m.Get(ctx, name)
 	if err != nil {
 		return err
