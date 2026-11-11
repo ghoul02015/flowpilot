@@ -262,8 +262,15 @@ export async function deleteLocalImageApi(image: string, force = false): Promise
   await sendJSON<{ status: string }>('DELETE', `/api/v1/images/local?image=${encodeURIComponent(image)}${force ? '&force=1' : ''}`)
 }
 
-export async function tagLocalImageApi(source: string, target: string): Promise<void> {
-  await sendJSON<{ status: string }>('POST', '/api/v1/images/tag', { source, target })
+export interface ImageTagResult {
+  status: 'alias' | 'rename'
+  action: 'alias' | 'rename'
+  source: string
+  target: string
+}
+
+export async function tagLocalImageApi(source: string, target: string, mode: 'alias' | 'rename' = 'alias'): Promise<ImageTagResult> {
+  return sendJSON<ImageTagResult>('POST', '/api/v1/images/tag', { source, target, mode })
 }
 
 export async function importLocalImageApi(file: File): Promise<void> {
@@ -986,10 +993,11 @@ export interface UnifiedTaskPage {
   offset: number
 }
 
-export async function getUnifiedTasks(params?: { type?: string; status?: string; limit?: number; offset?: number }): Promise<UnifiedTaskPage> {
+export async function getUnifiedTasks(params?: { type?: string; status?: string; q?: string; limit?: number; offset?: number }): Promise<UnifiedTaskPage> {
   const query = new URLSearchParams()
   if (params?.type) query.set('type', params.type)
   if (params?.status) query.set('status', params.status)
+  if (params?.q) query.set('q', params.q)
   if (params?.limit) query.set('limit', String(params.limit))
   if (params?.offset) query.set('offset', String(params.offset))
   const suffix = query.toString() ? `?${query.toString()}` : ''
@@ -998,6 +1006,21 @@ export async function getUnifiedTasks(params?: { type?: string; status?: string;
 
 export async function getUnifiedTask(id: string): Promise<UnifiedTaskView> {
   return getJSON<UnifiedTaskView>(`/api/v1/tasks/${encodeURIComponent(id)}`, AbortSignal.timeout(6000))
+}
+
+export async function deleteUnifiedTask(id: string): Promise<void> {
+  await sendJSON<{ status: string }>('DELETE', `/api/v1/tasks/${encodeURIComponent(id)}`)
+}
+
+export async function cleanupFinishedTasks(type?: string): Promise<{ deleted: number; failed: number }> {
+  const query = type ? `?type=${encodeURIComponent(type)}` : ''
+  return sendJSON<{ deleted: number; failed: number }>('DELETE', `/api/v1/tasks${query}`)
+}
+
+export async function getImageTaskLogs(unifiedId: string): Promise<string[]> {
+  const id = unifiedId.replace(/^img-/, '')
+  const tasks = await getImageTasks()
+  return tasks.find((task) => task.id === id)?.logs ?? []
 }
 
 // 备份（0.0.9.12）。

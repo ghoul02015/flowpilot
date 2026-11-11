@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -56,5 +57,23 @@ func TestUpsertListFilter(t *testing.T) {
 	}
 	if _, ok := store.Get("ghost"); ok {
 		t.Fatal("不存在的任务应返回 false")
+	}
+}
+
+func TestDeleteOnlyFinishedRecords(t *testing.T) {
+	store := openStore(t)
+	store.Upsert(View{ID: "backup-running", Type: TypeBackup, Name: "备份中", Status: StatusRunning, CreatedAt: "2026-01-01T00:00:00Z"})
+	if err := store.Delete("backup-running"); !errors.Is(err, ErrTaskActive) {
+		t.Fatalf("运行中任务应拒绝删除：%v", err)
+	}
+	store.Upsert(View{ID: "backup-done", Type: TypeBackup, Name: "备份完成", Status: StatusSucceeded, CreatedAt: "2026-01-02T00:00:00Z"})
+	if err := store.Delete("backup-done"); err != nil {
+		t.Fatalf("已完成任务应可删除：%v", err)
+	}
+	if _, ok := store.Get("backup-done"); ok {
+		t.Fatal("删除后不应再查到任务")
+	}
+	if err := store.Delete("ghost"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("不存在任务应返回 ErrNotFound：%v", err)
 	}
 }

@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.1.0.0') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.1.0.1') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   // 认证（0.0.9.6）：未登录先看到登录页 → 初始化 → 登录 → 会话恢复。
@@ -374,6 +374,49 @@ try {
     const planBody = await planResponse.json()
     if (!planResponse.ok() || !Array.isArray(planBody.fields) || typeof planBody.workspaceKept !== 'boolean') throw new Error(`重建预览异常：${JSON.stringify(planBody)}`)
     check('重建差异预览接口')
+
+    // 镜像标签（0.1.0.1）：产品化弹窗、别名不复制镜像、目标冲突与实例引用保护。
+    const aliasTag = `${regressionImage}-alias`
+    const renameTag = `${regressionImage}-renamed`
+    // 清理上次中断运行可能遗留的测试别名，保证用例幂等。
+    for (const staleTag of [aliasTag, renameTag]) {
+      await page.request.delete(`${baseURL}/api/v1/images/local?image=${encodeURIComponent(staleTag)}`, { headers: { 'X-FlowPilot-CSRF': csrfToken } })
+    }
+    const imagesBeforeTag = await (await page.request.get(`${baseURL}/api/v1/images/local`)).json()
+    const sourceImage = imagesBeforeTag.images?.find((item) => (item.RepoTags ?? []).includes(regressionImage))
+    if (!sourceImage) throw new Error(`未找到回归镜像：${regressionImage}`)
+    const aliasResponse = await page.request.post(`${baseURL}/api/v1/images/tag`, { headers: { 'X-FlowPilot-CSRF': csrfToken }, data: { source: regressionImage, target: aliasTag, mode: 'alias' } })
+    const aliasBody = await aliasResponse.json()
+    if (!aliasResponse.ok() || aliasBody.action !== 'alias') throw new Error(`添加镜像别名失败：${JSON.stringify(aliasBody)}`)
+    const imagesAfterAlias = await (await page.request.get(`${baseURL}/api/v1/images/local`)).json()
+    const aliasImage = imagesAfterAlias.images?.find((item) => (item.RepoTags ?? []).includes(aliasTag))
+    if (!aliasImage || aliasImage.Id !== sourceImage.Id) throw new Error('别名应与源标签指向同一镜像 ID')
+    check('镜像别名指向同一镜像 ID（不复制数据）')
+    const conflictResponse = await page.request.post(`${baseURL}/api/v1/images/tag`, { headers: { 'X-FlowPilot-CSRF': csrfToken }, data: { source: regressionImage, target: aliasTag, mode: 'alias' } })
+    if (conflictResponse.status() !== 409) throw new Error(`重复标签应返回 409，实际 ${conflictResponse.status()}`)
+    check('镜像目标标签冲突保护（409）')
+    const renameResponse = await page.request.post(`${baseURL}/api/v1/images/tag`, { headers: { 'X-FlowPilot-CSRF': csrfToken }, data: { source: regressionImage, target: renameTag, mode: 'rename' } })
+    if (renameResponse.status() !== 409) throw new Error(`被实例引用的源标签重命名应返回 409，实际 ${renameResponse.status()}`)
+    check('镜像重命名实例引用保护（409）')
+
+    await page.getByRole('button', { name: '镜像中心', exact: true }).click()
+    await page.getByRole('heading', { name: '镜像中心' }).waitFor()
+    const aliasRow = page.getByRole('row').filter({ hasText: aliasTag }).first()
+    await aliasRow.getByRole('button', { name: /管理标签/ }).click()
+    const tagDialog = page.getByRole('dialog')
+    await tagDialog.getByRole('heading', { name: '编辑镜像标签' }).waitFor()
+    await tagDialog.getByText('不会复制镜像层', { exact: false }).waitFor()
+    await tagDialog.getByText('同一镜像', { exact: false }).first().waitFor()
+    check('镜像标签产品化弹窗与同镜像分组')
+    await page.keyboard.press('Escape')
+    await tagDialog.waitFor({ state: 'detached' })
+
+    const aliasDelete = await page.request.delete(`${baseURL}/api/v1/images/local?image=${encodeURIComponent(aliasTag)}`, { headers: { 'X-FlowPilot-CSRF': csrfToken } })
+    if (!aliasDelete.ok()) throw new Error(`删除别名标签失败：HTTP ${aliasDelete.status()}`)
+    const imagesAfterAliasDelete = await (await page.request.get(`${baseURL}/api/v1/images/local`)).json()
+    if (!imagesAfterAliasDelete.images?.some((item) => (item.RepoTags ?? []).includes(regressionImage))) throw new Error('删除别名后源标签应保留')
+    check('删除镜像别名不影响源标签')
+    await page.getByRole('button', { name: 'ComfyUI 实例', exact: true }).click()
 
     await page.getByRole('button', { name: `停止 ${instanceName}`, exact: true }).click()
     await page.getByRole('button', { name: `启动 ${instanceName}`, exact: true }).waitFor({ timeout: 20000 })
@@ -889,8 +932,8 @@ try {
 
   await page.getByRole('button', { name: '系统管理', exact: true }).click()
   await page.getByRole('heading', { name: '系统管理' }).waitFor()
-  await page.getByText('后端已连接', { exact: true }).waitFor()
-  check('系统页后端与真实 Docker 联调')
+  await page.getByText('管理服务已连接', { exact: true }).waitFor()
+  check('系统页管理服务与 Docker 联调')
   await page.getByRole('button', { name: '重新检测' }).click()
   await page.getByText('环境检测完成', { exact: true }).waitFor()
   check('环境重新检测')
@@ -957,6 +1000,12 @@ try {
   await page.getByTestId('task-type-filter').selectOption('download')
   await page.waitForTimeout(600)
   check('任务中心统一列表与类型筛选')
+  await page.getByRole('button', { name: '清理已结束' }).waitFor()
+  await page.getByLabel('搜索任务').fill('index.html')
+  await page.waitForTimeout(700)
+  await page.getByText('index.html', { exact: true }).first().waitFor()
+  check('任务中心紧凑视图、搜索与批量清理入口')
+  await page.getByLabel('搜索任务').fill('')
   await page.getByRole('button', { name: '系统管理', exact: true }).click()
 
   // 备份（0.0.9.12）：创建任务 → 列表可见。
@@ -975,6 +1024,31 @@ try {
   const latestBackup = backupList.backups[0]
   if (!latestBackup.manifest?.components?.sqlite) throw new Error(`备份应含 SQLite 快照：${JSON.stringify(latestBackup)}`)
   check('平台备份完成（含 SQLite 快照与 manifest）')
+  let backupState = 'running'
+  const backupStateDeadline = Date.now() + 20000
+  while (Date.now() < backupStateDeadline && !['succeeded', 'failed', 'partial'].includes(backupState)) {
+    const taskResponse = await page.request.get(`${baseURL}/api/v1/tasks/${encodeURIComponent(backupBody.taskId)}`)
+    if (taskResponse.ok()) backupState = (await taskResponse.json()).status
+    if (!['succeeded', 'failed', 'partial'].includes(backupState)) await page.waitForTimeout(500)
+  }
+  if (backupState !== 'succeeded') throw new Error(`备份任务未完成：${backupState}`)
+  const backupTasksResponse = await page.request.get(`${baseURL}/api/v1/tasks?type=backup&limit=20`)
+  const backupTasksBody = await backupTasksResponse.json()
+  if (!backupTasksResponse.ok() || !backupTasksBody.tasks?.some((task) => task.id === backupBody.taskId)) throw new Error(`统一任务应聚合平台备份：${JSON.stringify(backupTasksBody)}`)
+  check('统一任务聚合平台备份')
+  await page.getByRole('button', { name: '任务中心', exact: true }).click()
+  await page.getByRole('heading', { name: '任务中心' }).waitFor()
+  await page.getByTestId('task-type-filter').selectOption('backup')
+  const backupTaskRow = page.getByRole('row').filter({ hasText: '平台备份' }).first()
+  await backupTaskRow.getByRole('button', { name: '删除记录' }).click()
+  await page.getByRole('dialog').getByRole('button', { name: '删除记录', exact: true }).click()
+  await backupTaskRow.waitFor({ state: 'detached', timeout: 10000 })
+  const backupAfterDelete = await page.request.get(`${baseURL}/api/v1/tasks?type=backup&limit=20`)
+  const backupAfterDeleteBody = await backupAfterDelete.json()
+  if (!backupAfterDelete.ok() || backupAfterDeleteBody.tasks?.some((task) => task.id === backupBody.taskId)) throw new Error('任务记录删除后不应再出现在统一列表')
+  check('任务记录删除仅清理记录')
+  await page.getByRole('button', { name: '系统管理', exact: true }).click()
+  await page.getByRole('heading', { name: '系统管理' }).waitFor()
 
   // 退出登录：回到登录页，业务 API 再次 401。
   await page.getByRole('tab', { name: '安全与会话' }).click()

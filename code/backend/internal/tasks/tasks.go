@@ -5,6 +5,7 @@ package tasks
 
 import (
 	"database/sql"
+	"errors"
 	"log/slog"
 	"time"
 )
@@ -27,6 +28,13 @@ const (
 	TypeImagePull  = "image-pull"
 	TypeImageBuild = "image-build"
 	TypeMigration  = "migration"
+	TypeBackup     = "backup"
+)
+
+// 任务记录删除错误。
+var (
+	ErrNotFound   = errors.New("任务不存在")
+	ErrTaskActive = errors.New("任务仍在进行中，请先停止或取消")
 )
 
 // View 统一任务视图。
@@ -82,7 +90,7 @@ func (s *Store) Get(id string) (View, bool) {
 
 // List 分页筛选查询（时间倒序）；type/status 为空返回全部。
 func (s *Store) List(taskType, status string, limit, offset int) ([]View, int) {
-	if limit <= 0 || limit > 200 {
+	if limit <= 0 || limit > 500 {
 		limit = 50
 	}
 	where := "1=1"
@@ -113,6 +121,30 @@ func (s *Store) List(taskType, status string, limit, offset int) ([]View, int) {
 		}
 	}
 	return list, total
+}
+
+// Delete 删除已结束的持久化任务记录；运行中任务须先停止或取消。
+func (s *Store) Delete(id string) error {
+	var status string
+	err := s.db.QueryRow("SELECT status FROM tasks WHERE id = ?", id).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	switch status {
+	case StatusQueued, StatusRunning, StatusPaused:
+		return ErrTaskActive
+	}
+	result, err := s.db.Exec("DELETE FROM tasks WHERE id = ?", id)
+	if err != nil {
+		return err
+	}
+	if affected, _ := result.RowsAffected(); affected == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // RecordMigrationTask 迁移任务便捷写入。

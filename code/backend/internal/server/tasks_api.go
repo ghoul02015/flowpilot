@@ -2,9 +2,11 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ghoul02015/flowpilot/internal/tasks"
@@ -50,6 +52,7 @@ func mapImageState(state string) string {
 func (h *Handler) listUnifiedTasks(w http.ResponseWriter, r *http.Request) {
 	taskType := r.URL.Query().Get("type")
 	status := r.URL.Query().Get("status")
+	query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 	limit := intQuery(r, "limit", 50)
 	offset := intQuery(r, "offset", 0)
 	views := []tasks.View{}
@@ -101,19 +104,30 @@ func (h *Handler) listUnifiedTasks(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	// 迁移任务（持久化）。
-	if h.taskStore != nil && (taskType == "" || taskType == tasks.TypeMigration) {
-		stored, _ := h.taskStore.List(tasks.TypeMigration, "", 200, 0)
-		views = append(views, stored...)
-	}
-	// 状态过滤 + 时间倒序。
-	filtered := make([]tasks.View, 0, len(views))
-	for _, item := range views {
-		if status == "" || item.Status == status {
-			filtered = append(filtered, item)
+	// 持久化任务（迁移与平台备份）。
+	storedTypes := map[string]bool{tasks.TypeMigration: true, tasks.TypeBackup: true}
+	if h.taskStore != nil && (taskType == "" || storedTypes[taskType]) {
+		stored, _ := h.taskStore.List("", "", 500, 0)
+		for _, item := range stored {
+			if !storedTypes[item.Type] || (taskType != "" && item.Type != taskType) {
+				continue
+			}
+			views = append(views, item)
 		}
 	}
+	// 状态过滤 + 时间倒序；total 必须反映筛选后的总数而非分页前聚合量。
+	filtered := make([]tasks.View, 0, len(views))
+	for _, item := range views {
+		if status != "" && item.Status != status {
+			continue
+		}
+		if query != "" && !strings.Contains(strings.ToLower(item.Name+" "+item.ObjectRef), query) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
 	sortTasksByCreated(filtered)
+	total := len(filtered)
 	if offset < len(filtered) {
 		page := filtered[offset:]
 		if len(page) > limit {
@@ -123,7 +137,7 @@ func (h *Handler) listUnifiedTasks(w http.ResponseWriter, r *http.Request) {
 	} else {
 		filtered = []tasks.View{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tasks": filtered, "total": len(views), "limit": limit, "offset": offset})
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": filtered, "total": total, "limit": limit, "offset": offset})
 }
 
 // getUnifiedTask 任务详情。
@@ -153,6 +167,48 @@ func (h *Handler) getUnifiedTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusNotFound, map[string]string{"error": "任务不存在"})
+}
+
+// deleteUnifiedTask 删除已结束的统一任务记录；不影响模型、镜像、备份或实例数据。
+func (h *Handler) deleteUnifiedTask(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	switch {
+	case strings.HasPrefix(id, "dl-"):
+		if h.downloads == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "下载任务未启用"})
+			return
+		}
+		if err := h.downloads.Delete(strings.TrimPrefix(id, "dl-")); err != nil {
+			h.writeDownloadError(w, err, "删除任务记录失败")
+			return
+		}
+	case strings.HasPrefix(id, "img-"):
+		if h.images == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "镜像任务未启用"})
+			return
+		}
+		if err := h.images.Delete(strings.TrimPrefix(id, "img-")); err != nil {
+			h.writeImageTaskError(w, err, "删除任务记录失败")
+			return
+		}
+	default:
+		if h.taskStore == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "任务存储未启用"})
+			return
+		}
+		if err := h.taskStore.Delete(id); err != nil {
+			switch {
+			case errors.Is(err, tasks.ErrNotFound):
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "任务不存在"})
+			case errors.Is(err, tasks.ErrTaskActive):
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			default:
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "删除任务记录失败"})
+			}
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 // runMigrationAsync 迁移任务化：立即返回任务 ID，后台执行并写进度。
@@ -211,11 +267,83 @@ func readJSON(r *http.Request, target any) error {
 	return json.NewDecoder(io.LimitReader(r.Body, 8*1024)).Decode(target)
 }
 
-// sortTasksByCreated 按创建时间倒序（简单插入排序，任务量级小）。
+// activeTaskStatus 判断任务是否仍占用执行资源。
+func activeTaskStatus(status string) bool {
+	return status == tasks.StatusQueued || status == tasks.StatusRunning || status == tasks.StatusPaused
+}
+
+// sortTasksByCreated 活跃任务优先，同组内按创建时间倒序（简单插入排序，任务量级小）。
 func sortTasksByCreated(list []tasks.View) {
+	less := func(left, right tasks.View) bool {
+		leftActive := activeTaskStatus(left.Status)
+		rightActive := activeTaskStatus(right.Status)
+		if leftActive != rightActive {
+			return leftActive
+		}
+		return left.CreatedAt > right.CreatedAt
+	}
 	for i := 1; i < len(list); i++ {
-		for j := i; j > 0 && list[j].CreatedAt > list[j-1].CreatedAt; j-- {
-			list[j], list[j-1] = list[j-1], list[j]
+		current := list[i]
+		j := i - 1
+		for j >= 0 && less(current, list[j]) {
+			list[j+1] = list[j]
+			j--
+		}
+		list[j+1] = current
+	}
+}
+
+// cleanupFinishedTasks 批量删除已结束任务记录（不删除任何业务产物）。
+// type 为空时清理全部类型；运行中、排队中与暂停任务永不删除。
+func (h *Handler) cleanupFinishedTasks(w http.ResponseWriter, r *http.Request) {
+	taskType := r.URL.Query().Get("type")
+	matches := func(kind string) bool { return taskType == "" || taskType == kind }
+	deleted := 0
+	failed := 0
+	countResult := func(err error) {
+		if err != nil {
+			failed++
+			return
+		}
+		deleted++
+	}
+	if h.downloads != nil {
+		for _, item := range h.downloads.List() {
+			kind := tasks.TypeDownload
+			if item.Kind == "import" {
+				kind = tasks.TypeImport
+			}
+			status := mapDownloadStatus(item.Status)
+			if !matches(kind) || activeTaskStatus(status) {
+				continue
+			}
+			countResult(h.downloads.Delete(item.ID))
 		}
 	}
+	if h.images != nil {
+		for _, item := range h.images.List() {
+			kind := tasks.TypeImageBuild
+			if item.Kind == "pull" {
+				kind = tasks.TypeImagePull
+			}
+			status := mapImageState(item.State)
+			if !matches(kind) || activeTaskStatus(status) {
+				continue
+			}
+			countResult(h.images.Delete(item.ID))
+		}
+	}
+	if h.taskStore != nil {
+		stored, _ := h.taskStore.List("", "", 500, 0)
+		for _, item := range stored {
+			if item.Type != tasks.TypeMigration && item.Type != tasks.TypeBackup {
+				continue
+			}
+			if !matches(item.Type) || activeTaskStatus(item.Status) {
+				continue
+			}
+			countResult(h.taskStore.Delete(item.ID))
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted, "failed": failed})
 }

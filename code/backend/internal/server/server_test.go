@@ -19,6 +19,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/hardware"
 	"github.com/ghoul02015/flowpilot/internal/instance"
 	"github.com/ghoul02015/flowpilot/internal/model"
+	"github.com/ghoul02015/flowpilot/internal/tasks"
 )
 
 func newTestHandler(t *testing.T, instances *instance.Manager) http.Handler {
@@ -513,5 +514,58 @@ func TestDatabaseEndpointsWithStore(t *testing.T) {
 	}
 	if backup.Name == "" || backup.Size <= 0 {
 		t.Fatalf("备份产物异常：%+v", backup)
+	}
+}
+
+func TestNormalizeImageReference(t *testing.T) {
+	cases := map[string]string{
+		"":                               "",
+		" flowpilot/comfyui:cu130 ":      "flowpilot/comfyui:cu130",
+		"flowpilot/comfyui":              "flowpilot/comfyui:latest",
+		"localhost:5000/team/comfyui":    "localhost:5000/team/comfyui:latest",
+		"localhost:5000/team/comfyui:v1": "localhost:5000/team/comfyui:v1",
+	}
+	for input, expected := range cases {
+		if actual := normalizeImageReference(input); actual != expected {
+			t.Fatalf("规范化 %q 应为 %q，实际 %q", input, expected, actual)
+		}
+	}
+}
+
+func TestCleanupFinishedStoredTasks(t *testing.T) {
+	db, err := database.Open(filepath.Join(t.TempDir(), "cleanup-test.db"))
+	if err != nil {
+		t.Fatalf("打开数据库失败：%v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := database.Migrate(db, database.Migrations); err != nil {
+		t.Fatalf("迁移失败：%v", err)
+	}
+	store := tasks.NewStore(db)
+	store.Upsert(tasks.View{ID: "backup-running", Type: tasks.TypeBackup, Status: tasks.StatusRunning, CreatedAt: "2026-01-01T00:00:00Z"})
+	store.Upsert(tasks.View{ID: "backup-done", Type: tasks.TypeBackup, Status: tasks.StatusSucceeded, CreatedAt: "2026-01-02T00:00:00Z"})
+	handler := &Handler{taskStore: store}
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/tasks?type=backup", nil)
+	request.SetPathValue("", "")
+	response := httptest.NewRecorder()
+	handler.cleanupFinishedTasks(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("清理应返回 200：%d", response.Code)
+	}
+	var body struct {
+		Deleted int `json:"deleted"`
+		Failed  int `json:"failed"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Deleted != 1 || body.Failed != 0 {
+		t.Fatalf("应仅清理 1 条已结束任务：%+v", body)
+	}
+	if _, ok := store.Get("backup-running"); !ok {
+		t.Fatal("运行中任务不得被批量清理")
+	}
+	if _, ok := store.Get("backup-done"); ok {
+		t.Fatal("已结束任务应被清理")
 	}
 }

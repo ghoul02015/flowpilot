@@ -31,7 +31,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/tasks"
 )
 
-const Version = "0.1.0.0"
+const Version = "0.1.0.1"
 
 type Handler struct {
 	docker        *docker.Client
@@ -148,7 +148,9 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("POST /api/v1/backups", handler.createBackup)
 	// 统一任务（0.0.9.9）。
 	mux.HandleFunc("GET /api/v1/tasks", handler.listUnifiedTasks)
+	mux.HandleFunc("DELETE /api/v1/tasks", handler.cleanupFinishedTasks)
 	mux.HandleFunc("GET /api/v1/tasks/{id}", handler.getUnifiedTask)
+	mux.HandleFunc("DELETE /api/v1/tasks/{id}", handler.deleteUnifiedTask)
 	mux.HandleFunc("GET /api/v1/downloads", handler.listDownloads)
 	mux.HandleFunc("POST /api/v1/downloads", handler.createDownload)
 	mux.HandleFunc("POST /api/v1/imports", handler.createImport)
@@ -791,16 +793,66 @@ func (h *Handler) deleteLocalImage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+// normalizeImageReference 规范化镜像标签；省略标签时按 Docker 约定补 latest。
+func normalizeImageReference(reference string) string {
+	trimmed := strings.TrimSpace(reference)
+	if trimmed == "" {
+		return ""
+	}
+	lastSlash := strings.LastIndex(trimmed, "/")
+	if !strings.Contains(trimmed[lastSlash+1:], ":") {
+		return trimmed + ":latest"
+	}
+	return trimmed
+}
+
+// imageReferencingInstances 返回使用指定镜像标签的实例（含已停止容器）。
+func (h *Handler) imageReferencingInstances(ctx context.Context, image string) ([]string, error) {
+	if h.instances == nil {
+		return nil, nil
+	}
+	instances, err := h.instances.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("读取实例引用失败：%w", err)
+	}
+	references := make([]string, 0)
+	for _, item := range instances {
+		if item.Image == image {
+			references = append(references, fmt.Sprintf("%s（%s）", item.Name, item.Status))
+		}
+	}
+	return references, nil
+}
+
 func (h *Handler) tagLocalImage(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Source string `json:"source"`
 		Target string `json:"target"`
+		Mode   string `json:"mode"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&request); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误", "detail": err.Error()})
 		return
 	}
-	if exists, err := h.images.Exists(r.Context(), request.Source); err != nil {
+	source := normalizeImageReference(request.Source)
+	target := normalizeImageReference(request.Target)
+	mode := request.Mode
+	if mode == "" {
+		mode = "alias"
+	}
+	if mode != "alias" && mode != "rename" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "不支持的标签操作模式"})
+		return
+	}
+	if target == "" || strings.Contains(target, "@") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请输入包含标签的合法镜像名，例如 flowpilot/comfyui:cu130"})
+		return
+	}
+	if target == source {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "新标签与源标签相同"})
+		return
+	}
+	if exists, err := h.images.Exists(r.Context(), source); err != nil {
 		var validationError *image.ValidationError
 		if errors.As(err, &validationError) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationError.Message})
@@ -812,19 +864,55 @@ func (h *Handler) tagLocalImage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "源镜像不存在"})
 		return
 	}
-	if _, err := h.images.Exists(r.Context(), request.Target); err != nil {
+	if targetExists, err := h.images.Exists(r.Context(), target); err != nil {
 		var validationError *image.ValidationError
 		if errors.As(err, &validationError) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationError.Message})
 			return
 		}
-	}
-	if err := h.docker.TagImage(r.Context(), request.Source, request.Target); err != nil {
-		slog.Warn("tag local image failed", "source", request.Source, "target", request.Target, "error", err)
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "修改镜像标签失败", "detail": err.Error()})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "检查目标标签失败", "detail": err.Error()})
+		return
+	} else if targetExists {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "目标标签已存在：" + target})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "tagged"})
+	if mode == "rename" {
+		references, err := h.imageReferencingInstances(r.Context(), source)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "暂时无法确认实例引用，已取消重命名", "detail": err.Error()})
+			return
+		}
+		if len(references) > 0 {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": "源标签正被实例使用，无法重命名：" + strings.Join(references, "、") + "。可改为添加别名，或先调整实例镜像。",
+			})
+			return
+		}
+	}
+	if err := h.docker.TagImage(r.Context(), source, target); err != nil {
+		slog.Warn("tag local image failed", "source", source, "target", target, "error", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "添加镜像标签失败", "detail": err.Error()})
+		return
+	}
+	if mode == "rename" {
+		if err := h.docker.RemoveImage(r.Context(), source, false); err != nil {
+			// 尽力回滚新标签，避免留下半完成的重命名。
+			rollbackErr := h.docker.RemoveImage(r.Context(), target, false)
+			detail := err.Error()
+			if rollbackErr != nil {
+				detail += "；回滚新标签失败：" + rollbackErr.Error()
+			}
+			slog.Warn("rename local image failed", "source", source, "target", target, "error", err, "rollbackError", rollbackErr)
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "重命名镜像标签失败，已尽量回滚", "detail": detail})
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status": mode,
+		"action": mode,
+		"source": source,
+		"target": target,
+	})
 }
 
 func (h *Handler) exportLocalImage(w http.ResponseWriter, r *http.Request) {

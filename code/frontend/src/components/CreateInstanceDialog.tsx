@@ -232,7 +232,7 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
               ['开机自启', autoStart ? '启用' : '关闭'],
             ].map(([term, value]) => <div key={term} className="grid grid-cols-[100px_1fr] gap-4 py-3 text-sm"><dt className="text-slate-500">{term}</dt><dd className="break-all font-medium text-slate-800">{value}</dd></div>)}
           </dl>
-          <p className="text-xs leading-5 text-slate-500">将通过 Docker API 真实创建并启动容器，失败会自动回滚清理。</p>
+          <p className="text-xs leading-5 text-slate-500">将通过 Docker 创建并启动容器；失败时自动清理本次创建的资源。</p>
         </div>}
 
         <DialogFooter>

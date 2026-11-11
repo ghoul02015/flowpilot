@@ -342,7 +342,7 @@ export function AddModelDialog({ open, onOpenChange, onSubmit, onMarketDownload,
           <label className="field-label">模型类型<select className="field-input" value={type} onChange={(event) => setType(event.target.value)}>{['Checkpoints', 'LoRA', 'VAE', 'ControlNet', 'Text Encoders', 'Diffusion Models', 'Embeddings', 'Upscale Models', 'CLIP Vision', 'Model Patches', '其他'].map((item) => <option key={item}>{item}</option>)}</select></label>
           <label className="field-label">{tab === 'url' ? '下载地址' : '服务器文件路径'}<input className="field-input font-mono text-xs" value={source} onChange={(event) => setSource(event.target.value)} placeholder={tab === 'url' ? 'https://…/model.safetensors' : '/data/import/model.safetensors'} autoComplete="off" /></label>
           <div className="rounded-lg bg-slate-100 p-3 text-xs leading-5 text-slate-600">{tab === 'url'
-            ? '将从该地址真实下载并写入共享仓库，支持暂停、断点续传与失败重试；任务进度在模型中心与任务中心实时可见。'
+            ? '将从该地址下载并写入共享仓库，支持暂停、断点续传与失败重试；任务进度可在模型中心与任务中心查看。'
             : '将从 /data/import 目录（宿主机安装目录下的 import 文件夹）复制文件并写入共享仓库，支持暂停与校验；任务进度在模型中心与任务中心实时可见。'}</div>
           {error && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
         </div>}

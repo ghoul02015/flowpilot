@@ -12,6 +12,38 @@ interface ImageTagRow {
   virtual?: boolean
 }
 
+interface ImageTagGroup {
+  key: string
+  tags: string[]
+  image?: LocalImage
+  task?: ImageTask
+  virtual?: boolean
+}
+
+interface ConfirmRequest {
+  title: string
+  description: string
+  confirmLabel: string
+  danger?: boolean
+  action: () => Promise<void>
+}
+
+// groupTagRows 按镜像 ID 合并标签，避免同一镜像的多个别名看起来像多份镜像。
+function groupTagRows(rows: ImageTagRow[]): ImageTagGroup[] {
+  const groups = new Map<string, ImageTagGroup>()
+  for (const row of rows) {
+    const key = row.image?.Id ? `image:${row.image.Id}` : `task:${row.task?.id ?? row.tag}`
+    const existing = groups.get(key)
+    if (existing) {
+      if (!existing.tags.includes(row.tag)) existing.tags.push(row.tag)
+      if (!existing.task && row.task) existing.task = row.task
+      continue
+    }
+    groups.set(key, { key, tags: [row.tag], image: row.image, task: row.task, virtual: row.virtual })
+  }
+  return [...groups.values()]
+}
+
 const taskStateText: Record<string, string> = { queued: '排队中', running: '进行中', done: '已完成', error: '失败', cancelled: '已取消', interrupted: '已中断' }
 
 const platformOptions = [
@@ -52,6 +84,18 @@ export function ImageManager() {
   // 打开日志时的任务快照：成功任务入库后记录会被自动清理，
   // 没有快照会让正在查看的日志弹窗突然关闭。
   const [logsSnapshot, setLogsSnapshot] = useState<ImageTask | null>(null)
+  // 标签管理：同一镜像 ID 可保留多个标签，不复制镜像层。
+  const [tagOpen, setTagOpen] = useState(false)
+  const [tagImage, setTagImage] = useState<LocalImage | null>(null)
+  const [tagList, setTagList] = useState<string[]>([])
+  const [tagSource, setTagSource] = useState('')
+  const [tagTarget, setTagTarget] = useState('')
+  const [tagMode, setTagMode] = useState<'alias' | 'rename'>('alias')
+  const [tagError, setTagError] = useState('')
+  const [tagBusy, setTagBusy] = useState(false)
+  // 统一产品确认框，替代浏览器原生 confirm。
+  const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null)
+  const [confirmBusy, setConfirmBusy] = useState(false)
 
   const refreshTasks = useCallback(() => {
     getImageTasks().then(setTasks).catch(() => {})
@@ -126,33 +170,84 @@ export function ImageManager() {
     if (recipe) setImageName(recipe.image)
   }
 
-  async function retag(source: string) {
-    const target = window.prompt('请输入新的镜像标签，例如 flowpilot/comfyui:cu130-test', source)
-    if (!target || target === source) return
-    setBusy(true)
+  function openTagManager(group: ImageTagGroup) {
+    if (!group.image) return
+    setTagImage(group.image)
+    setTagList(group.tags)
+    setTagSource(group.tags[0] ?? '')
+    setTagTarget('')
+    setTagMode('alias')
+    setTagError('')
+    setTagOpen(true)
+  }
+
+  async function submitTag() {
+    const target = tagTarget.trim()
+    if (!tagSource) {
+      setTagError('请选择源标签')
+      return
+    }
+    if (!target) {
+      setTagError('请输入新的镜像标签')
+      return
+    }
+    if (target === tagSource) {
+      setTagError('新标签与源标签相同')
+      return
+    }
+    setTagBusy(true)
+    setTagError('')
     try {
-      await tagLocalImageApi(source, target)
-      toast.success('镜像标签已更新', { description: `${source} → ${target}` })
+      const result = await tagLocalImageApi(tagSource, target, tagMode)
+      toast.success(result.action === 'rename' ? '镜像标签已重命名' : '镜像别名已添加', {
+        description: result.action === 'rename' ? `${result.source} → ${result.target}` : `${result.source} 与 ${result.target} 指向同一镜像，不重复占用磁盘`,
+      })
+      setTagOpen(false)
       refresh()
     } catch (error) {
-      toast.error('修改镜像标签失败', { description: error instanceof Error ? error.message : '请稍后重试。' })
+      setTagError(error instanceof Error ? error.message : '标签操作失败，请稍后重试。')
     } finally {
-      setBusy(false)
+      setTagBusy(false)
     }
   }
 
-  async function remove(tag: string) {
-    if (!window.confirm(`确认删除本机镜像标签 ${tag}？如果镜像被容器使用，Docker 会拒绝删除。`)) return
-    setBusy(true)
+  function askConfirm(request: ConfirmRequest) {
+    setConfirmRequest(request)
+  }
+
+  async function executeConfirm() {
+    if (!confirmRequest) return
+    setConfirmBusy(true)
     try {
-      await deleteLocalImageApi(tag)
-      toast.success('镜像已删除', { description: tag })
-      refresh()
-    } catch (error) {
-      toast.error('删除镜像失败', { description: error instanceof Error ? error.message : '请确认没有实例正在使用该镜像。' })
+      await confirmRequest.action()
+      setConfirmRequest(null)
     } finally {
-      setBusy(false)
+      setConfirmBusy(false)
     }
+  }
+
+  function requestRemoveTag(tag: string, remaining: number) {
+    setTagOpen(false)
+    askConfirm({
+      title: remaining > 1 ? '删除镜像标签' : '删除镜像',
+      description: remaining > 1
+        ? `将删除标签 ${tag}。该镜像仍由其他标签保留，不会删除镜像数据。`
+        : `将删除最后一个标签 ${tag} 及对应镜像数据。此操作不可撤销。`,
+      confirmLabel: remaining > 1 ? '删除标签' : '删除镜像',
+      danger: true,
+      action: async () => {
+        setBusy(true)
+        try {
+          await deleteLocalImageApi(tag)
+          toast.success(remaining > 1 ? '镜像标签已删除' : '镜像已删除', { description: tag })
+          refresh()
+        } catch (error) {
+          toast.error('删除镜像失败', { description: error instanceof Error ? error.message : '请确认没有实例正在使用该镜像。' })
+        } finally {
+          setBusy(false)
+        }
+      },
+    })
   }
 
   async function importImage(file?: File) {
@@ -201,63 +296,93 @@ export function ImageManager() {
     }
   }
 
-  async function stopTask(task: ImageTask) {
+  function stopTask(task: ImageTask) {
     const label = task.kind === 'build' ? '构建' : '拉取'
-    if (!window.confirm(`确认停止${label}任务 ${task.image}？`)) return
-    try {
-      await cancelImageTask(task.id)
-      toast.success(`${label}任务已停止`, { description: task.image })
-      refreshTasks()
-    } catch (error) {
-      toast.error(`停止${label}任务失败`, { description: error instanceof Error ? error.message : '请稍后重试。' })
-    }
+    askConfirm({
+      title: `停止${label}任务`,
+      description: `确认停止${label}任务 ${task.image}？已生成的中间结果会按 Docker 规则保留或清理。`,
+      confirmLabel: '停止任务',
+      danger: true,
+      action: async () => {
+        try {
+          await cancelImageTask(task.id)
+          toast.success(`${label}任务已停止`, { description: task.image })
+          refreshTasks()
+        } catch (error) {
+          toast.error(`停止${label}任务失败`, { description: error instanceof Error ? error.message : '请稍后重试。' })
+        }
+      },
+    })
   }
 
-  async function removeTask(task: ImageTask) {
-    try {
-      await deleteImageTask(task.id)
-      toast.success('任务记录已删除', { description: task.image })
-      refreshTasks()
-    } catch (error) {
-      toast.error('删除任务记录失败', { description: error instanceof Error ? error.message : '请稍后重试。' })
-    }
+  function removeTask(task: ImageTask) {
+    askConfirm({
+      title: '删除任务记录',
+      description: `将删除 ${task.image} 的任务记录，不会删除镜像或构建产物。`,
+      confirmLabel: '删除记录',
+      danger: true,
+      action: async () => {
+        try {
+          await deleteImageTask(task.id)
+          toast.success('任务记录已删除', { description: task.image })
+          refreshTasks()
+        } catch (error) {
+          toast.error('删除任务记录失败', { description: error instanceof Error ? error.message : '请稍后重试。' })
+        }
+      },
+    })
   }
 
-  async function pruneCache() {
-    if (!window.confirm('确认清理全部 Docker 构建缓存？下次构建将从头下载依赖，耗时会明显增加。')) return
-    setPruning(true)
-    try {
-      const reclaimed = await pruneImageBuildCache()
-      toast.success('构建缓存已清理', { description: `回收空间 ${formatBytes(reclaimed)}` })
-      getImageDiskUsage().then(setDiskUsage).catch(() => {})
-    } catch (error) {
-      toast.error('清理构建缓存失败', { description: error instanceof Error ? error.message : '请稍后重试。' })
-    } finally {
-      setPruning(false)
-    }
+  function pruneCache() {
+    askConfirm({
+      title: '清理 Docker 构建缓存',
+      description: '将清理全部构建缓存，下次构建会重新下载依赖，耗时会明显增加。镜像本身不受影响。',
+      confirmLabel: '清理构建缓存',
+      danger: true,
+      action: async () => {
+        setPruning(true)
+        try {
+          const reclaimed = await pruneImageBuildCache()
+          toast.success('构建缓存已清理', { description: `回收空间 ${formatBytes(reclaimed)}` })
+          getImageDiskUsage().then(setDiskUsage).catch(() => {})
+        } catch (error) {
+          toast.error('清理构建缓存失败', { description: error instanceof Error ? error.message : '请稍后重试。' })
+        } finally {
+          setPruning(false)
+        }
+      },
+    })
   }
 
   function renderImageTable(title: string, description: string, rows: ImageTagRow[], emptyTitle: string) {
+    const groups = groupTagRows(rows)
     return <Panel>
       <PanelHeader title={title} description={description} action={<button type="button" className="btn-secondary" onClick={refresh} disabled={loading}><RefreshCw className={`size-4 ${loading ? 'animate-spin' : ''}`} />刷新</button>} />
       <div className="overflow-x-auto"><table className="data-table min-w-[1080px]"><thead><tr><th>镜像标签</th><th>镜像简述参数</th><th>构建进度</th><th>镜像 ID</th><th>大小</th><th>创建时间</th><th>操作</th></tr></thead><tbody>
-        {rows.map((row) => {
-          const task = row.task
+        {groups.map((group) => {
+          const task = group.task
           const active = task ? isActiveTask(task) : false
-          const summary = task?.summary?.length ? task.summary : imageBuildSummary(row.image)
-          return <tr key={`${row.image?.Id ?? task?.id ?? 'building'}-${row.tag}`}>
-            <td className="font-mono text-xs">{row.tag}{row.virtual && task && <span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] font-medium ${task.state === 'queued' ? 'bg-amber-100 text-amber-800' : 'bg-teal-100 text-teal-800'}`}>{task.state === 'queued' ? '排队中' : '构建中'}</span>}</td>
-            <td>{summary.length > 0 ? <div className="flex max-w-[320px] flex-wrap gap-1">{summary.slice(0, 4).map((item) => <span key={`${row.tag}-${item.label}`} className="rounded-full bg-slate-100 px-2 py-1 text-[11px] text-slate-600">{item.label}：{item.value}</span>)}</div> : <span className="text-xs text-slate-400">未记录</span>}</td>
+          const primaryTag = group.tags[0] ?? ''
+          const summary = task?.summary?.length ? task.summary : imageBuildSummary(group.image)
+          return <tr key={group.key}>
+            <td>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {group.tags.map((tag) => <span key={tag} className="rounded-md bg-slate-100 px-2 py-1 font-mono text-xs text-slate-800">{tag}</span>)}
+                {group.virtual && task && <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${task.state === 'queued' ? 'bg-amber-100 text-amber-800' : 'bg-teal-100 text-teal-800'}`}>{task.state === 'queued' ? '排队中' : '构建中'}</span>}
+              </div>
+              {group.tags.length > 1 && <div className="mt-1.5 text-[11px] text-slate-500">同一镜像 · {group.tags.length} 个标签，不重复占用磁盘</div>}
+            </td>
+            <td>{summary.length > 0 ? <div className="flex max-w-[320px] flex-wrap gap-1">{summary.slice(0, 4).map((item) => <span key={`${primaryTag}-${item.label}`} className="rounded-full bg-slate-100 px-2 py-1 text-[11px] text-slate-600">{item.label}：{item.value}</span>)}</div> : <span className="text-xs text-slate-400">未记录</span>}</td>
             <td>{task && active ? <div className="min-w-28"><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full bg-teal-600" style={{ width: `${Math.max(1, Math.min(100, task.progress || 1))}%` }} /></div><span className="mt-1 block text-xs text-slate-500">{task.state === 'queued' ? '排队等待中' : `${task.progress || 1}% · 进行中`}</span></div> : <span className="text-xs text-slate-400">—</span>}</td>
-            <td className="font-mono text-xs text-slate-500">{row.image?.Id.slice(0, 20) ?? '等待 Docker 生成'}</td>
-            <td>{row.image ? formatBytes(row.image.Size) : '—'}</td>
-            <td>{row.image ? new Date(row.image.Created * 1000).toLocaleString('zh-CN', { hour12: false }) : '—'}</td>
+            <td className="font-mono text-xs text-slate-500">{group.image?.Id.slice(0, 20) ?? '等待 Docker 生成'}</td>
+            <td>{group.image ? formatBytes(group.image.Size) : '—'}</td>
+            <td>{group.image ? new Date(group.image.Created * 1000).toLocaleString('zh-CN', { hour12: false }) : '—'}</td>
             <td><div className="flex items-center gap-1">
               {task && task.logs.length > 0 && <button type="button" className="icon-button" title="构建日志" onClick={() => openLogs(task)}><ScrollText className="size-4" /></button>}
-              {task && active && <button type="button" className="icon-button text-rose-600 hover:bg-rose-50" title="停止构建" aria-label={`停止构建 ${row.tag}`} onClick={() => void stopTask(task)}><Ban className="size-4" /></button>}
-              {row.image && <button type="button" className="icon-button" title="改标签" disabled={busy} onClick={() => void retag(row.tag)}><Tag className="size-4" /></button>}
-              {row.image && <button type="button" className="icon-button" title="导出 tar" onClick={() => window.open(exportLocalImageURL(row.tag), '_blank', 'noopener')}><Download className="size-4" /></button>}
-              {row.image && <button type="button" className="icon-button text-rose-600 hover:bg-rose-50" title="删除镜像" disabled={busy} onClick={() => void remove(row.tag)}><Trash2 className="size-4" /></button>}
+              {task && active && <button type="button" className="icon-button text-rose-600 hover:bg-rose-50" title="停止构建" aria-label={`停止构建 ${primaryTag}`} onClick={() => stopTask(task)}><Ban className="size-4" /></button>}
+              {group.image && <button type="button" className="icon-button" title="管理标签" aria-label={`管理标签 ${primaryTag}`} disabled={busy} onClick={() => openTagManager(group)}><Tag className="size-4" /></button>}
+              {group.image && <button type="button" className="icon-button" title="导出 tar" aria-label={`导出 ${primaryTag}`} onClick={() => window.open(exportLocalImageURL(primaryTag), '_blank', 'noopener')}><Download className="size-4" /></button>}
+              {group.image && <button type="button" className="icon-button text-rose-600 hover:bg-rose-50" title={group.tags.length > 1 ? '删除当前标签' : '删除镜像'} aria-label={`删除 ${primaryTag}`} disabled={busy} onClick={() => requestRemoveTag(primaryTag, group.tags.length)}><Trash2 className="size-4" /></button>}
             </div></td>
           </tr>
         })}
@@ -321,6 +446,49 @@ export function ImageManager() {
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader><DialogTitle className="flex items-center gap-2"><ScrollText className="size-5 text-teal-700" />{logsTask?.kind === 'pull' ? '拉取日志' : '构建日志'}</DialogTitle><DialogDescription>{logsTask ? `${logsTask.image} · ${taskStateText[logsTask.state] ?? logsTask.state}${logsTask.kind === 'build' ? ` · ${logsTask.progress || 0}%` : ''}` : '暂无任务'}</DialogDescription></DialogHeader>
         <pre className="max-h-[65dvh] overflow-auto rounded-lg bg-slate-950 p-4 font-mono text-xs leading-5 whitespace-pre-wrap text-slate-100">{logsTask?.logs?.length ? logsTask.logs.join('\n') : '等待任务开始。'}</pre>
+      </DialogContent>
+    </Dialog>
+
+    <Dialog open={tagOpen} onOpenChange={(open) => { if (!open && !tagBusy) setTagOpen(false) }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Tag className="size-5 text-teal-700" />编辑镜像标签</DialogTitle>
+          <DialogDescription>多个标签指向同一镜像，不会复制镜像层或重复占用磁盘。</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-600">
+            <div className="flex flex-wrap items-center justify-between gap-2"><span>镜像 ID</span><span className="font-mono text-slate-800">{tagImage?.Id.slice(0, 24)}</span></div>
+            <div className="mt-1 flex flex-wrap items-center justify-between gap-2"><span>镜像大小</span><span>{tagImage ? formatBytes(tagImage.Size) : '—'}（多标签共用）</span></div>
+            <div className="mt-3 flex flex-wrap gap-1.5">{tagList.map((tag) => <span key={tag} className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white py-1 pr-1 pl-2 font-mono text-[11px] text-slate-700">{tag}<button type="button" className="rounded p-0.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600" title={`删除标签 ${tag}`} aria-label={`删除标签 ${tag}`} onClick={() => requestRemoveTag(tag, tagList.length)}><Trash2 className="size-3" /></button></span>)}</div>
+          </div>
+          <label className="field-label">源标签<select className="field-input font-mono text-sm" value={tagSource} onChange={(event) => setTagSource(event.target.value)}>{tagList.map((tag) => <option key={tag} value={tag}>{tag}</option>)}</select></label>
+          <label className="field-label">新标签<input className="field-input font-mono text-sm" value={tagTarget} onChange={(event) => setTagTarget(event.target.value)} placeholder="flowpilot/comfyui:cu130-new" autoComplete="off" /></label>
+          <fieldset className="grid gap-2">
+            <legend className="field-label">操作方式</legend>
+            <label className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-sm ${tagMode === 'alias' ? 'border-teal-300 bg-teal-50/60' : 'border-slate-200'}`}><input type="radio" name="tag-mode" className="mt-1 accent-teal-700" checked={tagMode === 'alias'} onChange={() => setTagMode('alias')} /><span><strong className="block text-slate-800">添加别名（推荐）</strong><span className="mt-1 block text-xs leading-5 text-slate-500">保留源标签，新标签与源标签指向同一镜像。</span></span></label>
+            <label className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-sm ${tagMode === 'rename' ? 'border-teal-300 bg-teal-50/60' : 'border-slate-200'}`}><input type="radio" name="tag-mode" className="mt-1 accent-teal-700" checked={tagMode === 'rename'} onChange={() => setTagMode('rename')} /><span><strong className="block text-slate-800">重命名（移除源标签）</strong><span className="mt-1 block text-xs leading-5 text-slate-500">源标签被实例使用时会被拒绝；请先添加别名或调整实例镜像。</span></span></label>
+          </fieldset>
+          {tagError && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{tagError}</p>}
+        </div>
+        <DialogFooter>
+          <button type="button" className="btn-secondary" disabled={tagBusy} onClick={() => setTagOpen(false)}>取消</button>
+          <button type="button" className="btn-primary" disabled={tagBusy || Boolean(tagImage && tagList.length === 0)} onClick={() => void submitTag()}>{tagBusy ? <LoaderCircle className="size-4 animate-spin" /> : <Tag className="size-4" />}{tagBusy ? '处理中' : tagMode === 'rename' ? '确认重命名' : '添加别名'}</button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <Dialog open={Boolean(confirmRequest)} onOpenChange={(open) => { if (!open && !confirmBusy) setConfirmRequest(null) }}>
+      <DialogContent>
+        {confirmRequest && <>
+          <DialogHeader>
+            <DialogTitle>{confirmRequest.title}</DialogTitle>
+            <DialogDescription>{confirmRequest.description}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <button type="button" className="btn-secondary" disabled={confirmBusy} onClick={() => setConfirmRequest(null)}>取消</button>
+            <button type="button" className={confirmRequest.danger ? 'btn-danger' : 'btn-primary'} disabled={confirmBusy} onClick={() => void executeConfirm()}>{confirmBusy ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}{confirmBusy ? '处理中' : confirmRequest.confirmLabel}</button>
+          </DialogFooter>
+        </>}
       </DialogContent>
     </Dialog>
   </>
