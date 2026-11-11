@@ -31,7 +31,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/tasks"
 )
 
-const Version = "0.0.9.12"
+const Version = "0.0.9.13"
 
 type Handler struct {
 	docker        *docker.Client
@@ -98,6 +98,7 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("GET /api/v1/audit/logs", handler.auditLogsPage)
 	mux.HandleFunc("GET /api/v1/system/info", handler.systemInfo)
 	mux.HandleFunc("GET /api/v1/hardware", handler.hardwareReport)
+	mux.HandleFunc("GET /api/v1/hardware/compat", handler.hardwareCompat)
 	mux.HandleFunc("GET /api/v1/docker/info", handler.dockerInfo)
 	mux.HandleFunc("GET /api/v1/docker/containers", handler.dockerContainers)
 	mux.HandleFunc("GET /api/v1/instances", handler.listInstances)

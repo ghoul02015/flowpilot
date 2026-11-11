@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.9.12') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.9.13') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   // 认证（0.0.9.6）：未登录先看到登录页 → 初始化 → 登录 → 会话恢复。
@@ -109,6 +109,12 @@ try {
     return Boolean(current) && current !== '' && current !== previous
   }, firstCollected, { timeout: 8000 })
   check('硬件数据每 2 秒自动刷新')
+
+  // 兼容性检查（0.0.9.13）。
+  const compatResponse = await page.request.get(`${baseURL}/api/v1/hardware/compat`)
+  const compatBody = await compatResponse.json()
+  if (!compatResponse.ok() || !Array.isArray(compatBody.items) || compatBody.items.length === 0) throw new Error(`兼容性检查异常：${JSON.stringify(compatBody)}`)
+  check(`硬件兼容性检查（${compatBody.items.length} 项 · 通过 ${compatBody.summary.pass}）`)
 
   const normalized = (value) => value.replace(/\s+/g, ' ').trim()
   if (hasRealHardware && hardware.gpuAvailable) {

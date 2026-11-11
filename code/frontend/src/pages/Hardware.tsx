@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Activity, ChevronDown, CircleAlert, Cpu, Gauge, HardDrive, MemoryStick, Server, Thermometer, Zap } from 'lucide-react'
 import { formatBytes, getHardware, type HardwareReport, type RealGPU } from '@/api'
 import { EmptyState, PageHeader, Panel, PanelHeader, ProgressBar } from '@/components/common'
+import { getHardwareCompat, type CompatItem } from '@/api'
 
 function clamp(value: number) {
   return Math.max(0, Math.min(100, value))
@@ -30,6 +31,47 @@ function GpuStateBadge({ gpu }: { gpu: RealGPU }) {
 
 function Chip({ label, value }: { label: string; value: string }) {
   return <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-600">{label}<strong className="font-semibold text-slate-800">{value}</strong></span>
+}
+
+// CompatSection 兼容性检查区块（0.0.9.13）。
+function CompatSection() {
+  const [items, setItems] = useState<CompatItem[]>([])
+  const [summary, setSummary] = useState<Record<string, number>>({})
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    let cancelled = false
+    getHardwareCompat()
+      .then((report: { items: CompatItem[]; summary: Record<string, number> }) => {
+        if (!cancelled) {
+          setItems(report.items)
+          setSummary(report.summary)
+        }
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+  const meta: Record<string, { label: string; className: string }> = {
+    pass: { label: '通过', className: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
+    warn: { label: '警告', className: 'border-amber-200 bg-amber-50 text-amber-700' },
+    block: { label: '阻断', className: 'border-rose-200 bg-rose-50 text-rose-700' },
+  }
+  return <Panel data-testid="compat-section">
+    <PanelHeader title="兼容性检查" description={`通过 ${summary.pass ?? 0} · 警告 ${summary.warn ?? 0} · 阻断 ${summary.block ?? 0}（只读判定，附修复建议）`} />
+    <div className="divide-y divide-slate-100">
+      {loading && <div className="p-6 text-center text-sm text-slate-500">检查中…</div>}
+      {items.map((item) => { const badge = meta[item.result] ?? { label: item.result, className: 'border-slate-200 bg-slate-50 text-slate-500' }; return (
+        <div key={item.id} className="flex items-start gap-3 px-5 py-4">
+          <span className={`mt-0.5 inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-xs font-medium ${badge.className}`}>{badge.label}</span>
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-slate-900">{item.name}</div>
+            <div className="mt-0.5 text-sm leading-6 break-all text-slate-600">{item.detail}</div>
+            {item.advice && <div className="mt-1 text-xs text-amber-700">建议：{item.advice}</div>}
+          </div>
+        </div>
+      ) })}
+    </div>
+  </Panel>
 }
 
 export function Hardware() {
@@ -139,5 +181,6 @@ export function Hardware() {
         </div>
       </details>
     </Panel>}
-  </>
+
+    <CompatSection />  </>
 }

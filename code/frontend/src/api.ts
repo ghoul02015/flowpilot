@@ -1027,3 +1027,22 @@ export async function listBackups(): Promise<{ backups: BackupItem[] }> {
 export async function createBackup(): Promise<{ taskId: string; status: string }> {
   return sendJSON<{ taskId: string; status: string }>('POST', '/api/v1/backups', undefined)
 }
+
+// 硬件兼容性检查（0.0.9.13）。
+
+export interface CompatItem {
+  id: string
+  name: string
+  result: 'pass' | 'warn' | 'block' | string
+  detail: string
+  advice?: string
+}
+
+export interface CompatReport {
+  items: CompatItem[]
+  summary: Record<string, number>
+}
+
+export async function getHardwareCompat(): Promise<CompatReport> {
+  return getJSON<CompatReport>('/api/v1/hardware/compat', AbortSignal.timeout(8000))
+}
