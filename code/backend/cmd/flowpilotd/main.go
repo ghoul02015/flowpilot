@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ghoul02015/flowpilot/internal/auth"
+	"github.com/ghoul02015/flowpilot/internal/backup"
 	"github.com/ghoul02015/flowpilot/internal/catalog"
 	"github.com/ghoul02015/flowpilot/internal/database"
 	"github.com/ghoul02015/flowpilot/internal/docker"
@@ -109,6 +110,7 @@ func main() {
 	var authManager *auth.Manager
 	var healthChecker *health.Checker
 	var taskStore *tasks.Store
+	var backupRunner *backup.Runner
 	backupDir := filepath.Join(dataDir, "backups")
 	if err := os.MkdirAll(dataDir, 0o755); err == nil {
 		if db, openErr := database.Open(dbPath); openErr == nil {
@@ -121,6 +123,8 @@ func main() {
 				}
 				dataStore = database.NewStore(db)
 				taskStore = tasks.NewStore(db)
+				backupRunner = backup.NewRunner(filepath.Join(dataDir, "backups"), filepath.Join(dataDir, "instances"), filepath.Join(dataDir, "network-storage.json"))
+				backupRunner.SetDBPath(dbPath)
 				// 实例重建沿用历史 workspace（孤儿记录复用 UUID）。
 				instanceManager.SetOrphanMarker(func(name string) { dataStore.MarkOrphanByName(name) })
 				instanceManager.SetWorkspaceReuse(func(name string) string {
@@ -162,7 +166,7 @@ func main() {
 
 	httpServer := &http.Server{
 		Addr:    address,
-		Handler: server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imageManager, downloadManager, environment("FLOWPILOT_HOST_GATEWAY", "host.docker.internal"), catalogManager, storageManager, dataStore, backupDir, authManager, authDisabledFlag, migrationManager, workspacesContainerRoot, healthChecker, taskStore),
+		Handler: server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imageManager, downloadManager, environment("FLOWPILOT_HOST_GATEWAY", "host.docker.internal"), catalogManager, storageManager, dataStore, backupDir, authManager, authDisabledFlag, migrationManager, workspacesContainerRoot, healthChecker, taskStore, backupRunner),
 		// 镜像导入/导出可能是 GB 级长连接；保留请求头超时，正文与响应不设置固定上限。
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,

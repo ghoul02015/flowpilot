@@ -999,3 +999,31 @@ export async function getUnifiedTasks(params?: { type?: string; status?: string;
 export async function getUnifiedTask(id: string): Promise<UnifiedTaskView> {
   return getJSON<UnifiedTaskView>(`/api/v1/tasks/${encodeURIComponent(id)}`, AbortSignal.timeout(6000))
 }
+
+// 备份（0.0.9.12）。
+
+export interface BackupManifest {
+  createdAt: string
+  version: string
+  components: Record<string, boolean>
+  checksum: string
+  sizeBytes: number
+  instanceCount: number
+  notes?: string
+}
+
+export interface BackupItem {
+  path: string
+  name: string
+  sizeBytes: number
+  checksum: string
+  manifest?: BackupManifest
+}
+
+export async function listBackups(): Promise<{ backups: BackupItem[] }> {
+  return getJSON<{ backups: BackupItem[] }>('/api/v1/backups', AbortSignal.timeout(6000))
+}
+
+export async function createBackup(): Promise<{ taskId: string; status: string }> {
+  return sendJSON<{ taskId: string; status: string }>('POST', '/api/v1/backups', undefined)
+}

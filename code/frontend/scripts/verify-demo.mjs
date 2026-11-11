@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.9.11') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.0.9.12') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   // 认证（0.0.9.6）：未登录先看到登录页 → 初始化 → 登录 → 会话恢复。
@@ -952,6 +952,23 @@ try {
   await page.waitForTimeout(600)
   check('任务中心统一列表与类型筛选')
   await page.getByRole('button', { name: '系统管理', exact: true }).click()
+
+  // 备份（0.0.9.12）：创建任务 → 列表可见。
+  const backupTask = await page.request.post(`${baseURL}/api/v1/backups`, { headers: { 'X-FlowPilot-CSRF': csrfToken } })
+  const backupBody = await backupTask.json()
+  if (!backupTask.ok() || !backupBody.taskId) throw new Error(`创建备份任务失败：${JSON.stringify(backupBody)}`)
+  check('平台备份任务创建')
+  await page.getByRole('tab', { name: '存储与备份' }).click()
+  await page.getByTestId('backup-panel').waitFor()
+  await page.waitForTimeout(4000)
+  await page.getByRole('button', { name: '刷新' }).click()
+  await page.waitForTimeout(1500)
+  const backupListResponse = await page.request.get(`${baseURL}/api/v1/backups`)
+  const backupList = await backupListResponse.json()
+  if (!backupListResponse.ok() || backupList.backups.length === 0) throw new Error('备份列表应至少 1 条')
+  const latestBackup = backupList.backups[0]
+  if (!latestBackup.manifest?.components?.sqlite) throw new Error(`备份应含 SQLite 快照：${JSON.stringify(latestBackup)}`)
+  check('平台备份完成（含 SQLite 快照与 manifest）')
 
   // 退出登录：回到登录页，业务 API 再次 401。
   await page.getByRole('tab', { name: '安全与会话' }).click()

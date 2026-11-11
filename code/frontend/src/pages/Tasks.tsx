@@ -25,6 +25,7 @@ const typeMeta: Record<string, string> = {
   'image-pull': '镜像拉取',
   'image-build': '镜像构建',
   migration: '数据迁移',
+  backup: '平台备份',
 }
 
 // Tasks 统一任务中心（0.0.9.9）：聚合下载/导入、镜像构建/拉取、数据迁移任务。

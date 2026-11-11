@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ghoul02015/flowpilot/internal/auth"
+	"github.com/ghoul02015/flowpilot/internal/backup"
 	"github.com/ghoul02015/flowpilot/internal/catalog"
 	"github.com/ghoul02015/flowpilot/internal/database"
 	"github.com/ghoul02015/flowpilot/internal/docker"
@@ -30,7 +31,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/tasks"
 )
 
-const Version = "0.0.9.11"
+const Version = "0.0.9.12"
 
 type Handler struct {
 	docker        *docker.Client
@@ -50,11 +51,12 @@ type Handler struct {
 	workspaceRoot string
 	healthChecker *health.Checker
 	taskStore     *tasks.Store
+	backupRunner  *backup.Runner
 	comfyGateway  string
 	comfyClient   *http.Client
 }
 
-func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imageManager *image.Manager, downloadManager *download.Manager, comfyGateway string, catalogManager *catalog.Manager, storageManager *storage.Manager, dataStore *database.Store, backupDir string, authManager *auth.Manager, authDisabled bool, migrationManager *migration.Manager, workspaceRoot string, healthChecker *health.Checker, unifiedTasks *tasks.Store) http.Handler {
+func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imageManager *image.Manager, downloadManager *download.Manager, comfyGateway string, catalogManager *catalog.Manager, storageManager *storage.Manager, dataStore *database.Store, backupDir string, authManager *auth.Manager, authDisabled bool, migrationManager *migration.Manager, workspaceRoot string, healthChecker *health.Checker, unifiedTasks *tasks.Store, backups *backup.Runner) http.Handler {
 	if comfyGateway == "" {
 		comfyGateway = "host.docker.internal"
 	}
@@ -70,6 +72,7 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 		workspaceRoot: workspaceRoot,
 		healthChecker: healthChecker,
 		taskStore:     unifiedTasks,
+		backupRunner:  backups,
 		comfyGateway:  comfyGateway,
 		// ComfyUI 状态探测是秒级接口，必须有整体超时，避免拖住轮询。
 		comfyClient: &http.Client{Timeout: 4 * time.Second},
@@ -136,6 +139,9 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("DELETE /api/v1/images/tasks/{id}", handler.deleteImageTask)
 	mux.HandleFunc("GET /api/v1/images/disk-usage", handler.imageDiskUsage)
 	mux.HandleFunc("POST /api/v1/images/cache/prune", handler.pruneBuildCache)
+	// 备份（0.0.9.12）。
+	mux.HandleFunc("GET /api/v1/backups", handler.listBackups)
+	mux.HandleFunc("POST /api/v1/backups", handler.createBackup)
 	// 统一任务（0.0.9.9）。
 	mux.HandleFunc("GET /api/v1/tasks", handler.listUnifiedTasks)
 	mux.HandleFunc("GET /api/v1/tasks/{id}", handler.getUnifiedTask)
