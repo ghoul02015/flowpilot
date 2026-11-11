@@ -2,6 +2,18 @@
 
 所有重要变更均记录于此。详细内容见 `context/changes/`。
 
+## 0.0.9.16 — 2026-11-11（开源治理与发布候选版）
+
+### 新增
+
+- **开源文件**：LICENSE（Apache-2.0）/NOTICE/THIRD_PARTY_NOTICES/CONTRIBUTING/SECURITY/CODE_OF_CONDUCT；ComfyUI GPL-3.0 边界声明。
+- **CI**：GitHub Actions（Go vet/test＋前端 lint/build＋shellcheck）。
+- **历史扫描**：Git 全历史敏感信息扫描；代码内网 IP 清理。
+
+### 验证
+
+- 后端 15 包全绿；E2E 86 项全过；Spark 实机（兼容性 7 项全 pass、comfy-01 连续 11 次升级零中断）。
+
 ## 0.0.9.15 — 2026-11-11（全局 UI 商业化打磨）
 
 ### 新增
