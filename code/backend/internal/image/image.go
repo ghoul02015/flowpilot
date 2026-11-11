@@ -5,6 +5,7 @@ package image
 import (
 	"archive/tar"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -20,13 +21,15 @@ type BuildParamSummary struct {
 }
 
 // BuildParams 是平台内手动构建 ComfyUI 镜像的参数。
+// Source 是服务端解析后的不可变源码坐标，构建时只认其中的 commit SHA。
 type BuildParams struct {
-	Variant     string `json:"variant"`
-	ImageName   string `json:"image"`
-	ComfyUIRef  string `json:"ref"`
-	PipIndexURL string `json:"pip"`
-	WithManager string `json:"manager"`
-	Platform    string `json:"platform"`
+	Variant     string        `json:"variant"`
+	ImageName   string        `json:"image"`
+	ComfyUIRef  string        `json:"ref"`
+	Source      *ComfyVersion `json:"source,omitempty"`
+	PipIndexURL string        `json:"pip"`
+	WithManager string        `json:"manager"`
+	Platform    string        `json:"platform"`
 }
 
 // ConflictError 表示已有同名镜像的任务在进行中。
@@ -55,8 +58,18 @@ func (p *BuildParams) validate() (Recipe, error) {
 		return Recipe{}, err
 	}
 	p.ComfyUIRef = strings.TrimSpace(p.ComfyUIRef)
+	if p.Source == nil || !fullCommitPattern.MatchString(p.Source.Commit) {
+		return Recipe{}, &ValidationError{Message: "请先选择并解析 ComfyUI 版本，构建必须固定到具体 commit"}
+	}
+	p.Source.Commit = strings.ToLower(strings.TrimSpace(p.Source.Commit))
+	if p.ComfyUIRef == "" {
+		p.ComfyUIRef = p.Source.Ref
+	}
+	if p.Source.Ref != "" && p.Source.Ref != p.ComfyUIRef {
+		return Recipe{}, &ValidationError{Message: "ComfyUI 版本引用与解析结果不一致，请重新选择版本"}
+	}
 	if !comfyRefPattern.MatchString(p.ComfyUIRef) || strings.Contains(p.ComfyUIRef, "..") {
-		p.ComfyUIRef = "master"
+		return Recipe{}, &ValidationError{Message: "ComfyUI 版本引用格式不合法"}
 	}
 	switch p.PipIndexURL {
 	case "tsinghua", "":
@@ -97,19 +110,36 @@ func BuildContext(params BuildParams, recipe Recipe) (io.Reader, error) {
 // BuildDockerfile 返回平台内构建 ComfyUI 镜像的 Dockerfile。
 func BuildDockerfile(params BuildParams, recipe Recipe) string {
 	labels := buildLabels(params, recipe)
+	sourceFile := buildSourceFileCommand(params)
 	commonEnv := `ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     HF_ENDPOINT=https://hf-mirror.com \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
 	clone := `ARG COMFYUI_REF=master
+ARG COMFYUI_COMMIT=
 ARG WITH_MANAGER=1
 RUN set -eux; \
-    git clone --depth 1 --branch "$COMFYUI_REF" https://github.com/comfyanonymous/ComfyUI.git /app/ComfyUI \
-      || git clone --depth 1 --branch "$COMFYUI_REF" https://gitclone.com/github.com/comfyanonymous/ComfyUI /app/ComfyUI; \
+    test -n "$COMFYUI_COMMIT"; \
+    mkdir -p /app; \
+    git init /app/ComfyUI; \
+    cd /app/ComfyUI; \
+    git remote add origin https://github.com/Comfy-Org/ComfyUI.git; \
+    if ! git fetch --depth 1 origin "$COMFYUI_COMMIT"; then \
+      FETCHED=0; \
+      for MIRROR in https://gh-proxy.com/https://github.com/Comfy-Org/ComfyUI.git https://gitclone.com/github.com/Comfy-Org/ComfyUI; do \
+        git remote set-url origin "$MIRROR"; \
+        if git fetch --depth 1 origin "$COMFYUI_COMMIT"; then FETCHED=1; break; fi; \
+      done; \
+      test "$FETCHED" = "1"; \
+    fi; \
+    git checkout --detach "$COMFYUI_COMMIT"; \
+    test "$(git rev-parse HEAD)" = "$COMFYUI_COMMIT"; \
     if [ "$WITH_MANAGER" = "1" ]; then \
       git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Manager.git /app/ComfyUI/custom_nodes/ComfyUI-Manager \
+        || git clone --depth 1 https://gh-proxy.com/https://github.com/ltdrdata/ComfyUI-Manager.git /app/ComfyUI/custom_nodes/ComfyUI-Manager \
         || git clone --depth 1 https://gitclone.com/github.com/ltdrdata/ComfyUI-Manager /app/ComfyUI/custom_nodes/ComfyUI-Manager; \
-    fi`
+    fi; \
+    ` + sourceFile
 	if recipe.ID == "amd-rocm" {
 		return fmt.Sprintf(`FROM rocm/pytorch:rocm6.2_ubuntu22.04_py3.10_pytorch_release_2.3.0
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
@@ -140,11 +170,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-venv python3-dev git curl ca-certificates \
       ffmpeg libgl1 libglib2.0-0 build-essential \
     && rm -rf /var/lib/apt/lists/*
+%s
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 RUN pip install -U pip setuptools wheel -i $PIP_INDEX_URL
 RUN pip install torch torchvision torchaudio --index-url $TORCH_INDEX_URL
-%s
 WORKDIR /app/ComfyUI
 RUN grep -vE '^(torch|torchvision|torchaudio)\b' requirements.txt > /tmp/req.txt \
     && ( pip install -r /tmp/req.txt -i $PIP_INDEX_URL \
@@ -163,16 +193,78 @@ func buildLabels(params BuildParams, recipe Recipe) string {
 	if params.WithManager != "0" {
 		manager = "是"
 	}
+	source := params.Source
+	if source == nil {
+		source = &ComfyVersion{Ref: params.ComfyUIRef}
+	}
+	version := source.Version
+	if version == "" {
+		version = source.DisplayLabel
+	}
+	if version == "" {
+		version = source.Ref
+	}
 	return fmt.Sprintf(`LABEL org.opencontainers.image.title="ComfyUI" \
+      org.opencontainers.image.revision="%s" \
+      org.opencontainers.image.version="%s" \
+      org.opencontainers.image.source="%s" \
       flowpilot.kind="comfyui" \
       flowpilot.build.variant="%s" \
       flowpilot.build.gpu="%s" \
       flowpilot.build.cuda="%s" \
       flowpilot.build.platform="%s" \
       flowpilot.comfyui.ref="%s" \
+      flowpilot.comfyui.version="%s" \
+      flowpilot.comfyui.commit="%s" \
+      flowpilot.comfyui.channel="%s" \
+      flowpilot.comfyui.commit_date="%s" \
+      flowpilot.comfyui.published_at="%s" \
+      flowpilot.comfyui.resolved_at="%s" \
+      flowpilot.comfyui.repository="%s" \
       flowpilot.comfyui.manager="%s" \
       flowpilot.build.summary="%s"`,
-		dockerLabelValue(recipe.ID), dockerLabelValue(recipe.GPU), dockerLabelValue(recipe.CUDA), dockerLabelValue(params.Platform), dockerLabelValue(params.ComfyUIRef), dockerLabelValue(manager), dockerLabelValue(buildSummaryText(params, recipe)))
+		dockerLabelValue(source.Commit), dockerLabelValue(version), dockerLabelValue(ComfyRepositoryURL),
+		dockerLabelValue(recipe.ID), dockerLabelValue(recipe.GPU), dockerLabelValue(recipe.CUDA), dockerLabelValue(params.Platform),
+		dockerLabelValue(params.ComfyUIRef), dockerLabelValue(version), dockerLabelValue(source.Commit), dockerLabelValue(source.Kind),
+		dockerLabelValue(source.CommitAt), dockerLabelValue(source.PublishedAt), dockerLabelValue(source.ResolvedAt), dockerLabelValue(ComfyRepository),
+		dockerLabelValue(manager), dockerLabelValue(buildSummaryText(params, recipe)))
+}
+
+// buildSourceFileCommand 在镜像内写入可机器读取的源码档案。
+func buildSourceFileCommand(params BuildParams) string {
+	source := params.Source
+	if source == nil {
+		return `true`
+	}
+	metadata, _ := json.Marshal(map[string]any{
+		"repository":  ComfyRepository,
+		"ref":         params.ComfyUIRef,
+		"version":     source.Version,
+		"commit":      source.Commit,
+		"channel":     source.Kind,
+		"commitAt":    source.CommitAt,
+		"publishedAt": source.PublishedAt,
+		"resolvedAt":  source.ResolvedAt,
+	})
+	value := strings.ReplaceAll(string(metadata), "'", "'\\''")
+	return `mkdir -p /opt/flowpilot && printf '%s\n' '` + value + `' > /opt/flowpilot/comfyui-source.json`
+}
+
+// comfyVersionDisplay 返回构建参数与镜像清单使用的版本文案。
+func comfyVersionDisplay(source *ComfyVersion, fallback string) string {
+	if source == nil {
+		if fallback == "master" {
+			return "master（未固定提交）"
+		}
+		return fallback
+	}
+	if source.DisplayLabel != "" {
+		return source.DisplayLabel
+	}
+	if source.Version != "" {
+		return source.Version + " · " + source.CommitShort
+	}
+	return source.Ref + "@" + source.CommitShort
 }
 
 func buildSummary(params BuildParams, recipe Recipe) []BuildParamSummary {
@@ -185,7 +277,7 @@ func buildSummary(params BuildParams, recipe Recipe) []BuildParamSummary {
 	return []BuildParamSummary{
 		{Label: "CPU 架构", Value: platformLabel(params.Platform), Description: "用于跨主机/集群分发镜像，Docker 构建时写入 --platform"},
 		{Label: "GPU 配方", Value: recipe.Label, Description: recipe.Description},
-		{Label: "ComfyUI 版本", Value: params.ComfyUIRef, Description: "来自在线标签/分支或手动输入，构建时 git clone 对应 ref"},
+		{Label: "ComfyUI 版本", Value: comfyVersionDisplay(params.Source, params.ComfyUIRef), Description: "构建时固定到该不可变 commit，不跟随分支漂移"},
 		{Label: "pip 源", Value: params.PipIndexURL, Description: "容器内 Python 依赖安装源"},
 		{Label: "ComfyUI-Manager", Value: manager, Description: managerDesc},
 	}

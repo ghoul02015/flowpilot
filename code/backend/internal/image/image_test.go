@@ -155,7 +155,7 @@ func TestPullFailureRecorded(t *testing.T) {
 func TestBuildLifecycleAndLogs(t *testing.T) {
 	release := make(chan struct{})
 	manager := newTestManager(&fakeImages{buildWait: release})
-	params := BuildParams{Variant: "nvidia-cu130", ImageName: "flowpilot/comfyui:test", ComfyUIRef: "master", PipIndexURL: "tsinghua", WithManager: "1"}
+	params := BuildParams{Source: testSource(), Variant: "nvidia-cu130", ImageName: "flowpilot/comfyui:test", ComfyUIRef: "master", PipIndexURL: "tsinghua", WithManager: "1"}
 	task, err := manager.SubmitBuild(params)
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +177,7 @@ func TestBuildLifecycleAndLogs(t *testing.T) {
 
 func TestBuildFailureRecorded(t *testing.T) {
 	manager := newTestManager(&fakeImages{buildErr: errors.New("build failed")})
-	task, err := manager.SubmitBuild(BuildParams{Variant: "cpu", ImageName: "flowpilot/comfyui:cpu-test"})
+	task, err := manager.SubmitBuild(BuildParams{Source: testSource(), Variant: "cpu", ImageName: "flowpilot/comfyui:cpu-test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestBuildConcurrencyLimitAndQueue(t *testing.T) {
 	manager := newTestManager(&fakeImages{buildWait: release})
 	var ids []string
 	for _, name := range []string{"flowpilot/comfyui:a", "flowpilot/comfyui:b", "flowpilot/comfyui:c"} {
-		task, err := manager.SubmitBuild(BuildParams{Variant: "cpu", ImageName: name})
+		task, err := manager.SubmitBuild(BuildParams{Source: testSource(), Variant: "cpu", ImageName: name})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -228,7 +228,7 @@ func TestBuildConcurrencyLimitAndQueue(t *testing.T) {
 // 进行中的任务可通过取消 context 中止，状态变为已取消。
 func TestCancelRunningBuild(t *testing.T) {
 	manager := newTestManager(&fakeImages{buildWait: make(chan struct{})})
-	task, err := manager.SubmitBuild(BuildParams{Variant: "cpu", ImageName: "flowpilot/comfyui:cancel"})
+	task, err := manager.SubmitBuild(BuildParams{Source: testSource(), Variant: "cpu", ImageName: "flowpilot/comfyui:cancel"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestDeleteRunningTaskRejected(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	manager := newTestManager(&fakeImages{buildWait: release})
-	task, err := manager.SubmitBuild(BuildParams{Variant: "cpu", ImageName: "flowpilot/comfyui:busy"})
+	task, err := manager.SubmitBuild(BuildParams{Source: testSource(), Variant: "cpu", ImageName: "flowpilot/comfyui:busy"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestReplacedDanglingImageCleaned(t *testing.T) {
 		images:   []docker.Image{{ID: "sha256:old", RepoTags: []string{"<none>:<none>"}}},
 	}
 	manager := newTestManager(fake)
-	task, err := manager.SubmitBuild(BuildParams{Variant: "cpu", ImageName: "flowpilot/comfyui:test"})
+	task, err := manager.SubmitBuild(BuildParams{Source: testSource(), Variant: "cpu", ImageName: "flowpilot/comfyui:test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestInterruptedOnRestart(t *testing.T) {
 	release := make(chan struct{})
 	first := NewManager(&fakeImages{buildWait: release}, store)
 	first.diskFree = func(string) (uint64, error) { return 100 << 30, nil }
-	task, err := first.SubmitBuild(BuildParams{Variant: "cpu", ImageName: "flowpilot/comfyui:restart"})
+	task, err := first.SubmitBuild(BuildParams{Source: testSource(), Variant: "cpu", ImageName: "flowpilot/comfyui:restart"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,13 +323,13 @@ func TestBuildRejectedWhenDiskLow(t *testing.T) {
 	manager := NewManager(&fakeImages{}, "")
 	manager.diskFree = func(string) (uint64, error) { return 5 << 30, nil }
 	var validation *ValidationError
-	if _, err := manager.SubmitBuild(BuildParams{Variant: "cpu", ImageName: "flowpilot/comfyui:lowdisk"}); !errors.As(err, &validation) {
+	if _, err := manager.SubmitBuild(BuildParams{Source: testSource(), Variant: "cpu", ImageName: "flowpilot/comfyui:lowdisk"}); !errors.As(err, &validation) {
 		t.Fatalf("磁盘不足应返回 ValidationError：%v", err)
 	}
 }
 
 func TestBuildDockerfileLabelContinuation(t *testing.T) {
-	params := BuildParams{Variant: "nvidia-cu128", ImageName: "flowpilot/comfyui:cu128", ComfyUIRef: "master", PipIndexURL: "tsinghua", WithManager: "1", Platform: "linux/amd64"}
+	params := BuildParams{Source: testSource(), Variant: "nvidia-cu128", ImageName: "flowpilot/comfyui:cu128", ComfyUIRef: "master", PipIndexURL: "tsinghua", WithManager: "1", Platform: "linux/amd64"}
 	recipe, err := params.validate()
 	if err != nil {
 		t.Fatal(err)
@@ -344,7 +344,7 @@ func TestBuildDockerfileLabelContinuation(t *testing.T) {
 }
 
 func TestBuildScriptIncludesParsableDockerfileLabel(t *testing.T) {
-	script, err := BuildScript(BuildParams{Variant: "nvidia-cu128", ImageName: "flowpilot/comfyui:cu128", ComfyUIRef: "master", PipIndexURL: "tsinghua", WithManager: "1", Platform: "linux/amd64"})
+	script, err := BuildScript(BuildParams{Source: testSource(), Variant: "nvidia-cu128", ImageName: "flowpilot/comfyui:cu128", ComfyUIRef: "master", PipIndexURL: "tsinghua", WithManager: "1", Platform: "linux/amd64"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,5 +353,15 @@ func TestBuildScriptIncludesParsableDockerfileLabel(t *testing.T) {
 	}
 	if !strings.Contains(script, `--platform 'linux/amd64'`) {
 		t.Fatalf("构建脚本缺少 linux/amd64 platform 参数：\n%s", script)
+	}
+}
+
+func testSource() *ComfyVersion {
+	commit := "0228a9d73cd7c2daf8f61fe13d56b12efe307171"
+	return &ComfyVersion{
+		Ref: "master", Kind: "branch", Version: "", Commit: commit,
+		CommitShort: commit[:7], Repository: ComfyRepository,
+		CommitURL:    ComfyRepositoryURL + "/commit/" + commit,
+		DisplayLabel: "master@" + commit[:7],
 	}
 }

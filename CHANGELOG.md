@@ -2,6 +2,22 @@
 
 所有重要变更均记录于此。详细内容见 `context/changes/`。
 
+## 0.1.0.2 — 2026-11-11（ComfyUI 版本固定与可追溯）
+
+### 新增
+
+- **官方版本目录**：联合 GitHub Releases/Tags/Branch/Commit，区分正式 Release、仅标签版本、开发分支和自定义提交；默认最新稳定 Release，预发布默认隐藏。
+- **版本解析 API**：`GET /api/v1/images/comfyui-versions`、`POST /api/v1/images/comfyui-resolve`；ETag、10 分钟缓存、磁盘缓存降级和限流提示。
+- **不可变构建**：构建参数携带服务端解析结果；Git 按完整 commit SHA `fetch → checkout --detach → HEAD 校验`，不再按分支克隆。
+- **版本元数据**：镜像写入 OCI revision/version/source、FlowPilot 源码版本/commit/channel/日期字段与 `/opt/flowpilot/comfyui-source.json`。
+- **构建入口统一**：Web 构建、下载构建脚本、独立安装脚本均固定相同 commit；独立脚本补齐 `flowpilot.kind=comfyui` 认证标签。
+- **历史兼容**：旧镜像显示“master（未固定提交）”或“未记录版本”，不推断、不伪造 Release 号。
+
+### 验证
+
+- 后端 15 包全绿；前端 lint/build 通过；本机 E2E 98 项全部通过。
+- Spark 实机：官方目录默认 v0.45.0（989d93d）、master 固定 4d64a8b、构建/安装脚本携带完整 commit 与认证标签；容器网络经 gh-proxy 成功拉取固定 SHA。固定版本 CPU 验证镜像在依赖下载阶段因 PyPI 链路停滞手动停止，未计入通过项。
+
 ## 0.1.0.1 — 2026-11-11（发行版体验修正）
 
 ### 修复

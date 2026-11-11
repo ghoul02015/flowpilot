@@ -28,7 +28,7 @@ func TestRecipesCoverGPUFamilies(t *testing.T) {
 }
 
 func TestInstallScriptDefaults(t *testing.T) {
-	script, err := InstallScript(InstallParams{})
+	script, err := InstallScript(InstallParams{Source: testSource()})
 	if err != nil {
 		t.Fatalf("渲染失败：%v", err)
 	}
@@ -49,10 +49,16 @@ func TestInstallScriptDefaults(t *testing.T) {
 }
 
 func TestInstallScriptParamsAndSanitization(t *testing.T) {
+	tagSource := testSource()
+	tagSource.Ref = "v0.3.60"
+	tagSource.Kind = "tag"
+	tagSource.Version = "v0.3.60"
+	tagSource.DisplayLabel = "v0.3.60 · " + tagSource.CommitShort
 	script, err := InstallScript(InstallParams{
 		Variant:     "nvidia-cu126",
 		ImageName:   "my/comfy:v1",
 		ComfyUIRef:  "v0.3.60",
+		Source:      tagSource,
 		PipIndexURL: "aliyun",
 		WithManager: "0",
 	})
@@ -70,6 +76,7 @@ func TestInstallScriptParamsAndSanitization(t *testing.T) {
 		Variant:    "../../etc/passwd",
 		ImageName:  "bad name;rm -rf /",
 		ComfyUIRef: "$(reboot)",
+		Source:     testSource(),
 	})
 	if err != nil {
 		t.Fatalf("渲染失败：%v", err)

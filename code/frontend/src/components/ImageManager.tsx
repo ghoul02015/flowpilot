@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Ban, CloudDownload, Cpu, Download, FileText, Hammer, Layers, LoaderCircle, RefreshCw, ScrollText, Tag, Trash2, Upload, XCircle } from 'lucide-react'
 import { toast } from 'sonner'
-import { buildScriptURL, cancelImageTask, deleteImageTask, deleteLocalImageApi, exportLocalImageURL, formatBytes, getComfyUIRefs, getImageCatalog, getImageDiskUsage, getImageTasks, getLocalImages, imageBuildSummary, importLocalImageApi, isComfyImage, pruneImageBuildCache, startImageBuild, startImagePull, tagLocalImageApi, type ComfyRef, type ImageBuildSpec, type ImageDiskUsage, type ImageRecipe, type ImageTask, type LocalImage } from '@/api'
+import { buildScriptURL, cancelImageTask, deleteImageTask, deleteLocalImageApi, exportLocalImageURL, formatBytes, getImageCatalog, getImageDiskUsage, getImageTasks, getLocalImages, imageBuildSummary, importLocalImageApi, isComfyImage, pruneImageBuildCache, startImageBuild, startImagePull, tagLocalImageApi, type ComfyVersion, type ImageBuildSpec, type ImageDiskUsage, type ImageRecipe, type ImageTask, type LocalImage } from '@/api'
+import { ComfyVersionPicker } from '@/components/ComfyVersionPicker'
 import { EmptyState, Panel, PanelHeader } from '@/components/common'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
@@ -65,7 +66,7 @@ function TaskStateBadge({ state }: { state: string }) {
 export function ImageManager() {
   const [images, setImages] = useState<LocalImage[]>([])
   const [recipes, setRecipes] = useState<ImageRecipe[]>([])
-  const [refs, setRefs] = useState<ComfyRef[]>([{ name: 'master', type: 'branch' }])
+  const [selectedVersion, setSelectedVersion] = useState<ComfyVersion | null>(null)
   const [tasks, setTasks] = useState<ImageTask[]>([])
   const [diskUsage, setDiskUsage] = useState<ImageDiskUsage | null>(null)
   const [loading, setLoading] = useState(true)
@@ -74,7 +75,6 @@ export function ImageManager() {
   const [pullImage, setPullImage] = useState('')
   const [recipeId, setRecipeId] = useState('nvidia-cu130')
   const [imageName, setImageName] = useState('flowpilot/comfyui:cu130')
-  const [ref, setRef] = useState('master')
   const [pip, setPip] = useState('tsinghua')
   const [manager, setManager] = useState(true)
   const [platform, setPlatform] = useState('host')
@@ -113,7 +113,6 @@ export function ImageManager() {
           setImageName((current) => current || selected.image)
         }
       }),
-      getComfyUIRefs().then(setRefs).catch(() => setRefs([{ name: 'master', type: 'branch' }])),
       getImageTasks().then(setTasks).catch(() => {}),
       getImageDiskUsage().then(setDiskUsage).catch(() => {}),
     ]).catch((error: unknown) => toast.error('镜像信息读取失败', { description: error instanceof Error ? error.message : '请确认后端已连接 Docker。' })).finally(() => setLoading(false))
@@ -162,7 +161,7 @@ export function ImageManager() {
     setLogsSnapshot(null)
   }
 
-  const currentBuildSpec = useMemo<ImageBuildSpec>(() => ({ variant: recipeId, image: imageName.trim() || selectedRecipe?.image || 'flowpilot/comfyui:local', ref: ref.trim() || 'master', pip, manager: manager ? '1' : '0', platform }), [imageName, manager, pip, platform, recipeId, ref, selectedRecipe?.image])
+  const currentBuildSpec = useMemo<ImageBuildSpec>(() => ({ variant: recipeId, image: imageName.trim() || selectedRecipe?.image || 'flowpilot/comfyui:local', ref: selectedVersion?.ref ?? '', source: selectedVersion, pip, manager: manager ? '1' : '0', platform }), [imageName, manager, pip, platform, recipeId, selectedRecipe?.image, selectedVersion])
 
   function onRecipeChange(next: string) {
     setRecipeId(next)
@@ -285,6 +284,10 @@ export function ImageManager() {
       toast.error('请输入构建后的镜像名')
       return
     }
+    if (!selectedVersion?.commit) {
+      toast.error('请先选择并解析 ComfyUI 版本')
+      return
+    }
     try {
       const task = await startImageBuild(currentBuildSpec)
       setBuildOpen(false)
@@ -372,7 +375,7 @@ export function ImageManager() {
               </div>
               {group.tags.length > 1 && <div className="mt-1.5 text-[11px] text-slate-500">同一镜像 · {group.tags.length} 个标签，不重复占用磁盘</div>}
             </td>
-            <td>{summary.length > 0 ? <div className="flex max-w-[320px] flex-wrap gap-1">{summary.slice(0, 4).map((item) => <span key={`${primaryTag}-${item.label}`} className="rounded-full bg-slate-100 px-2 py-1 text-[11px] text-slate-600">{item.label}：{item.value}</span>)}</div> : <span className="text-xs text-slate-400">未记录</span>}</td>
+            <td>{summary.length > 0 ? <div className="flex max-w-[320px] flex-wrap gap-1">{summary.slice(0, 5).map((item) => <span key={`${primaryTag}-${item.label}`} className="rounded-full bg-slate-100 px-2 py-1 text-[11px] text-slate-600">{item.label}：{item.value}</span>)}</div> : <span className="text-xs text-slate-400">未记录</span>}</td>
             <td>{task && active ? <div className="min-w-28"><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full bg-teal-600" style={{ width: `${Math.max(1, Math.min(100, task.progress || 1))}%` }} /></div><span className="mt-1 block text-xs text-slate-500">{task.state === 'queued' ? '排队等待中' : `${task.progress || 1}% · 进行中`}</span></div> : <span className="text-xs text-slate-400">—</span>}</td>
             <td className="font-mono text-xs text-slate-500">{group.image?.Id.slice(0, 20) ?? '等待 Docker 生成'}</td>
             <td>{group.image ? formatBytes(group.image.Size) : '—'}</td>
@@ -419,14 +422,16 @@ export function ImageManager() {
         <div className="grid gap-4">
           <div className="grid gap-4 sm:grid-cols-2"><label className="field-label">CPU 芯片架构<select className="field-input" value={platform} onChange={(event) => setPlatform(event.target.value)}>{platformOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label className="field-label">GPU / PyTorch 配方<select className="field-input" value={recipeId} onChange={(event) => onRecipeChange(event.target.value)}>{recipes.map((recipe) => <option key={recipe.id} value={recipe.id}>{recipe.label}</option>)}</select></label></div>
           <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-600"><p><Cpu className="mr-1 inline size-4" />{selectedPlatform.description}</p>{selectedRecipe && <p><Layers className="mr-1 inline size-4" />{selectedRecipe.description}；建议镜像名 <span className="font-mono">{selectedRecipe.image}</span>。</p>}</div>
-          <div className="grid gap-4 sm:grid-cols-2"><label className="field-label">镜像名<input className="field-input font-mono text-sm" value={imageName} onChange={(event) => setImageName(event.target.value)} placeholder="flowpilot/comfyui:cu130" /></label><label className="field-label">ComfyUI 版本（在线选择或手动输入）<input className="field-input font-mono text-sm" list="comfyui-refs" value={ref} onChange={(event) => setRef(event.target.value)} placeholder="master 或标签" /><datalist id="comfyui-refs">{refs.map((item) => <option key={`${item.type}-${item.name}`} value={item.name}>{item.name} · {item.type === 'branch' ? '分支' : '标签'}</option>)}</datalist></label></div>
-          <div className="grid gap-4 sm:grid-cols-2"><label className="field-label">pip 源<select className="field-input" value={pip} onChange={(event) => setPip(event.target.value)}><option value="tsinghua">清华镜像</option><option value="aliyun">阿里云镜像</option><option value="pypi">PyPI 官方</option></select></label></div>
+          <div className="grid gap-4 sm:grid-cols-2"><label className="field-label">镜像名<input className="field-input font-mono text-sm" value={imageName} onChange={(event) => setImageName(event.target.value)} placeholder="flowpilot/comfyui:cu130" /></label><label className="field-label">pip 源<select className="field-input" value={pip} onChange={(event) => setPip(event.target.value)}><option value="tsinghua">清华镜像</option><option value="aliyun">阿里云镜像</option><option value="pypi">PyPI 官方</option></select></label></div>
+          <ComfyVersionPicker value={selectedVersion} onChange={setSelectedVersion} />
           <label className="flex min-h-11 cursor-pointer items-center gap-2 text-sm text-slate-700"><input type="checkbox" className="size-4 accent-teal-700" checked={manager} onChange={(event) => setManager(event.target.checked)} />内置 ComfyUI-Manager</label>
-          <div className="rounded-lg border border-slate-200 p-3 text-xs leading-6 text-slate-500"><p className="font-semibold text-slate-700">参数简述</p><p>CPU 架构：{selectedPlatform.label}</p><p>GPU 配方：{selectedRecipe?.label ?? recipeId}</p><p>ComfyUI 版本：{currentBuildSpec.ref}</p><p>pip 源：{pip}；Manager：{manager ? '内置' : '不内置'}</p></div>
+          <div className="rounded-lg border border-slate-200 p-3 text-xs leading-6 text-slate-500"><p className="font-semibold text-slate-700">参数简述</p><p>CPU 架构：{selectedPlatform.label}</p><p>GPU 配方：{selectedRecipe?.label ?? recipeId}</p><p>ComfyUI 版本：{selectedVersion?.displayLabel ?? '未选择（构建前必须解析固定 commit）'}</p><p>pip 源：{pip}；Manager：{manager ? '内置' : '不内置'}</p></div>
         </div>
         <DialogFooter>
-          <a className="btn-secondary" href={buildScriptURL(currentBuildSpec)} download="build-comfyui-image.sh"><FileText className="size-4" />下载同参数构建脚本</a>
-          <button type="button" className="btn-primary" onClick={() => void startBuild()}><Hammer className="size-4" />开始构建</button>
+          {selectedVersion?.commit
+            ? <a className="btn-secondary" href={buildScriptURL(currentBuildSpec)} download="build-comfyui-image.sh"><FileText className="size-4" />下载同参数构建脚本</a>
+            : <button type="button" className="btn-secondary" disabled><FileText className="size-4" />选择版本后下载脚本</button>}
+          <button type="button" className="btn-primary" disabled={!selectedVersion?.commit} onClick={() => void startBuild()}><Hammer className="size-4" />开始构建</button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

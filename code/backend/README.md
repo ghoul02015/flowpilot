@@ -1,6 +1,6 @@
 # FlowPilot 后端
 
-当前版本：`0.1.0.1`。
+当前版本：`0.1.0.2`。
 
 轻量 Go 服务同时提供前端静态页面和 Docker API。仅使用 Go 标准库，通过 `/var/run/docker.sock` 访问 Docker Engine，不引入第三方 Docker SDK。
 
@@ -66,17 +66,19 @@
 - `GET /api/v1/images/check?image=<镜像>`：本地是否存在。
 - `GET /api/v1/images/local`：本机 Docker 镜像列表，返回 Docker 标签与 Labels；前端按 `flowpilot.kind=comfyui` 或标签名将其分为 ComfyUI 镜像和其他镜像。
 - `DELETE /api/v1/images/local?image=<镜像>[&force=1]`：删除本机镜像标签；镜像被容器使用时由 Docker 拒绝，除非显式 `force=1`。
-- `POST /api/v1/images/tag` `{source, target}`：给已有镜像增加/修改标签。
+- `POST /api/v1/images/tag` `{source, target, mode}`：`mode=alias` 添加别名（默认），`mode=rename` 新增后移除源标签；目标冲突 409，源标签被实例引用时拒绝重命名。
 - `GET /api/v1/images/export?image=<镜像>`：以 `docker save` tar 流导出镜像。
 - `POST /api/v1/images/import`：multipart 上传 `file`，以 `docker load` 导入镜像 tar。
 - `GET /api/v1/images/catalog`：六套 ComfyUI 构建配方（NVIDIA cu130/cu128/cu126/cu121、AMD ROCm、CPU）。
-- `GET /api/v1/images/comfyui-refs`：在线获取 ComfyUI `master` 与最近标签；网络失败时兜底 `master`。
-- `GET /api/v1/images/build-script?variant=&image=&ref=&pip=&manager=&platform=`：下载同参数一键构建脚本，仅构建镜像，不安装 FlowPilot、不下载模型。
-- `POST /api/v1/images/build` `{variant,image,ref,pip,manager,platform}`：按配方后台构建 ComfyUI 镜像，同一时刻仅一个构建任务；`platform` 支持 `host`、`linux/arm64`、`linux/amd64`、`linux/arm/v7`。
+- `GET /api/v1/images/comfyui-refs`：兼容旧客户端的引用列表（新前端使用 versions）。
+- `GET /api/v1/images/comfyui-versions[?refresh=1]`：官方 Release／Tag／master 版本目录，含 commit、发布时间、缓存与 stale 状态。
+- `POST /api/v1/images/comfyui-resolve` `{ref,kind,commit}`：把版本引用解析为不可变 commit；`kind=release|tag|branch|commit`。
+- `GET /api/v1/images/build-script?variant=&image=&ref=&kind=&commit=&pip=&manager=&platform=`：下载同参数构建脚本；必须携带固定 commit，仅构建镜像，不安装 FlowPilot、不下载模型。
+- `POST /api/v1/images/build` `{variant,image,ref,source,pip,manager,platform}`：按配方后台构建 ComfyUI 镜像；服务端核验 source 并固定 commit，最多 2 构建并行；`platform` 支持 `host`、`linux/arm64`、`linux/amd64`、`linux/arm/v7`。
 - `GET /api/v1/images/build`：构建状态、进度、参数简述与最近日志 `{image, variant, state, message, progress, summary[], logs[], updatedAt}`。
 - `POST /api/v1/images/pull` `{image}`：后台流式拉取，同一时刻仅一个拉取任务（重复提交返回 409）。
 - `GET /api/v1/images/pull`：拉取状态 `{image, state: idle|pulling|done|error, message, updatedAt}`。
-- `GET /api/v1/images/install-script`：保留独立分发的一键安装脚本下载；Web 新建实例向导不再承载构建/拉取入口。
+- `GET /api/v1/images/install-script?variant=&image=&ref=&kind=&commit=&pip=&manager=`：生成固定 commit 的独立安装脚本，并写入 ComfyUI 认证与版本标签。
 
 ### 下载任务（真实下载引擎）
 

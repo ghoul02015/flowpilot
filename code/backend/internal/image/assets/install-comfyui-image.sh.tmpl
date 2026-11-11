@@ -21,7 +21,8 @@
 # 可用环境变量（非交互自定义，等同生成时向导参数）：
 #   VARIANT=auto              auto|nvidia-cu130|nvidia-cu128|nvidia-cu126|nvidia-cu121|amd-rocm|cpu
 #   IMAGE_NAME={{.ImageName}}        构建出的本地镜像名
-#   COMFYUI_REF={{.ComfyUIRef}}          ComfyUI 源码分支或标签
+#   COMFYUI_REF={{.ComfyUIRef}}          ComfyUI 原始版本引用（信息展示）
+#   COMFYUI_COMMIT={{.Source.Commit}}    ComfyUI 固定 commit（构建必填）
 #   WITH_MANAGER={{.WithManager}}        1=内置 ComfyUI-Manager 自定义节点
 #   INSTALL_DIR=~/comfyui-image 安装（构建上下文）目录
 #   PIP_INDEX_URL={{.PipIndexURL}}  容器内 pip 源
@@ -34,6 +35,15 @@ set -euo pipefail
 VARIANT="${VARIANT:-{{.Variant}}}"
 IMAGE_NAME="${IMAGE_NAME:-{{.ImageName}}}"
 COMFYUI_REF="${COMFYUI_REF:-{{.ComfyUIRef}}}"
+COMFYUI_COMMIT="${COMFYUI_COMMIT:-{{.Source.Commit}}}"
+COMFYUI_VERSION="${COMFYUI_VERSION:-{{.Source.Version}}}"
+COMFYUI_CHANNEL="${COMFYUI_CHANNEL:-{{.Source.Kind}}}"
+COMFYUI_COMMIT_AT="${COMFYUI_COMMIT_AT:-{{.Source.CommitAt}}}"
+COMFYUI_PUBLISHED_AT="${COMFYUI_PUBLISHED_AT:-{{.Source.PublishedAt}}}"
+COMFYUI_RESOLVED_AT="${COMFYUI_RESOLVED_AT:-{{.Source.ResolvedAt}}}"
+COMFYUI_REPOSITORY="${COMFYUI_REPOSITORY:-{{.Repository}}}"
+[ -n "$COMFYUI_VERSION" ] || COMFYUI_VERSION="$COMFYUI_REF"
+[ -n "$COMFYUI_COMMIT" ] || die "安装脚本缺少固定 ComfyUI commit，请重新从 FlowPilot 生成"
 WITH_MANAGER="${WITH_MANAGER:-{{.WithManager}}}"
 PIP_INDEX_URL="${PIP_INDEX_URL:-{{.PipIndexURL}}}"
 TORCH_INDEX_URL="${TORCH_INDEX_URL:-}"
@@ -49,8 +59,8 @@ REGISTRY_MIRRORS='[
 # GitHub 克隆通道（按优先级排序；低速自动放弃：30 秒低于 100KB/s 即换下一家）
 GIT_CLONE_CHANNELS=(
   "https://ghfast.top/https://github.com/%s.git"
-  "https://gitclone.com/github.com/%s"
   "https://gh-proxy.com/https://github.com/%s.git"
+  "https://gitclone.com/github.com/%s"
   "https://github.com/%s.git"
 )
 GIT_LOW_SPEED_LIMIT="${GIT_LOW_SPEED_LIMIT:-102400}"
@@ -141,7 +151,7 @@ esac
 # 交互确认关键参数
 if [ "${NONINTERACTIVE:-0}" != "1" ]; then
   IMAGE_NAME="$(confirm_default '镜像名称' "$IMAGE_NAME")"
-  COMFYUI_REF="$(confirm_default 'ComfyUI 版本（分支/标签）' "$COMFYUI_REF")"
+  info "ComfyUI 已固定：${COMFYUI_VERSION:-$COMFYUI_REF}@${COMFYUI_COMMIT:0:7}（构建不会跟随分支漂移）"
 fi
 
 # -------------------- 1. 安装 Docker 与 GPU 运行时 ---------------------------
@@ -186,10 +196,10 @@ $SUDO systemctl restart docker
 sleep 2
 log "镜像加速已配置"
 
-# -------------------- 3. 克隆 ComfyUI 源码（多通道加速） ----------------------
-info "========== 步骤 3/6：获取 ComfyUI 源码（$COMFYUI_REF） =========="
+# -------------------- 3. 获取 ComfyUI 源码（固定 commit） ---------------------
+info "========== 步骤 3/6：获取 ComfyUI 源码（$COMFYUI_REF@${COMFYUI_COMMIT:0:7}） =========="
 mkdir -p "$INSTALL_DIR"
-git_clone_fallback() {
+git_clone_latest() {
   local repo_path="$1" dest="$2" ref="${3:-}"
   if [ -d "$dest/.git" ]; then
     log "已存在，跳过克隆：$dest"
@@ -214,9 +224,38 @@ git_clone_fallback() {
   done
   die "所有 GitHub 通道均失败。可手动克隆后放到 $dest（需含 .git 目录），再重跑本脚本"
 }
-git_clone_fallback "comfyanonymous/ComfyUI" "$INSTALL_DIR/ComfyUI" "$COMFYUI_REF"
+git_fetch_fixed_commit() {
+  local repo_path="$1" dest="$2" commit="$3"
+  if [ -d "$dest/.git" ] && [ "$(git -C "$dest" rev-parse HEAD 2>/dev/null || true)" = "$commit" ]; then
+    log "已存在固定提交，跳过获取：$dest@${commit:0:7}"
+    return 0
+  fi
+  rm -rf "$dest"
+  local tmpl url
+  for tmpl in "${GIT_CLONE_CHANNELS[@]}"; do
+    url="$(printf "$tmpl" "$repo_path")"
+    info "尝试通道：$url（固定 ${commit:0:7}）"
+    rm -rf "$dest"
+    mkdir -p "$dest"
+    git -C "$dest" init -q
+    git -C "$dest" remote add origin "$url"
+    if timeout "$GIT_CLONE_TIMEOUT" git -C "$dest" \
+        -c http.lowSpeedLimit="$GIT_LOW_SPEED_LIMIT" \
+        -c http.lowSpeedTime="$GIT_LOW_SPEED_TIME" \
+        fetch --depth 1 origin "$commit" \
+      && git -C "$dest" checkout -q --detach "$commit" \
+      && [ "$(git -C "$dest" rev-parse HEAD)" = "$commit" ]; then
+      log "固定提交获取成功：$url@${commit:0:7}"
+      return 0
+    fi
+    warn "该通道失败、速度过慢或 commit 不一致，换下一家..."
+  done
+  rm -rf "$dest"
+  die "无法获取固定 commit ${commit}。请检查网络或手动准备 $dest（HEAD 必须等于该 commit）"
+}
+git_fetch_fixed_commit "{{.Repository}}" "$INSTALL_DIR/ComfyUI" "$COMFYUI_COMMIT"
 if [ "$WITH_MANAGER" = "1" ]; then
-  git_clone_fallback "ltdrdata/ComfyUI-Manager" "$INSTALL_DIR/ComfyUI-Manager"
+  git_clone_latest "ltdrdata/ComfyUI-Manager" "$INSTALL_DIR/ComfyUI-Manager"
 fi
 
 # -------------------- 4. 生成 Dockerfile ------------------------------------
@@ -225,12 +264,43 @@ COMMON_ENV='ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     HF_ENDPOINT=https://hf-mirror.com \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True'
+cat > "$INSTALL_DIR/comfyui-source.json" <<JSON
+{
+  "repository": "${COMFYUI_REPOSITORY}",
+  "ref": "${COMFYUI_REF}",
+  "version": "${COMFYUI_VERSION}",
+  "commit": "${COMFYUI_COMMIT}",
+  "channel": "${COMFYUI_CHANNEL}",
+  "commitAt": "${COMFYUI_COMMIT_AT}",
+  "publishedAt": "${COMFYUI_PUBLISHED_AT}",
+  "resolvedAt": "${COMFYUI_RESOLVED_AT}"
+}
+JSON
+SOURCE_LABELS="$(cat <<LABELS
+LABEL org.opencontainers.image.title="ComfyUI" \
+      org.opencontainers.image.revision="${COMFYUI_COMMIT}" \
+      org.opencontainers.image.version="${COMFYUI_VERSION}" \
+      org.opencontainers.image.source="https://github.com/{{.Repository}}" \
+      flowpilot.kind="comfyui" \
+      flowpilot.build.variant="${VARIANT_RESOLVED}" \
+      flowpilot.build.platform="${ARCH}" \
+      flowpilot.comfyui.ref="${COMFYUI_REF}" \
+      flowpilot.comfyui.version="${COMFYUI_VERSION}" \
+      flowpilot.comfyui.commit="${COMFYUI_COMMIT}" \
+      flowpilot.comfyui.channel="${COMFYUI_CHANNEL}" \
+      flowpilot.comfyui.commit_date="${COMFYUI_COMMIT_AT}" \
+      flowpilot.comfyui.published_at="${COMFYUI_PUBLISHED_AT}" \
+      flowpilot.comfyui.resolved_at="${COMFYUI_RESOLVED_AT}" \
+      flowpilot.comfyui.repository="${COMFYUI_REPOSITORY}"
+LABELS
+)"
 
 if [ "$VARIANT_RESOLVED" = "amd-rocm" ]; then
   # AMD：基于官方 ROCm PyTorch 镜像，省去手工装 ROCm 运行时
   cat > "$INSTALL_DIR/Dockerfile" <<EOF
 FROM rocm/pytorch:rocm6.2_ubuntu22.04_py3.10_pytorch_release_2.3.0
 ARG PIP_INDEX_URL=${PIP_INDEX_URL}
+${SOURCE_LABELS}
 ${COMMON_ENV}
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git curl ca-certificates ffmpeg libgl1 libglib2.0-0 \
@@ -238,6 +308,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -U pip setuptools wheel -i \$PIP_INDEX_URL
 COPY ComfyUI /app/ComfyUI
+COPY comfyui-source.json /opt/flowpilot/comfyui-source.json
 WORKDIR /app/ComfyUI
 RUN --mount=type=cache,target=/root/.cache/pip \
     grep -vE '^(torch|torchvision|torchaudio)\b' requirements.txt > /tmp/req.txt \
@@ -257,6 +328,7 @@ else
 FROM ubuntu:24.04
 ARG PIP_INDEX_URL=${PIP_INDEX_URL}
 ARG TORCH_INDEX_URL=${TORCH_INDEX_URL}
+${SOURCE_LABELS}
 ${COMMON_ENV}
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-venv python3-dev git curl ca-certificates \
@@ -270,6 +342,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install torch torchvision torchaudio --index-url \$TORCH_INDEX_URL
 COPY ComfyUI /app/ComfyUI
+COPY comfyui-source.json /opt/flowpilot/comfyui-source.json
 WORKDIR /app/ComfyUI
 RUN --mount=type=cache,target=/root/.cache/pip \
     grep -vE '^(torch|torchvision|torchaudio)\b' requirements.txt > /tmp/req.txt \

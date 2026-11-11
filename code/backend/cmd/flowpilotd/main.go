@@ -85,6 +85,8 @@ func main() {
 		return filepath.Join(workspacesContainerRoot, target.UUID), true
 	})
 	imageManager := image.NewManager(dockerClient, filepath.Join(dataDir, "image-tasks.json"))
+	// ComfyUI 官方版本解析：缓存落数据目录，在线刷新失败时可回退最近成功目录。
+	image.ConfigureComfyVersionResolver(os.Getenv("FLOWPILOT_GITHUB_API_BASE"), filepath.Join(dataDir, "cache", "comfyui-versions.json"))
 	// 网络仓库路径同时作为导入白名单：「本地化」任务即把 NAS 模型复制进本地仓库。
 	importDirs := strings.Split(environment("FLOWPILOT_IMPORT_DIRS", "/data/import"), ":")
 	importDirs = append(importDirs, filepath.Join(dataDir, "network"))

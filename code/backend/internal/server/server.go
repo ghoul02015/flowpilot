@@ -31,7 +31,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/tasks"
 )
 
-const Version = "0.1.0.1"
+const Version = "0.1.0.2"
 
 type Handler struct {
 	docker        *docker.Client
@@ -133,6 +133,8 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("POST /api/v1/images/import", handler.importLocalImage)
 	mux.HandleFunc("GET /api/v1/images/catalog", handler.imageCatalog)
 	mux.HandleFunc("GET /api/v1/images/comfyui-refs", handler.comfyUIRefs)
+	mux.HandleFunc("GET /api/v1/images/comfyui-versions", handler.comfyVersions)
+	mux.HandleFunc("POST /api/v1/images/comfyui-resolve", handler.comfyVersionResolve)
 	mux.HandleFunc("GET /api/v1/images/build-script", handler.buildScript)
 	mux.HandleFunc("GET /api/v1/images/install-script", handler.installScript)
 	mux.HandleFunc("POST /api/v1/images/pull", handler.startPull)
@@ -957,9 +959,17 @@ func (h *Handler) imageCatalog(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"recipes": image.Recipes()})
 }
 
-// comfyUIRefs 返回可选 ComfyUI 源码分支/标签，网络失败时由 image 包兜底 master。
+// comfyUIRefs 保留旧客户端兼容视图；新前端使用 comfyui-versions。
 func (h *Handler) comfyUIRefs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"refs": image.ComfyUIRefs(r.Context())})
+}
+
+// buildSourceFromQuery 用构建脚本查询参数构造待核验源码坐标。
+func buildSourceFromQuery(kind, version, commit string) *image.ComfyVersion {
+	if commit == "" {
+		return nil
+	}
+	return &image.ComfyVersion{Kind: kind, Version: version, Commit: commit}
 }
 
 // buildScript 按构建弹窗参数生成仅构建镜像的一键脚本。
@@ -969,9 +979,14 @@ func (h *Handler) buildScript(w http.ResponseWriter, r *http.Request) {
 		Variant:     query.Get("variant"),
 		ImageName:   query.Get("image"),
 		ComfyUIRef:  query.Get("ref"),
+		Source:      buildSourceFromQuery(query.Get("kind"), query.Get("version"), query.Get("commit")),
 		PipIndexURL: query.Get("pip"),
 		WithManager: query.Get("manager"),
 		Platform:    query.Get("platform"),
+	}
+	if err := image.PrepareBuildSource(r.Context(), &params); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
 	}
 	script, err := image.BuildScript(params)
 	if err != nil {
@@ -1001,6 +1016,13 @@ func (h *Handler) installScript(w http.ResponseWriter, r *http.Request) {
 		PipIndexURL: query.Get("pip"),
 		WithManager: query.Get("manager"),
 	}
+	resolved, err := image.ResolveComfyVersion(r.Context(), params.ComfyUIRef, query.Get("kind"), query.Get("commit"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "无法解析 ComfyUI 版本：" + err.Error()})
+		return
+	}
+	params.ComfyUIRef = resolved.Ref
+	params.Source = &resolved
 	script, err := image.InstallScript(params)
 	if err != nil {
 		slog.Warn("render install script failed", "error", err)
@@ -1144,6 +1166,15 @@ func (h *Handler) startBuild(w http.ResponseWriter, r *http.Request) {
 	var request image.BuildParams
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&request); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "请求格式错误", "detail": err.Error()})
+		return
+	}
+	if err := image.PrepareBuildSource(r.Context(), &request); err != nil {
+		var validationError *image.ValidationError
+		if errors.As(err, &validationError) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": validationError.Message})
+			return
+		}
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "无法解析 ComfyUI 版本", "detail": err.Error()})
 		return
 	}
 	task, err := h.images.SubmitBuild(request)

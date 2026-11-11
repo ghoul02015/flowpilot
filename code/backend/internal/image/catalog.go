@@ -2,11 +2,8 @@ package image
 
 import (
 	"bytes"
-	"context"
 	_ "embed"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"regexp"
 	"strings"
 	"text/template"
@@ -54,51 +51,17 @@ type ComfyRef struct {
 	Type string `json:"type"` // branch | tag
 }
 
-// ComfyUIRefs 在线读取 ComfyUI 标签，用于构建参数选择；网络失败时返回安全兜底值。
-func ComfyUIRefs(ctx context.Context) []ComfyRef {
-	refs := []ComfyRef{{Name: "master", Type: "branch"}}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/comfyanonymous/ComfyUI/tags?per_page=40", nil)
-	if err != nil {
-		return refs
-	}
-	request.Header.Set("Accept", "application/vnd.github+json")
-	client := &http.Client{Timeout: 5 * time.Second}
-	response, err := client.Do(request)
-	if err != nil {
-		return refs
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return refs
-	}
-	var tags []struct {
-		Name string `json:"name"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&tags); err != nil {
-		return refs
-	}
-	seen := map[string]bool{"master": true}
-	for _, tag := range tags {
-		name := strings.TrimSpace(tag.Name)
-		if name == "" || seen[name] || !comfyRefPattern.MatchString(name) || strings.Contains(name, "..") {
-			continue
-		}
-		refs = append(refs, ComfyRef{Name: name, Type: "tag"})
-		seen[name] = true
-	}
-	return refs
-}
-
 //go:embed assets/install-comfyui-image.sh.tmpl
 var installTemplate string
 
 // InstallParams 是一键安装脚本的可向导化参数。
 type InstallParams struct {
-	Variant     string // auto 或配方 ID
-	ImageName   string // 构建出的本地镜像名
-	ComfyUIRef  string // ComfyUI 源码分支/标签
-	PipIndexURL string // 容器内 pip 源
-	WithManager string // "1" 内置 ComfyUI-Manager，"0" 不含
+	Variant     string        // auto 或配方 ID
+	ImageName   string        // 构建出的本地镜像名
+	ComfyUIRef  string        // ComfyUI 源码分支/标签
+	Source      *ComfyVersion // 服务端解析后的不可变源码坐标
+	PipIndexURL string        // 容器内 pip 源
+	WithManager string        // "1" 内置 ComfyUI-Manager，"0" 不含
 }
 
 var (
@@ -126,6 +89,9 @@ func (p *InstallParams) Validate() {
 			p.ImageName = "flowpilot/comfyui:local"
 		}
 	}
+	if p.Source != nil && p.Source.Ref != "" {
+		p.ComfyUIRef = p.Source.Ref
+	}
 	if !comfyRefPattern.MatchString(p.ComfyUIRef) || strings.Contains(p.ComfyUIRef, "..") {
 		p.ComfyUIRef = "master"
 	}
@@ -149,6 +115,9 @@ func (p *InstallParams) Validate() {
 
 // InstallScript 按向导参数渲染一键安装脚本。
 func InstallScript(params InstallParams) (string, error) {
+	if params.Source == nil || !fullCommitPattern.MatchString(params.Source.Commit) {
+		return "", &ValidationError{Message: "安装脚本必须先固定 ComfyUI commit"}
+	}
 	params.Validate()
 	tmpl, err := template.New("install").Parse(installTemplate)
 	if err != nil {
@@ -157,7 +126,8 @@ func InstallScript(params InstallParams) (string, error) {
 	data := struct {
 		InstallParams
 		GeneratedAt string
-	}{InstallParams: params, GeneratedAt: time.Now().Format("2006-01-02 15:04")}
+		Repository  string
+	}{InstallParams: params, GeneratedAt: time.Now().Format("2006-01-02 15:04"), Repository: ComfyRepository}
 	var buffer bytes.Buffer
 	if err := tmpl.Execute(&buffer, data); err != nil {
 		return "", fmt.Errorf("渲染安装脚本失败：%w", err)
@@ -199,6 +169,7 @@ func BuildScript(params BuildParams) (string, error) {
 	buffer.WriteString("  --build-arg PIP_INDEX_URL=" + shellQuote(params.PipIndexURL) + " \\\n")
 	buffer.WriteString("  --build-arg TORCH_INDEX_URL=" + shellQuote(torchIndexURL(recipe)) + " \\\n")
 	buffer.WriteString("  --build-arg COMFYUI_REF=" + shellQuote(params.ComfyUIRef) + " \\\n")
+	buffer.WriteString("  --build-arg COMFYUI_COMMIT=" + shellQuote(params.Source.Commit) + " \\\n")
 	buffer.WriteString("  --build-arg WITH_MANAGER=" + shellQuote(params.WithManager) + " \\\n")
 	buffer.WriteString("  \"$TMPDIR\"\n")
 	buffer.WriteString("echo \"构建完成：$IMAGE\"\n")

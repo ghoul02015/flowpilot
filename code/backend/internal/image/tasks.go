@@ -68,6 +68,7 @@ type Task struct {
 	Kind      string              `json:"kind"`
 	Image     string              `json:"image"`
 	Variant   string              `json:"variant,omitempty"`
+	Source    *ComfyVersion       `json:"source,omitempty"`
 	State     string              `json:"state"`
 	Message   string              `json:"message"`
 	Progress  int                 `json:"progress"`
@@ -171,6 +172,7 @@ func (m *Manager) SubmitBuild(params BuildParams) (Task, error) {
 		Kind:      TaskKindBuild,
 		Image:     params.ImageName,
 		Variant:   recipe.ID,
+		Source:    params.Source,
 		State:     TaskQueued,
 		Message:   "排队中，等待构建槽位",
 		Summary:   buildSummary(params, recipe),
@@ -358,6 +360,7 @@ func (m *Manager) runBuild(task *Task, contextBytes []byte) {
 			"PIP_INDEX_URL":   task.params.PipIndexURL,
 			"TORCH_INDEX_URL": torchIndexURL(recipe),
 			"COMFYUI_REF":     task.params.ComfyUIRef,
+			"COMFYUI_COMMIT":  task.params.Source.Commit,
 			"WITH_MANAGER":    task.params.WithManager,
 		},
 	}
@@ -649,6 +652,10 @@ func snapshotTask(task *Task) Task {
 	snapshot.cancel = nil
 	snapshot.Summary = append([]BuildParamSummary{}, task.Summary...)
 	snapshot.Logs = append([]string{}, task.Logs...)
+	if task.Source != nil {
+		source := *task.Source
+		snapshot.Source = &source
+	}
 	return snapshot
 }
 

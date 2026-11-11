@@ -301,6 +301,7 @@ export interface ImageTask {
   kind: 'build' | 'pull'
   image: string
   variant?: string
+  source?: ComfyVersion
   state: ImageTaskState
   message: string
   progress: number
@@ -314,9 +315,48 @@ export interface ImageBuildSpec {
   variant: string
   image: string
   ref: string
+  source?: ComfyVersion | null
   pip: string
   manager: string
   platform: string
+}
+
+export type ComfyVersionKind = 'release' | 'tag' | 'branch' | 'commit'
+
+export interface ComfyVersion {
+  ref: string
+  kind: ComfyVersionKind
+  version?: string
+  commit: string
+  commitShort: string
+  commitAt?: string
+  publishedAt?: string
+  prerelease: boolean
+  repository: string
+  commitUrl: string
+  sourceUrl?: string
+  resolvedAt?: string
+  displayLabel: string
+}
+
+export interface ComfyVersionCatalog {
+  repository: string
+  default?: ComfyVersion
+  releases: ComfyVersion[]
+  tags: ComfyVersion[]
+  branch?: ComfyVersion
+  fetchedAt: string
+  source: 'online' | 'cache'
+  stale: boolean
+  warnings?: string[]
+}
+
+export async function getComfyVersions(refresh = false): Promise<ComfyVersionCatalog> {
+  return getJSON<ComfyVersionCatalog>(`/api/v1/images/comfyui-versions${refresh ? '?refresh=1' : ''}`, AbortSignal.timeout(12000))
+}
+
+export async function resolveComfyVersion(ref: string, kind?: string, commit?: string): Promise<ComfyVersion> {
+  return sendJSON<ComfyVersion>('POST', '/api/v1/images/comfyui-resolve', { ref, kind, commit })
 }
 
 export async function getImageTasks(): Promise<ImageTask[]> {
@@ -369,6 +409,11 @@ export function buildScriptURL(params: ImageBuildSpec): string {
   query.set('pip', params.pip)
   query.set('manager', params.manager)
   query.set('platform', params.platform)
+  if (params.source) {
+    query.set('commit', params.source.commit)
+    query.set('kind', params.source.kind)
+    query.set('version', params.source.version ?? '')
+  }
   return `/api/v1/images/build-script?${query.toString()}`
 }
 
@@ -377,28 +422,51 @@ export function isComfyImage(tag: string, image?: LocalImage): boolean {
   return image?.Labels?.['flowpilot.kind'] === 'comfyui' || normalized.includes('comfyui') || normalized.includes('comfy-ui')
 }
 
+// comfyImageVersionLabel 根据镜像标签还原 ComfyUI 源码版本；旧镜像不伪造版本号。
+export function comfyImageVersionLabel(image?: LocalImage): string {
+  const labels = image?.Labels
+  if (!labels) return '未记录版本'
+  const commit = labels['flowpilot.comfyui.commit']
+  const ref = labels['flowpilot.comfyui.ref'] || labels['flowpilot.comfyui.version'] || ''
+  const version = labels['flowpilot.comfyui.version'] || ref
+  if (commit) return `${version || ref} · ${commit.slice(0, 7)}`
+  if (ref === 'master') return 'master（未固定提交）'
+  if (ref) return ref
+  return '未记录版本'
+}
+
 export function imageBuildSummary(image?: LocalImage): ImageBuildSummary[] {
   if (!image?.Labels) return []
   const labels = image.Labels
+  const actualVersion = comfyImageVersionLabel(image)
   const summary = labels['flowpilot.build.summary']
-  if (summary) return summary.split('；').filter(Boolean).map((part) => {
-    const [label, ...rest] = part.split('=')
-    return { label, value: rest.join('=') }
-  })
+  if (summary) {
+    const items = summary.split('；').filter(Boolean).map((part) => {
+      const [label, ...rest] = part.split('=')
+      return { label, value: rest.join('=') }
+    })
+    const versionItem = items.find((item) => item.label === 'ComfyUI 版本')
+    if (versionItem) {
+      versionItem.value = labels['flowpilot.comfyui.commit'] ? actualVersion : versionItem.value === 'master' ? 'master（未固定提交）' : versionItem.value
+    }
+    return items
+  }
   if (labels['flowpilot.kind'] !== 'comfyui') return []
   return [
     { label: 'GPU 配方', value: labels['flowpilot.build.variant'] ?? '—' },
     { label: 'CPU 架构', value: labels['flowpilot.build.platform'] ?? '—' },
-    { label: 'ComfyUI 版本', value: labels['flowpilot.comfyui.ref'] ?? '—' },
+    { label: 'ComfyUI 版本', value: actualVersion },
   ]
 }
 
-// installScriptURL 生成一键安装脚本的下载地址（参数同向导可选安装项）。
-export function installScriptURL(params: { variant?: string; image?: string; ref?: string; pip?: string; manager?: string }): string {
+// installScriptURL 生成一键安装脚本的下载地址（固定 commit 与服务端核验参数）。
+export function installScriptURL(params: { variant?: string; image?: string; ref?: string; kind?: string; commit?: string; pip?: string; manager?: string }): string {
   const query = new URLSearchParams()
   if (params.variant) query.set('variant', params.variant)
   if (params.image) query.set('image', params.image)
   if (params.ref) query.set('ref', params.ref)
+  if (params.kind) query.set('kind', params.kind)
+  if (params.commit) query.set('commit', params.commit)
   if (params.pip) query.set('pip', params.pip)
   if (params.manager) query.set('manager', params.manager)
   return `/api/v1/images/install-script?${query.toString()}`
