@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.0.9.10"
+VERSION="0.0.9.11"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUTPUT_DIR="${FLOWPILOT_RELEASE_DIR:-${ROOT_DIR}/.tmp/release}"
 IMAGE="flowpilot-web:${VERSION}"

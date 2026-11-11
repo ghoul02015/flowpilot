@@ -30,7 +30,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/tasks"
 )
 
-const Version = "0.0.9.10"
+const Version = "0.0.9.11"
 
 type Handler struct {
 	docker        *docker.Client
@@ -668,6 +668,22 @@ func (h *Handler) deleteModel(w http.ResponseWriter, r *http.Request) {
 	if h.models == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "模型仓库未启用"})
 		return
+	}
+	// 服务端删除保护（0.0.9.11）：存在运行中实例时禁止删除共享仓库文件
+	// （前端禁用仅为体验优化，安全约束必须在服务端强制）。
+	if h.instances != nil {
+		if instances, err := h.instances.List(r.Context()); err == nil {
+			running := []string{}
+			for _, item := range instances {
+				if item.Status == "running" {
+					running = append(running, item.Name)
+				}
+			}
+			if len(running) > 0 {
+				writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "存在运行中的实例（" + strings.Join(running, "、") + "），请先停止后再删除模型"})
+				return
+			}
+		}
 	}
 	if err := h.models.Delete(r.URL.Query().Get("path")); err != nil {
 		var validationError *model.ValidationError

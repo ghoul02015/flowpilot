@@ -296,6 +296,10 @@ func (m *Manager) buildTask(spec Spec) (Task, error) {
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return Task{}, &ValidationError{Message: "下载地址必须是合法的 http/https URL"}
 	}
+	// SSRF 防护（0.0.9.11）：解析目标地址，阻断 loopback／私网／链路本地目标。
+	if err := guardSSRF(parsed.Hostname()); err != nil {
+		return Task{}, &ValidationError{Message: "下载地址被安全策略拦截：" + err.Error()}
+	}
 	fileName := strings.TrimSpace(spec.Name)
 	if fileName == "" {
 		fileName = path.Base(parsed.Path)
@@ -771,3 +775,29 @@ func fileSHA256(path string) (string, error) {
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
+
+// guardSSRF 校验下载目标：解析主机名全部 IP，任一命中内网/保留段即拒绝。
+// 白名单主机（FLOWPILOT_DOWNLOAD_ALLOW_HOSTS，逗号分隔）可放行（内网模型源场景）。
+func guardSSRF(hostname string) error {
+	for _, allowed := range downloadAllowHosts {
+		if strings.EqualFold(hostname, allowed) {
+			return nil
+		}
+	}
+	ips, err := net.LookupIP(hostname)
+	if err != nil {
+		return fmt.Errorf("主机名解析失败")
+	}
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+			return fmt.Errorf("目标 %s 位于内网/保留地址段", ip)
+		}
+	}
+	return nil
+}
+
+// downloadAllowHosts 下载目标白名单（初始化时设置）。
+var downloadAllowHosts = []string{}
+
+// SetDownloadAllowHosts 设置内网模型源白名单。
+func SetDownloadAllowHosts(hosts []string) { downloadAllowHosts = hosts }

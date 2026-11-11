@@ -87,6 +87,17 @@ func main() {
 	// 网络仓库路径同时作为导入白名单：「本地化」任务即把 NAS 模型复制进本地仓库。
 	importDirs := strings.Split(environment("FLOWPILOT_IMPORT_DIRS", "/data/import"), ":")
 	importDirs = append(importDirs, filepath.Join(dataDir, "network"))
+	// 模型下载 SSRF 白名单（0.0.9.11）：合法内网模型源显式放行（逗号分隔主机名）。
+	if allowHosts := os.Getenv("FLOWPILOT_DOWNLOAD_ALLOW_HOSTS"); allowHosts != "" {
+		hosts := []string{}
+		for _, host := range strings.Split(allowHosts, ",") {
+			if trimmed := strings.TrimSpace(host); trimmed != "" {
+				hosts = append(hosts, trimmed)
+			}
+		}
+		download.SetDownloadAllowHosts(hosts)
+		slog.Info("已设置内网模型源白名单", "hosts", len(hosts))
+	}
 	downloadManager := download.NewManager(filepath.Join(dataDir, "models"), importDirs, filepath.Join(dataDir, "tasks.json"))
 	catalogManager := catalog.NewManager(filepath.Join(dataDir, "catalog.json"))
 

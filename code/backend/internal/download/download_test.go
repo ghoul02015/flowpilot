@@ -68,6 +68,12 @@ func waitStatus(t *testing.T, manager *Manager, id, want string) Task {
 	return Task{}
 }
 
+// TestMain 测试白名单：httptest 本地服务器需要放行 loopback。
+func TestMain(m *testing.M) {
+	SetDownloadAllowHosts([]string{"127.0.0.1", "localhost"})
+	os.Exit(m.Run())
+}
+
 func TestDownloadCompletesIntoRepository(t *testing.T) {
 	server := rangeServer(t, 0)
 	defer server.Close()

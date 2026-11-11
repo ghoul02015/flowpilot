@@ -3,8 +3,8 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-IMAGE="flowpilot-web:0.0.9.10"
-REGRESSION_IMAGE="flowpilot/comfyui-regress:0.0.9.10"
+IMAGE="flowpilot-web:0.0.9.11"
+REGRESSION_IMAGE="flowpilot/comfyui-regress:0.0.9.11"
 CONTAINER="flowpilot-web-demo"
 PORT="${FLOWPILOT_DEMO_PORT:-18080}"
 DOCKER_SOCKET="${FLOWPILOT_DOCKER_SOCKET:-/var/run/docker.sock}"
@@ -42,6 +42,7 @@ start_container() {
     -e FLOWPILOT_COMFYUI_IMAGE="${REGRESSION_IMAGE}" \
     -e FLOWPILOT_INIT_TOKEN="${FLOWPILOT_DEMO_INIT_TOKEN:-flowpilot-demo-init-2026}" \
     -e FLOWPILOT_IMAGE_ALLOW_UNLABELED=1 \
+    -e FLOWPILOT_DOWNLOAD_ALLOW_HOSTS=localhost \
     "${IMAGE}" >/dev/null
   printf 'FlowPilot Demo：http://localhost:%s\n' "${PORT}"
 }
