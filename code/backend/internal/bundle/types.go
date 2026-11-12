@@ -9,7 +9,10 @@ type Manifest struct {
 	GeneratedAt     string           `json:"generatedAt"`
 	RepositoryRoot  string           `json:"repositoryRoot"`
 	Sources         []ManifestSource `json:"sources"`
-	Bundles         []Bundle         `json:"bundles"`
+	// Licenses 按模型名保存许可配置。同一模型只保留一份，套装只引用不复制，
+	// 避免 H3-Image 的条款被误套用到 H3。
+	Licenses map[string]License `json:"licenses"`
+	Bundles  []Bundle           `json:"bundles"`
 
 	// Checksum 为原始清单字节的 SHA256，用于把安装、许可和验收绑定到具体内容。
 	Checksum string `json:"-"`
@@ -91,16 +94,25 @@ type WorkflowRef struct {
 	AcceptancePreset string `json:"acceptancePreset"`
 }
 
-// License 是许可快照。
+// License 是模型级许可快照。套装只按 ModelName 引用它。
 type License struct {
-	Name                   string `json:"name"`
-	SourceURL              string `json:"sourceURL"`
-	SnapshotDate           string `json:"snapshotDate"`
-	ReviewStatus           string `json:"reviewStatus"`
-	NoticeRequired         bool   `json:"noticeRequired"`
-	CommercialUIRequired   bool   `json:"commercialUIRequired"`
-	AcknowledgementVersion string `json:"acknowledgementVersion"`
-	DeliveryBoundary       string `json:"deliveryBoundary"`
+	ModelName              string   `json:"modelName"`
+	Name                   string   `json:"name"`
+	Version                string   `json:"version"`
+	LicenseDate            string   `json:"licenseDate"`
+	SnapshotDate           string   `json:"snapshotDate"`
+	OfficialURL            string   `json:"officialURL"`
+	SourceURL              string   `json:"sourceURL"`
+	ReviewStatus           string   `json:"reviewStatus"`
+	NoticeRequired         bool     `json:"noticeRequired"`
+	CommercialUIRequired   bool     `json:"commercialUIRequired"`
+	AcknowledgementVersion string   `json:"acknowledgementVersion"`
+	DeliveryBoundary       string   `json:"deliveryBoundary"`
+	Summary                []string `json:"summary"`
+	NoticeText             string   `json:"noticeText"`
+	LicenseFile            string   `json:"licenseFile"`
+	NoticeFile             string   `json:"noticeFile"`
+	SnapshotSHA256         string   `json:"snapshotSHA256"`
 }
 
 // Certification 只能来自后续审核发布，不接受人工验收写入。

@@ -25,6 +25,8 @@ type DownloadState struct {
 	DownloadedBytes int64
 	TotalBytes      int64
 	Message         string
+	// SHA256 是该任务创建时声明的目标哈希，用于判断残留任务是否与当前清单一致。
+	SHA256 string
 }
 
 // Downloader 是安装编排依赖的最小下载能力集合。
@@ -32,6 +34,7 @@ type Downloader interface {
 	Create(ctx context.Context, request DownloadRequest) (DownloadState, error)
 	Get(ctx context.Context, id string) (DownloadState, error)
 	Action(ctx context.Context, id, action string) error
+	Delete(ctx context.Context, id string) error
 	// FindByTarget 按目录与文件名查找已有任务，用于复用取消或重启后残留的分片。
 	FindByTarget(ctx context.Context, category, fileName string) (DownloadState, bool)
 }
@@ -124,13 +127,28 @@ func (in *Installer) Pause(ctx context.Context, installID string) error {
 	if install.Status != StateInstalling && install.Status != StateQueued {
 		return &ValidationError{BundleID: install.BundleID, Field: "status", Message: "只有进行中的计划可以暂停"}
 	}
-	in.stopWorker(installID)
-	if taskID := in.currentTask(installID); taskID != "" {
-		if err := in.downloader.Action(ctx, taskID, "pause"); err != nil {
-			slog.Warn("暂停子下载任务失败", "install", installID, "task", taskID, "error", err)
+	in.stopAndSettleChild(ctx, installID, install, "pause")
+	return in.store.UpdateInstall(ctx, installID, StatePaused, install.CurrentItemKey, install.CompletedBytes, "", "")
+}
+
+// stopAndSettleChild 停止 worker 并处理它的子任务。
+// worker 可能在创建任务与写入 child_task_id 之间被中断，因此除了内存里的当前任务，
+// 还要按安装项快照补一遍，确保没有下载任务被遗留在后台。
+func (in *Installer) stopAndSettleChild(ctx context.Context, installID string, install Install, action string) {
+	seen := map[string]bool{}
+	if taskID := in.takeWorker(installID); taskID != "" {
+		seen[taskID] = true
+	}
+	for _, item := range install.Items {
+		if item.Status == ItemDownloading && item.ChildTaskID != "" {
+			seen[item.ChildTaskID] = true
 		}
 	}
-	return in.store.UpdateInstall(ctx, installID, StatePaused, install.CurrentItemKey, install.CompletedBytes, "", "")
+	for taskID := range seen {
+		if err := in.downloader.Action(ctx, taskID, action); err != nil {
+			slog.Warn("处理子下载任务失败", "install", installID, "task", taskID, "action", action, "error", err)
+		}
+	}
 }
 
 // Cancel 取消计划：已完成文件保留，不自动删除。
@@ -144,12 +162,7 @@ func (in *Installer) Cancel(ctx context.Context, installID string) error {
 	default:
 		return &ValidationError{BundleID: install.BundleID, Field: "status", Message: "计划已结束，无需取消"}
 	}
-	in.stopWorker(installID)
-	if taskID := in.currentTask(installID); taskID != "" {
-		if err := in.downloader.Action(ctx, taskID, "cancel"); err != nil {
-			slog.Warn("取消子下载任务失败", "install", installID, "task", taskID, "error", err)
-		}
-	}
+	in.stopAndSettleChild(ctx, installID, install, "cancel")
 	for _, item := range install.Items {
 		if item.Status == ItemDownloading || item.Status == ItemVerifying {
 			_ = in.store.UpdateItem(ctx, installID, item.ItemKey, ItemPaused, item.ChildTaskID, item.ActualBytes, item.ActualSHA256, "", "", false)
@@ -207,9 +220,13 @@ func (in *Installer) Wait(installID string) {
 	}
 }
 
-func (in *Installer) stopWorker(installID string) {
+// takeWorker 注销并停止当前 worker，同时返回它正在执行的子任务 ID。
+// 必须在清理 current 之前取值：否则暂停／取消拿不到子任务，下载会留在后台继续跑，
+// 重启后变成 paused 残留任务，阻塞下一次安装（0.1.0.4 实机失败的根因）。
+func (in *Installer) takeWorker(installID string) string {
 	in.mu.Lock()
 	cancel, ok := in.workers[installID]
+	taskID := in.current[installID]
 	delete(in.workers, installID)
 	delete(in.workerGen, installID)
 	delete(in.current, installID)
@@ -217,6 +234,7 @@ func (in *Installer) stopWorker(installID string) {
 	if ok {
 		cancel()
 	}
+	return taskID
 }
 
 func (in *Installer) currentTask(installID string) string {
@@ -337,23 +355,34 @@ func (in *Installer) installItem(ctx context.Context, installID string, install 
 			// 取消或平台重启后，同目标可能留有 paused/failed 任务；
 			// 直接复用可保留已下载分片，否则新任务会被"目标已有任务在进行中"拒绝。
 			if existing, found := in.downloader.FindByTarget(ctx, request.Category, request.FileName); found {
-				switch existing.Status {
-				case "running", "paused":
-					if existing.Status == "paused" {
-						if resumeErr := in.downloader.Action(ctx, existing.ID, "resume"); resumeErr != nil {
-							break
+				if existing.SHA256 != "" && !strings.EqualFold(existing.SHA256, planItem.SHA256) {
+					// 同名文件但目标哈希不同（跨清单版本）：不能复用旧分片，清掉后重新创建。
+					_ = in.downloader.Action(ctx, existing.ID, "cancel")
+					if deleteErr := in.downloader.Delete(ctx, existing.ID); deleteErr != nil {
+						_ = in.store.UpdateItem(ctx, installID, item.ItemKey, ItemMissing, "", 0, "", "target_conflict",
+							"同名文件已有其他版本的下载任务，请先在任务中心清理："+existing.ID, true)
+						return fmt.Errorf("同名文件已有其他版本的下载任务：%s", existing.ID)
+					}
+					state, err = in.downloader.Create(ctx, request)
+				} else {
+					switch existing.Status {
+					case "running", "paused":
+						if existing.Status == "paused" {
+							if resumeErr := in.downloader.Action(ctx, existing.ID, "resume"); resumeErr != nil {
+								break
+							}
 						}
-					}
-					state, err = existing, nil
-				case "failed", "cancelled":
-					if retryErr := in.downloader.Action(ctx, existing.ID, "retry"); retryErr == nil {
 						state, err = existing, nil
+					case "failed", "cancelled":
+						if retryErr := in.downloader.Action(ctx, existing.ID, "retry"); retryErr == nil {
+							state, err = existing, nil
+						}
+					case "completed":
+						_ = in.store.UpdateItem(ctx, installID, item.ItemKey, ItemPresent, existing.ID, item.ExpectedBytes, item.ExpectedSHA256, "", "", false)
+						*completed += item.ExpectedBytes
+						_ = in.store.UpdateInstall(ctx, installID, StateInstalling, item.ItemKey, *completed, "", "")
+						return nil
 					}
-				case "completed":
-					_ = in.store.UpdateItem(ctx, installID, item.ItemKey, ItemPresent, existing.ID, item.ExpectedBytes, item.ExpectedSHA256, "", "", false)
-					*completed += item.ExpectedBytes
-					_ = in.store.UpdateInstall(ctx, installID, StateInstalling, item.ItemKey, *completed, "", "")
-					return nil
 				}
 			}
 		}
@@ -363,6 +392,13 @@ func (in *Installer) installItem(ctx context.Context, installID string, install 
 		}
 		taskID = state.ID
 		_ = in.store.UpdateItem(ctx, installID, item.ItemKey, ItemDownloading, taskID, 0, "", "", "", true)
+	}
+	// 创建／恢复任务与写入 child_task_id 之间存在窗口：若此刻已收到暂停／取消信号，
+	// 取消方可能拿不到这个任务，必须在这里自行停住，避免下载留在后台。
+	if ctx.Err() != nil {
+		_ = in.downloader.Action(context.Background(), taskID, "pause")
+		_ = in.store.UpdateItem(context.Background(), installID, item.ItemKey, ItemPaused, taskID, 0, "", "", "", false)
+		return ctx.Err()
 	}
 	in.setCurrentTask(installID, taskID, generation)
 	defer in.setCurrentTask(installID, "", generation)

@@ -138,20 +138,41 @@ func TestLicenseAndAcceptance(t *testing.T) {
 	store := openStore(t)
 	ctx := context.Background()
 	confirmation := LicenseConfirmation{
-		ID: "lic-1", BundleID: "h3-image-base", BundleVersion: "1.0.0",
-		AcknowledgementVersion: "minimax-h3-license-2026-11", LicenseSnapshotDate: "2026-11-12",
-		DeliveryMethod: "online", Operator: "admin", ConfirmedAt: time.Now().UTC(),
+		ID: "lic-1", Org: "default", ModelName: "MiniMax-H3-Image", LicenseVersion: "2026-11-10",
+		LicenseName: "MiniMax-H3-Image Community License Agreement",
+		OfficialURL: "https://github.com/MiniMax-AI/MiniMax-H3-Image/blob/main/LICENSE",
+		BundleID:    "h3-image-base", BundleVersion: "1.0.0",
+		DeliveryMethod: "online", Operator: "admin", Environment: "test-host", ConfirmedAt: time.Now().UTC(),
 	}
 	if err := store.ConfirmLicense(ctx, confirmation); err != nil {
 		t.Fatal(err)
 	}
-	ok, err := store.LicenseConfirmed(ctx, "h3-image-base", "1.0.0", "minimax-h3-license-2026-11", "admin")
+	ok, err := store.LicenseConfirmed(ctx, "default", "MiniMax-H3-Image", "2026-11-10")
 	if err != nil || !ok {
 		t.Fatalf("许可确认应命中：%v", err)
 	}
-	// 旧版本确认不复用。
-	if ok, _ := store.LicenseConfirmed(ctx, "h3-image-base", "0.9.0", "minimax-h3-license-2026-11", "admin"); ok {
-		t.Fatal("不同 bundleVersion 的确认不应复用")
+	// 按模型判定：S1 确认后，同模型的 S2 不再重复确认。
+	if ok, _ := store.LicenseConfirmed(ctx, "default", "MiniMax-H3-Image", "2026-11-10"); !ok {
+		t.Fatal("同模型同版本应视为已确认")
+	}
+	// 版本变化必须重新确认。
+	if ok, _ := store.LicenseConfirmed(ctx, "default", "MiniMax-H3-Image", "2026-11-11"); ok {
+		t.Fatal("许可版本变化后不应复用旧确认")
+	}
+	// 不同模型不共用确认：H3-Image 的确认不能覆盖 H3。
+	if ok, _ := store.LicenseConfirmed(ctx, "default", "MiniMax-H3", "2026-11-10"); ok {
+		t.Fatal("不同模型不应共用确认记录")
+	}
+	// 重复确认同一版本保持幂等且只保留一条。
+	if err := store.ConfirmLicense(ctx, confirmation); err != nil {
+		t.Fatal(err)
+	}
+	history, err := store.ListLicenseConfirmations(ctx, "default", "MiniMax-H3-Image", 10)
+	if err != nil || len(history) != 1 {
+		t.Fatalf("同一模型同一版本只应有一条记录：len=%d err=%v", len(history), err)
+	}
+	if history[0].Operator != "admin" || history[0].LicenseVersion != "2026-11-10" {
+		t.Fatalf("确认记录字段异常：%+v", history[0])
 	}
 
 	for index := 0; index < 3; index++ {
@@ -232,6 +253,8 @@ func (p *progressDownloader) Get(context.Context, string) (DownloadState, error)
 }
 
 func (p *progressDownloader) Action(context.Context, string, string) error { return nil }
+
+func (p *progressDownloader) Delete(context.Context, string) error { return nil }
 
 func (p *progressDownloader) FindByTarget(context.Context, string, string) (DownloadState, bool) {
 	return DownloadState{}, false

@@ -53,7 +53,7 @@ export default function App() {
   // 同步镜像 busyIds，避免同一帧内双击穿透渲染快照的 includes 检查。
   const busyRef = useRef<Set<string>>(new Set())
   // 界面版本号跟随后端 /health，避免硬编码漂移；离线时回退常量。
-  const [backendVersion, setBackendVersion] = useState('0.1.0.4')
+  const [backendVersion, setBackendVersion] = useState('0.1.0.5')
 
   const realMode = realInstances !== null
   const realModelMode = realModels !== null

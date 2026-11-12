@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -173,7 +174,7 @@ func (h *Handler) getUnifiedTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if strings.HasPrefix(id, "bundle-") && h.bundles != nil {
-		if install, err := h.bundles.Store.GetInstall(r.Context(), strings.TrimPrefix(id, "bundle-")); err == nil {
+		if install, err := h.findBundleInstall(r.Context(), id); err == nil {
 			writeJSON(w, http.StatusOK, bundleInstallView(install))
 			return
 		}
@@ -207,8 +208,7 @@ func (h *Handler) deleteUnifiedTask(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "模型套装未启用"})
 			return
 		}
-		installID := strings.TrimPrefix(id, "bundle-")
-		if err := h.bundles.Store.DeleteInstall(r.Context(), installID); err != nil {
+		if err := h.deleteBundleInstall(r.Context(), id); err != nil {
 			switch {
 			case errors.Is(err, bundle.ErrInstallNotFound):
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": "安装计划不存在"})
@@ -410,7 +410,8 @@ func bundleInstallView(install bundle.Install) tasks.View {
 		message = "正在处理 " + install.CurrentItemKey
 	}
 	view := tasks.View{
-		ID:         "bundle-" + install.ID,
+		// install.ID 本身已带 bundle- 前缀（历史记录），统一任务 ID 只保留一层。
+		ID:         "bundle-" + strings.TrimPrefix(install.ID, "bundle-"),
 		Type:       tasks.TypeBundleInstall,
 		Name:       "模型套装 · " + install.BundleID,
 		ObjectType: "bundle",
@@ -470,4 +471,23 @@ func bundleStatusText(status string) string {
 	default:
 		return status
 	}
+}
+
+// findBundleInstall 兼容两种历史 ID：带 bundle- 前缀与纯数字。
+func (h *Handler) findBundleInstall(ctx context.Context, taskID string) (bundle.Install, error) {
+	base := strings.TrimPrefix(taskID, "bundle-")
+	if install, err := h.bundles.Store.GetInstall(ctx, base); err == nil {
+		return install, nil
+	}
+	return h.bundles.Store.GetInstall(ctx, "bundle-"+base)
+}
+
+// deleteBundleInstall 与 findBundleInstall 同样的前缀兼容逻辑。
+func (h *Handler) deleteBundleInstall(ctx context.Context, taskID string) error {
+	base := strings.TrimPrefix(taskID, "bundle-")
+	err := h.bundles.Store.DeleteInstall(ctx, base)
+	if errors.Is(err, bundle.ErrInstallNotFound) {
+		err = h.bundles.Store.DeleteInstall(ctx, "bundle-"+base)
+	}
+	return err
 }

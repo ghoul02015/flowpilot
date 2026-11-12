@@ -18,30 +18,38 @@ type Service struct {
 	ImageMeta  func() (coreVersion, templateVersion string)
 	LinkModels func(ctx context.Context, instanceName string, items []PlanItem) ([]string, error)
 	Now        func() time.Time
+	// Org 是确认记录归属的组织／租户；单机部署固定 default。
+	Org string
+	// Environment 记录确认发生的部署环境，便于审计。
+	Environment string
 }
 
 // BundleCard 是列表页卡片数据。
 type BundleCard struct {
-	ID               string          `json:"id"`
-	Version          string          `json:"version"`
-	Name             string          `json:"name"`
-	ModelName        string          `json:"modelName"`
-	Summary          string          `json:"summary"`
-	Capability       []string        `json:"capability"`
-	ReleaseChannel   string          `json:"releaseChannel"`
-	Experimental     bool            `json:"experimental"`
-	RequiredItems    int             `json:"requiredItems"`
-	OptionalItems    int             `json:"optionalItems"`
-	RequiredBytes    int64           `json:"requiredBytes"`
-	TotalBytes       int64           `json:"totalBytes"`
-	State            BundleState     `json:"state"`
-	HardwareClass    string          `json:"hardwareClass"`
-	HardwareLevel    string          `json:"hardwareLevel"`
-	HardwareNote     string          `json:"hardwareNote"`
-	License          License         `json:"license"`
-	Certification    []Certification `json:"certification"`
-	ActiveInstall    *Install        `json:"activeInstall,omitempty"`
-	LatestAcceptance *Acceptance     `json:"latestAcceptance,omitempty"`
+	ID             string      `json:"id"`
+	Version        string      `json:"version"`
+	Name           string      `json:"name"`
+	ModelName      string      `json:"modelName"`
+	Summary        string      `json:"summary"`
+	Capability     []string    `json:"capability"`
+	ReleaseChannel string      `json:"releaseChannel"`
+	Experimental   bool        `json:"experimental"`
+	RequiredItems  int         `json:"requiredItems"`
+	OptionalItems  int         `json:"optionalItems"`
+	RequiredBytes  int64       `json:"requiredBytes"`
+	TotalBytes     int64       `json:"totalBytes"`
+	State          BundleState `json:"state"`
+	HardwareClass  string      `json:"hardwareClass"`
+	HardwareLevel  string      `json:"hardwareLevel"`
+	HardwareNote   string      `json:"hardwareNote"`
+	License        License     `json:"license"`
+	// 用户侧只看“许可文本是否已确认”；内部审核状态单独展示，两者不混用。
+	LicenseConfirmed   bool            `json:"licenseConfirmed"`
+	LicenseConfirmedAt string          `json:"licenseConfirmedAt,omitempty"`
+	LicenseConfirmedBy string          `json:"licenseConfirmedBy,omitempty"`
+	Certification      []Certification `json:"certification"`
+	ActiveInstall      *Install        `json:"activeInstall,omitempty"`
+	LatestAcceptance   *Acceptance     `json:"latestAcceptance,omitempty"`
 }
 
 // BundleDetail 是详情抽屉数据。
@@ -54,6 +62,8 @@ type BundleDetail struct {
 	Excluded    []ExcludedItem  `json:"excluded,omitempty"`
 	Install     *Install        `json:"install,omitempty"`
 	Acceptances []Acceptance    `json:"acceptances"`
+	// LicenseConfirmations 是该模型的确认历史（最新在前）。
+	LicenseConfirmations []LicenseConfirmation `json:"licenseConfirmations"`
 }
 
 // ManifestInfo 暴露清单版本与校验值，便于前端展示可追溯性。
@@ -84,6 +94,33 @@ func (s *Service) now() time.Time {
 		return s.Now()
 	}
 	return time.Now().UTC()
+}
+
+func (s *Service) org() string {
+	if strings.TrimSpace(s.Org) != "" {
+		return s.Org
+	}
+	return "default"
+}
+
+func (s *Service) environment() string {
+	if strings.TrimSpace(s.Environment) != "" {
+		return s.Environment
+	}
+	return "default"
+}
+
+// licenseState 查询某模型的确认状态并返回最近一条记录。
+func (s *Service) licenseState(ctx context.Context, modelName, licenseVersion string) (bool, *LicenseConfirmation) {
+	confirmed, err := s.Store.LicenseConfirmed(ctx, s.org(), modelName, licenseVersion)
+	if err != nil {
+		return false, nil
+	}
+	history, err := s.Store.ListLicenseConfirmations(ctx, s.org(), modelName, 1)
+	if err != nil || len(history) == 0 {
+		return confirmed, nil
+	}
+	return confirmed, &history[0]
 }
 
 func (s *Service) scan() (RepoSnapshot, int64, error) {
@@ -125,6 +162,13 @@ func (s *Service) List(ctx context.Context) ([]BundleCard, error) {
 		}
 		if card.HardwareLevel == "" {
 			card.HardwareLevel = LevelUnknown
+		}
+		if confirmed, latest := s.licenseState(ctx, b.ModelName, b.License.Version); confirmed {
+			card.LicenseConfirmed = true
+			if latest != nil {
+				card.LicenseConfirmedAt = latest.ConfirmedAt.UTC().Format(time.RFC3339)
+				card.LicenseConfirmedBy = latest.Operator
+			}
 		}
 		// 活动计划优先覆盖状态（任意变体）。
 		if active, found, _ := s.Store.FindActiveByBundle(ctx, b.ID, s.Manifest.BundleVersion, "models"); found {
@@ -174,6 +218,16 @@ func (s *Service) Detail(ctx context.Context, id string) (BundleDetail, error) {
 		Workflows: b.Workflows,
 		Hardware:  hardware,
 	}
+	if confirmed, latest := s.licenseState(ctx, b.ModelName, b.License.Version); confirmed {
+		detail.Card.LicenseConfirmed = true
+		if latest != nil {
+			detail.Card.LicenseConfirmedAt = latest.ConfirmedAt.UTC().Format(time.RFC3339)
+			detail.Card.LicenseConfirmedBy = latest.Operator
+		}
+	}
+	if history, err := s.Store.ListLicenseConfirmations(ctx, s.org(), b.ModelName, 10); err == nil {
+		detail.LicenseConfirmations = history
+	}
 	if active, found, _ := s.Store.FindActiveByBundle(ctx, b.ID, s.Manifest.BundleVersion, "models"); found {
 		copied := active
 		detail.Install = &copied
@@ -204,7 +258,7 @@ func (s *Service) Preflight(ctx context.Context, id, variant string, options []s
 	if s.ImageMeta != nil {
 		core, template = s.ImageMeta()
 	}
-	confirmed, err := s.Store.LicenseConfirmed(ctx, b.ID, s.Manifest.BundleVersion, b.License.AcknowledgementVersion, operator)
+	confirmed, err := s.Store.LicenseConfirmed(ctx, s.org(), b.ModelName, b.License.Version)
 	if err != nil {
 		return PreflightResult{}, err
 	}
@@ -224,7 +278,7 @@ func (s *Service) CreateInstall(ctx context.Context, id string, request CreateIn
 	if err != nil {
 		return Install{}, err
 	}
-	confirmed, err := s.Store.LicenseConfirmed(ctx, b.ID, s.Manifest.BundleVersion, b.License.AcknowledgementVersion, operator)
+	confirmed, err := s.Store.LicenseConfirmed(ctx, s.org(), b.ModelName, b.License.Version)
 	if err != nil {
 		return Install{}, err
 	}
@@ -314,22 +368,35 @@ func (s *Service) Action(ctx context.Context, installID, action string) error {
 	}
 }
 
-// ConfirmLicense 记录许可确认。
-func (s *Service) ConfirmLicense(ctx context.Context, id, deliveryMethod, operator string) error {
+// ConfirmLicense 记录“模型 + 许可版本”的确认；同一版本重复提交保持幂等。
+func (s *Service) ConfirmLicense(ctx context.Context, id, deliveryMethod, operator string) (LicenseConfirmation, error) {
 	b, ok := s.Manifest.FindBundle(id)
 	if !ok {
-		return &ValidationError{BundleID: id, Field: "id", Message: "套装不存在"}
+		return LicenseConfirmation{}, &ValidationError{BundleID: id, Field: "id", Message: "套装不存在"}
 	}
-	return s.Store.ConfirmLicense(ctx, LicenseConfirmation{
-		ID:                     fmt.Sprintf("lic-%d", s.now().UnixNano()),
-		BundleID:               b.ID,
-		BundleVersion:          s.Manifest.BundleVersion,
-		AcknowledgementVersion: b.License.AcknowledgementVersion,
-		LicenseSnapshotDate:    b.License.SnapshotDate,
-		DeliveryMethod:         deliveryMethod,
-		Operator:               operator,
-		ConfirmedAt:            s.now(),
-	})
+	confirmation := LicenseConfirmation{
+		ID:             fmt.Sprintf("lic-%d", s.now().UnixNano()),
+		Org:            s.org(),
+		ModelName:      b.ModelName,
+		LicenseVersion: b.License.Version,
+		LicenseName:    b.License.Name,
+		OfficialURL:    b.License.OfficialURL,
+		BundleID:       b.ID,
+		BundleVersion:  s.Manifest.BundleVersion,
+		DeliveryMethod: deliveryMethod,
+		Operator:       operator,
+		Environment:    s.environment(),
+		ConfirmedAt:    s.now(),
+	}
+	if err := s.Store.ConfirmLicense(ctx, confirmation); err != nil {
+		return LicenseConfirmation{}, err
+	}
+	// 幂等写入时保留首次记录：返回库里已有的那条，避免前端显示重复确认。
+	history, _ := s.Store.ListLicenseConfirmations(ctx, s.org(), b.ModelName, 1)
+	if len(history) > 0 {
+		return history[0], nil
+	}
+	return confirmation, nil
 }
 
 // Link 把已齐备的文件关联到现有实例。

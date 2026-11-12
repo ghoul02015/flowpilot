@@ -14,6 +14,7 @@ import {
   getModelBundle,
   getModelBundles,
   linkModelBundle,
+  modelBundleLicenseFileURL,
   preflightModelBundle,
   type BundleCard,
   type BundleCheck,
@@ -164,6 +165,12 @@ export default function ModelBundles() {
     }
   }
 
+  function openLicense(id: string) {
+    void openDetail(id)
+    // openDetail 先把页签重置为概览，这里在同一轮事件中覆盖为许可页。
+    setDetailTab('license')
+  }
+
   async function refreshDetail() {
     if (!detailId) return
     try {
@@ -205,7 +212,7 @@ export default function ModelBundles() {
             <div className="flex items-start justify-between gap-2">
               <div>
                 <h3 className="text-sm font-semibold text-slate-900">{card.name}</h3>
-                <p className="mt-1 font-mono text-[11px] text-slate-500">{card.modelName}</p>
+                <p className="mt-1 text-[13px] leading-5 text-slate-700">模型：{card.modelName}</p>
               </div>
               <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${stateTone(card.state.state)}`}>{stateText[card.state.state] ?? card.state.state}</span>
             </div>
@@ -222,10 +229,10 @@ export default function ModelBundles() {
               <div><dt className="text-slate-400">必需 / 可选文件</dt><dd className="mt-0.5 font-medium text-slate-700">{card.requiredItems} / {card.optionalItems}</dd></div>
               <div><dt className="text-slate-400">必需字节</dt><dd className="mt-0.5 font-medium text-slate-700">{formatBytes(card.requiredBytes)}</dd></div>
               <div><dt className="text-slate-400">已就绪</dt><dd className="mt-0.5 font-medium text-slate-700">{card.state.requiredPresent} / {card.state.requiredTotal}</dd></div>
-              <div><dt className="text-slate-400">许可状态</dt><dd className="mt-0.5 font-medium text-amber-700">{card.license.reviewStatus === 'approved' ? '已审核' : '待法务审核'}</dd></div>
+              <div><dt className="text-slate-400">许可文本</dt><dd className={`mt-0.5 font-medium ${card.licenseConfirmed ? 'text-teal-700' : 'text-amber-700'}`}>{card.licenseConfirmed ? '已确认' : '待确认'}</dd></div>
             </dl>
 
-            {card.license.commercialUIRequired && <p className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-[11px] leading-4 text-amber-800">商用界面需显著展示 {card.modelName}；确认许可不代表获得商业授权。</p>}
+            <p className="mt-2 text-[11px] leading-5 text-slate-500">使用须遵循模型许可 · <button type="button" className="text-teal-700 underline underline-offset-2" onClick={() => openLicense(card.id)}>查看许可</button></p>
 
             {active && <div className="mt-3">
               <ProgressBar value={active.totalBytes > 0 ? Math.round((active.completedBytes / active.totalBytes) * 100) : 0} />
@@ -255,7 +262,7 @@ export default function ModelBundles() {
 
         {detail && <>
           <div className="flex flex-wrap gap-1 border-b border-slate-100 pb-2">
-            {([['overview', '概览'], ['files', '文件与依赖'], ['hardware', '硬件与工作流'], ['license', '许可'], ['acceptance', '验收记录']] as ['overview' | 'files' | 'hardware' | 'license' | 'acceptance', string][]).map(([key, label]) => (
+            {([['overview', '概览'], ['files', '文件与依赖'], ['hardware', '硬件与工作流'], ['license', '许可与声明'], ['acceptance', '验收记录']] as ['overview' | 'files' | 'hardware' | 'license' | 'acceptance', string][]).map(([key, label]) => (
               <button key={key} type="button" onClick={() => setDetailTab(key)} className={`rounded-md px-3 py-1.5 text-xs font-medium ${detailTab === key ? 'bg-teal-50 text-teal-800' : 'text-slate-500 hover:bg-slate-100'}`}>{label}</button>
             ))}
           </div>
@@ -308,15 +315,48 @@ export default function ModelBundles() {
           </div>}
 
           {detailTab === 'license' && <div className="space-y-3 text-sm">
-            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-6 text-amber-900">
-              <p className="flex items-center gap-1.5 font-semibold"><ShieldAlert className="size-4" />{detail.card.license.name}</p>
-              <p>审核状态：{detail.card.license.reviewStatus === 'approved' ? '已审核' : '待法务审核'} · 快照 {detail.card.license.snapshotDate}</p>
-              <p>NOTICE：{detail.card.license.noticeRequired ? '需要随交付提供' : '无'} · 商用 UI 展示模型名：{detail.card.license.commercialUIRequired ? `需要（${detail.card.modelName}）` : '无'}</p>
-              <p>默认适用地区排除欧盟、英国、韩国和美国；年化收入超过 100 万美元或提供 Hosted Service 需事先书面授权。</p>
-              <p className="mt-1 font-medium">{detail.card.license.deliveryBoundary}</p>
-              <a className="mt-1 inline-flex items-center gap-1 text-teal-700 underline" href={detail.card.license.sourceURL} target="_blank" rel="noreferrer">查看许可原文<ExternalLink className="size-3" /></a>
+            <div className="overflow-hidden rounded-lg border border-slate-200">
+              <dl className="divide-y divide-slate-100 text-xs">
+                <LicenseRow label="模型名称" value={detail.card.license.modelName} strong />
+                <LicenseRow label="许可名称" value={detail.card.license.name} />
+                <LicenseRow label="许可日期" value={detail.card.license.licenseDate} />
+                <LicenseRow label="本地快照日期" value={detail.card.license.snapshotDate} />
+                <LicenseRow label="许可文本确认" value={detail.card.licenseConfirmed ? '已确认' : '待确认'} tone={detail.card.licenseConfirmed ? 'text-teal-700' : 'text-amber-700'} />
+                {detail.card.licenseConfirmed && <LicenseRow label="确认人" value={detail.card.licenseConfirmedBy ?? '—'} />}
+                {detail.card.licenseConfirmed && <LicenseRow label="确认时间" value={detail.card.licenseConfirmedAt ? new Date(detail.card.licenseConfirmedAt).toLocaleString('zh-CN', { hour12: false }) : '—'} />}
+                <LicenseRow label="内部审核" value={detail.card.license.reviewStatus === 'approved' ? '已通过' : '待法务审核'} />
+                <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                  <dt className="text-slate-500">官方许可</dt>
+                  <dd><a className="inline-flex items-center gap-1 text-teal-700 underline" href={detail.card.license.officialURL} target="_blank" rel="noreferrer">查看官方许可<ExternalLink className="size-3" /></a></dd>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                  <dt className="text-slate-500">本地文件</dt>
+                  <dd className="flex gap-3">
+                    <a className="inline-flex items-center gap-1 text-teal-700 underline" href={modelBundleLicenseFileURL(detail.card.id, 'license')} download>下载 LICENSE<Download className="size-3" /></a>
+                    <a className="inline-flex items-center gap-1 text-teal-700 underline" href={modelBundleLicenseFileURL(detail.card.id, 'notice')} download>下载 NOTICE<Download className="size-3" /></a>
+                  </dd>
+                </div>
+              </dl>
             </div>
-            <p className="text-xs text-slate-500">确认记录会写入审计；确认只代表你已阅读，不代表平台替你取得授权。</p>
+
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs leading-6 text-slate-600">
+              <p className="flex items-center gap-1.5 font-semibold text-slate-700"><ShieldAlert className="size-4" />主要许可限制</p>
+              <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                {detail.card.license.summary.map((line) => <li key={line}>{line}</li>)}
+              </ul>
+              <p className="mt-2">NOTICE：{detail.card.license.noticeRequired ? '随交付提供' : '无'} · 商用界面展示模型名：{detail.card.license.commercialUIRequired ? `需要（${detail.card.license.modelName}）` : '无'}</p>
+            </div>
+
+            {detail.licenseConfirmations.length > 0 && <div className="rounded-lg border border-slate-200 p-3">
+              <p className="text-xs font-semibold text-slate-700">确认历史</p>
+              <ul className="mt-1 space-y-1 text-[11px] text-slate-600">
+                {detail.licenseConfirmations.map((item) => <li key={item.id}>
+                  {new Date(item.confirmedAt).toLocaleString('zh-CN', { hour12: false })} · {item.operator || '—'} 确认了 {item.modelName} 许可文本（版本 {item.licenseVersion}）· 套餐 {item.bundleId}
+                </li>)}
+              </ul>
+            </div>}
+
+            <p className="text-xs leading-5 text-slate-500">许可文本确认不代表 MiniMax 授予商业授权，也不代表平台完成法务审核。如需书面授权，请通过 MiniMax 官方渠道办理。</p>
           </div>}
 
           {detailTab === 'acceptance' && <div className="space-y-2 text-sm">
@@ -338,7 +378,13 @@ export default function ModelBundles() {
     {wizardOpen && detailId && <InstallWizard
       bundleId={detailId}
       instances={instances}
-      onClose={() => { setWizardOpen(false); void load() }}
+      onClose={() => {
+        setWizardOpen(false)
+        // 从卡片直接进入向导时没有加载详情，关闭后必须清掉 detailId，
+        // 否则详情抽屉会被残留 ID 重新打开成“正在读取…”。
+        if (!detail) setDetailId(null)
+        void load()
+      }}
     />}
 
     {acceptanceOpen && detail && <AcceptanceDialog
@@ -354,6 +400,13 @@ function Info({ label, value }: { label: string; value: string }) {
   return <div className="rounded-lg border border-slate-200 p-2.5">
     <p className="text-[11px] text-slate-400">{label}</p>
     <p className="mt-0.5 text-sm font-medium text-slate-700">{value}</p>
+  </div>
+}
+
+function LicenseRow({ label, value, strong, tone }: { label: string; value: string; strong?: boolean; tone?: string }) {
+  return <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+    <dt className="text-slate-500">{label}</dt>
+    <dd className={`text-right ${strong ? 'font-semibold text-slate-900' : 'text-slate-700'} ${tone ?? ''}`}>{value}</dd>
   </div>
 }
 
@@ -414,6 +467,66 @@ function InstallProgress({ install, bundleId, onChanged }: { install: BundleInst
   </div>
 }
 
+function LicenseConfirmDialog({ bundleId, detail, onConfirmed, onClose }: { bundleId: string; detail: BundleDetail; onConfirmed: () => void; onClose: () => void }) {
+  const license = detail.card.license
+  const [checked, setChecked] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  async function confirm() {
+    if (!checked || busy) return
+    setBusy(true)
+    try {
+      await confirmModelBundleLicense(bundleId)
+      toast.success('许可文本已确认', { description: `${license.modelName} · 版本 ${license.version}` })
+      onConfirmed()
+    } catch (err) {
+      toast.error('许可确认失败', { description: err instanceof Error ? err.message : '请稍后重试' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+    <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-2xl">
+      <DialogHeader>
+        <DialogTitle>使用 {license.modelName} 前请确认许可条件</DialogTitle>
+        <DialogDescription>
+          当前安装套餐：{detail.card.name}<br />
+          模型：{license.modelName}<br />
+          许可版本：{license.version}
+        </DialogDescription>
+      </DialogHeader>
+
+      <div className="space-y-3 text-sm">
+        <p className="text-xs leading-6 text-slate-600">本模型适用《{license.name}》。部署或启用前，请确认当前使用方式符合许可要求：</p>
+        <ul className="list-disc space-y-1 rounded-lg border border-slate-200 bg-slate-50 p-3 pl-7 text-xs leading-5 text-slate-700">
+          {license.summary.map((line) => <li key={line}>{line}</li>)}
+        </ul>
+        <div className="flex flex-wrap gap-3 text-xs">
+          <a className="inline-flex items-center gap-1 text-teal-700 underline" href={license.officialURL} target="_blank" rel="noreferrer">查看官方许可<ExternalLink className="size-3" /></a>
+          <a className="inline-flex items-center gap-1 text-teal-700 underline" href={modelBundleLicenseFileURL(bundleId, 'license')} download>下载许可快照<Download className="size-3" /></a>
+          {license.noticeRequired && <a className="inline-flex items-center gap-1 text-teal-700 underline" href={modelBundleLicenseFileURL(bundleId, 'notice')} download>下载 NOTICE<Download className="size-3" /></a>}
+        </div>
+        <p className="text-[11px] leading-5 text-slate-500">官方页面暂时无法访问时，请先查看平台保存的许可快照；外部网站不可用不会影响本地许可文本。</p>
+
+        <label className="flex items-start gap-2 rounded-lg border border-slate-200 p-3 text-xs leading-5 text-slate-700">
+          <input type="checkbox" className="mt-0.5 size-4 shrink-0 accent-teal-700" checked={checked} onChange={(event) => setChecked(event.target.checked)} />
+          <span>我已阅读并理解许可条款，并确认当前部署及使用方式符合许可条件。</span>
+        </label>
+        <p className="text-[11px] leading-5 text-slate-500">该确认仅表示部署方已阅读并自行确认，不代表本平台授予商业授权或完成法务审核。</p>
+      </div>
+
+      <DialogFooter className="flex-wrap items-center gap-2">
+        <a className="btn-secondary mr-auto h-9 px-3 text-xs" href={license.officialURL} target="_blank" rel="noreferrer">查看官方许可<ExternalLink className="size-3.5" /></a>
+        <button type="button" className="btn-secondary h-9 px-3 text-xs" onClick={onClose}>取消</button>
+        <button type="button" className="btn-primary h-9 px-3 text-xs" disabled={!checked || busy} onClick={() => void confirm()}>
+          {busy ? <LoaderCircle className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}确认并继续安装
+        </button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
+}
+
 function InstallWizard({ bundleId, instances, onClose }: { bundleId: string; instances: string[]; onClose: () => void }) {
   const [detail, setDetail] = useState<BundleDetail | null>(null)
   const [step, setStep] = useState(1)
@@ -421,14 +534,19 @@ function InstallWizard({ bundleId, instances, onClose }: { bundleId: string; ins
   const [selected, setSelected] = useState<string[]>([])
   const [preflight, setPreflight] = useState<BundlePreflight | null>(null)
   const [preflightError, setPreflightError] = useState('')
-  const [acknowledged, setAcknowledged] = useState(false)
+  const [licenseConfirmed, setLicenseConfirmed] = useState(false)
+  const [licenseOpen, setLicenseOpen] = useState(false)
+  const [afterLicense, setAfterLicense] = useState<'preflight' | 'install'>('preflight')
   const [install, setInstall] = useState<BundleInstall | null>(null)
   const [linkInstance, setLinkInstance] = useState('')
   const [busy, setBusy] = useState(false)
   const requestKey = useRef(`bundle-${bundleId}-${Date.now()}`)
 
   useEffect(() => {
-    void getModelBundle(bundleId).then(setDetail).catch((err: unknown) => setPreflightError(err instanceof Error ? err.message : '读取详情失败'))
+    void getModelBundle(bundleId).then((data) => {
+      setDetail(data)
+      setLicenseConfirmed(data.card.licenseConfirmed)
+    }).catch((err: unknown) => setPreflightError(err instanceof Error ? err.message : '读取详情失败'))
   }, [bundleId])
 
   useEffect(() => {
@@ -466,25 +584,31 @@ function InstallWizard({ bundleId, instances, onClose }: { bundleId: string; ins
     }
   }
 
-  async function confirmLicense() {
-    setBusy(true)
-    try {
-      await confirmModelBundleLicense(bundleId)
-      setAcknowledged(true)
-      setStep(4)
-    } catch (err) {
-      toast.error('许可确认失败', { description: err instanceof Error ? err.message : '请稍后重试' })
-    } finally {
-      setBusy(false)
+  function openLicenseDialog(next: 'preflight' | 'install') {
+    setAfterLicense(next)
+    setLicenseOpen(true)
+  }
+
+  async function handleLicenseConfirmed() {
+    setLicenseConfirmed(true)
+    setLicenseOpen(false)
+    if (afterLicense === 'install') {
+      await startInstall(true)
+    } else {
+      await runPreflight()
     }
   }
 
-  async function startInstall() {
+  async function startInstall(skipLicenseCheck = false) {
+    if (!skipLicenseCheck && !licenseConfirmed) {
+      openLicenseDialog('install')
+      return
+    }
     setBusy(true)
     try {
       const created = await createBundleInstall(bundleId, { variant, selectedOptions: selected, requestKey: requestKey.current })
       setInstall(created)
-      setStep(5)
+      setStep(4)
       toast.success('安装计划已创建', { description: '任务已进入串行队列，可在任务中心查看' })
     } catch (err) {
       toast.error('创建安装失败', { description: err instanceof Error ? err.message : '请检查预检结果' })
@@ -507,12 +631,22 @@ function InstallWizard({ bundleId, instances, onClose }: { bundleId: string; ins
   }
 
   const blockingCheck = preflight?.checks.find((check: BundleCheck) => check.status === 'block')
+  const licenseBlocked = blockingCheck?.code === 'license'
+
+  if (licenseOpen && detail) {
+    return <LicenseConfirmDialog
+      bundleId={bundleId}
+      detail={detail}
+      onConfirmed={() => void handleLicenseConfirmed()}
+      onClose={() => { setLicenseOpen(false); setAfterLicense('preflight') }}
+    />
+  }
 
   return <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
     <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-3xl">
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2"><Download className="size-5 text-teal-700" />安装向导 · {detail?.card.name ?? ''}</DialogTitle>
-        <DialogDescription>第 {Math.min(step, 5)} 步 / 共 5 步 · 串行下载，单文件失败不会影响已完成文件</DialogDescription>
+        <DialogDescription>第 {Math.min(step, 4)} 步 / 共 4 步 · 串行下载，单文件失败不会影响已完成文件</DialogDescription>
       </DialogHeader>
 
       {step === 1 && detail && <div className="space-y-3">
@@ -552,32 +686,21 @@ function InstallWizard({ bundleId, instances, onClose }: { bundleId: string; ins
           {check.required && <p className="text-[11px] text-slate-500">要求：{check.required}</p>}
           {check.remediation && <p className="text-[11px] text-amber-700">建议：{check.remediation}</p>}
         </div>)}
-        <p className="text-[11px] text-slate-500">预检不产生任何写操作；磁盘不足或镜像版本不满足时将阻断安装。</p>
+        <p className="text-[11px] text-slate-500">预检不产生任何写操作；磁盘不足或镜像版本不满足时将阻断安装。许可确认按“模型 + 许可版本”生效，同模型的其他套餐无需重复确认。</p>
       </div>}
 
-      {step === 3 && detail && <div className="space-y-2 text-sm">
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-6 text-amber-900">
-          <p className="font-semibold">{detail.card.license.name}</p>
-          <p>审核状态：待法务审核 · 版本 {detail.card.license.acknowledgementVersion}</p>
-          <p>{detail.card.license.deliveryBoundary}</p>
-        </div>
-        <label className="flex items-start gap-2 text-xs text-slate-700">
-          <input type="checkbox" className="mt-0.5" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} />
-          <span>我已阅读当前许可版本，理解该确认仅代表阅读记录，不代表获得商业授权；商用界面需展示 {detail.card.modelName}，交付需附 NOTICE。</span>
-        </label>
-      </div>}
-
-      {step === 4 && preflight && <div className="space-y-2 text-sm">
+      {step === 3 && preflight && <div className="space-y-2 text-sm">
         <div className="rounded-lg border border-slate-200 p-3 text-xs text-slate-600">
           <p className="font-semibold text-slate-700">执行摘要</p>
           <p className="mt-1">变体：{variant} · 总下载量约 {formatBytes(preflight.plan?.totalBytes ?? 0)}</p>
           <p>串行执行：同一时刻只下载一个文件，失败项可单独重试。</p>
           <p>创建后可在任务中心查看进度；取消不会删除已完成文件。</p>
+          <p className="mt-1">许可：{licenseConfirmed ? `已确认 ${detail?.card.license.modelName}（版本 ${detail?.card.license.version}）` : `待确认 ${detail?.card.license.modelName}`}</p>
         </div>
         {blockingCheck && <p className="rounded-md bg-rose-50 p-2 text-xs text-rose-700">存在阻断项：{blockingCheck.detail}</p>}
       </div>}
 
-      {step === 5 && install && <div className="space-y-3">
+      {step === 4 && install && <div className="space-y-3">
         <InstallProgress install={install} bundleId={bundleId} onChanged={() => {
           void getBundleInstall(bundleId, install.id).then(setInstall).catch(() => {})
         }} />
@@ -598,17 +721,15 @@ function InstallWizard({ bundleId, instances, onClose }: { bundleId: string; ins
         {step === 1 && <button type="button" className="btn-primary" disabled={busy} onClick={() => void runPreflight()}>{busy ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}运行预检</button>}
         {step === 2 && <>
           <button type="button" className="btn-secondary" onClick={() => setStep(1)}>上一步</button>
-          <button type="button" className="btn-primary" disabled={Boolean(blockingCheck)} onClick={() => setStep(3)}>下一步</button>
+          {licenseBlocked
+            ? <button type="button" className="btn-primary" onClick={() => openLicenseDialog('preflight')}>确认许可并继续</button>
+            : <button type="button" className="btn-primary" disabled={Boolean(blockingCheck)} onClick={() => setStep(3)}>下一步</button>}
         </>}
         {step === 3 && <>
           <button type="button" className="btn-secondary" onClick={() => setStep(2)}>上一步</button>
-          <button type="button" className="btn-primary" disabled={!acknowledged || busy} onClick={() => void confirmLicense()}>确认许可并继续</button>
-        </>}
-        {step === 4 && <>
-          <button type="button" className="btn-secondary" onClick={() => setStep(3)}>上一步</button>
           <button type="button" className="btn-primary" disabled={busy || Boolean(blockingCheck)} onClick={() => void startInstall()}>{busy ? <LoaderCircle className="size-4 animate-spin" /> : <Download className="size-4" />}创建安装任务</button>
         </>}
-        {step === 5 && <button type="button" className="btn-secondary" onClick={onClose}>关闭（任务在后台继续）</button>}
+        {step === 4 && <button type="button" className="btn-secondary" onClick={onClose}>关闭（任务在后台继续）</button>}
       </DialogFooter>
     </DialogContent>
   </Dialog>

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -45,6 +46,8 @@ func (s *stubDownloader) Get(_ context.Context, id string) (bundle.DownloadState
 }
 
 func (s *stubDownloader) Action(_ context.Context, _, _ string) error { return nil }
+
+func (s *stubDownloader) Delete(_ context.Context, _ string) error { return nil }
 
 func (s *stubDownloader) FindByTarget(_ context.Context, _, _ string) (bundle.DownloadState, bool) {
 	return bundle.DownloadState{}, false
@@ -85,6 +88,7 @@ func newBundleTestServer(t *testing.T) (http.Handler, *bundle.Service) {
 	mux.HandleFunc("POST /api/v1/model-bundles/{id}/installs", handler.createModelBundleInstall)
 	mux.HandleFunc("GET /api/v1/model-bundles/{id}/installs/{installId}", handler.getModelBundleInstall)
 	mux.HandleFunc("POST /api/v1/model-bundles/{id}/license", handler.confirmModelBundleLicense)
+	mux.HandleFunc("GET /api/v1/model-bundles/{id}/license/{file}", handler.downloadModelBundleLicenseFile)
 	mux.HandleFunc("POST /api/v1/model-bundles/{id}/acceptances", handler.createModelBundleAcceptance)
 	mux.HandleFunc("GET /api/v1/model-bundles/{id}/acceptances", handler.listModelBundleAcceptances)
 	return handler.requireAuth(mux), service
@@ -238,5 +242,67 @@ func TestModelBundleAcceptance(t *testing.T) {
 	response, list := doJSON(t, handler, http.MethodGet, "/api/v1/model-bundles/h3-image-base/acceptances", nil)
 	if response.Code != http.StatusOK || list["total"].(float64) != 1 {
 		t.Fatalf("验收列表异常：%v", list)
+	}
+}
+
+// TestModelLicenseIsPerModel 验证许可确认按“模型 + 版本”生效：
+// S1 确认后同模型的 S2 不再要求确认，但 S3（MiniMax-H3）必须单独确认。
+func TestModelLicenseIsPerModel(t *testing.T) {
+	handler, _ := newBundleTestServer(t)
+	if response, _ := doJSON(t, handler, http.MethodPost, "/api/v1/model-bundles/h3-image-base/license", map[string]any{"deliveryMethod": "online"}); response.Code != http.StatusOK {
+		t.Fatalf("S1 许可确认应 200，实际 %d", response.Code)
+	}
+	_, s2 := doJSON(t, handler, http.MethodGet, "/api/v1/model-bundles/h3-image-pro", nil)
+	card := s2["card"].(map[string]any)
+	if card["licenseConfirmed"] != true {
+		t.Fatal("S2 与 S1 同模型，应复用同一确认")
+	}
+	_, s3 := doJSON(t, handler, http.MethodGet, "/api/v1/model-bundles/h3-av-base", nil)
+	if s3["card"].(map[string]any)["licenseConfirmed"] == true {
+		t.Fatal("S3 使用 MiniMax-H3，不能复用 H3-Image 的确认")
+	}
+	// 预检结论必须与模型归属一致。
+	_, s2Preflight := doJSON(t, handler, http.MethodPost, "/api/v1/model-bundles/h3-image-pro/preflight", map[string]any{"variant": "default"})
+	for _, raw := range s2Preflight["checks"].([]any) {
+		check := raw.(map[string]any)
+		if check["code"] == "license" && check["status"] != "pass" {
+			t.Fatalf("S2 许可项应通过，实际 %v", check["status"])
+		}
+	}
+	_, s3Preflight := doJSON(t, handler, http.MethodPost, "/api/v1/model-bundles/h3-av-base/preflight", map[string]any{"variant": "default"})
+	for _, raw := range s3Preflight["checks"].([]any) {
+		check := raw.(map[string]any)
+		if check["code"] == "license" && check["status"] != "block" {
+			t.Fatalf("S3 许可项应阻断，实际 %v", check["status"])
+		}
+	}
+}
+
+// TestModelBundleLicenseFiles 验证 LICENSE／NOTICE 可直接下载且内容为对应模型原文。
+func TestModelBundleLicenseFiles(t *testing.T) {
+	handler, _ := newBundleTestServer(t)
+	fetch := func(target string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	license := fetch("/api/v1/model-bundles/h3-image-base/license/license")
+	if license.Code != http.StatusOK || !strings.Contains(license.Body.String(), "MiniMax-H3-Image COMMUNITY LICENSE AGREEMENT") {
+		t.Fatalf("H3-Image LICENSE 下载异常：%d %s", license.Code, license.Body.String()[:80])
+	}
+	if !strings.Contains(license.Header().Get("Content-Disposition"), "LICENSE") {
+		t.Fatal("LICENSE 下载应带附件文件名")
+	}
+	notice := fetch("/api/v1/model-bundles/h3-image-base/license/notice")
+	if !strings.Contains(notice.Body.String(), "MiniMax-H3-Image is licensed under") {
+		t.Fatal("NOTICE 内容应为 H3-Image 官方声明")
+	}
+	h3Notice := fetch("/api/v1/model-bundles/h3-av-base/license/notice")
+	if !strings.Contains(h3Notice.Body.String(), "MiniMax H3 is licensed under") {
+		t.Fatal("H3 NOTICE 不应套用 H3-Image 文案")
+	}
+	if bad := fetch("/api/v1/model-bundles/h3-image-base/license/unknown"); bad.Code != http.StatusNotFound {
+		t.Fatalf("非法文件名应 404，实际 %d", bad.Code)
 	}
 }

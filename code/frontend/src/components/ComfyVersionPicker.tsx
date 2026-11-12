@@ -25,9 +25,12 @@ function optionLabel(version: ComfyVersion): string {
   return `${prefix}${version.version || version.ref} · ${version.commitShort}${date ? ` · ${date}` : ''}`
 }
 
+// 同一会话内复用版本目录：重复打开构建弹窗时不需要再等一次在线请求。
+let catalogCache: ComfyVersionCatalog | null = null
+
 // ComfyVersionPicker 在线选择 ComfyUI 版本，并把选择结果固定到具体 commit。
 export function ComfyVersionPicker({ value, onChange }: Props) {
-  const [catalog, setCatalog] = useState<ComfyVersionCatalog | null>(null)
+  const [catalog, setCatalog] = useState<ComfyVersionCatalog | null>(catalogCache)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [includePrerelease, setIncludePrerelease] = useState(false)
@@ -42,6 +45,7 @@ export function ComfyVersionPicker({ value, onChange }: Props) {
     setError('')
     try {
       const next = await getComfyVersions(refresh)
+      catalogCache = next
       setCatalog(next)
       if (value?.kind === 'branch' && next.branch) {
         onChange(next.branch)
@@ -59,9 +63,8 @@ export function ComfyVersionPicker({ value, onChange }: Props) {
   }
 
   useEffect(() => {
-    const controller = new AbortController()
-    void load(false)
-    return () => controller.abort()
+    // 已有缓存时直接使用；刷新由按钮显式触发。
+    if (!catalogCache) void load(false)
     // 仅在弹窗挂载时读取；后续刷新由按钮触发。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

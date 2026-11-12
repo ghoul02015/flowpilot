@@ -32,7 +32,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/tasks"
 )
 
-const Version = "0.1.0.4"
+const Version = "0.1.0.5"
 
 type Handler struct {
 	docker        *docker.Client
@@ -151,7 +151,7 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	// 备份（0.0.9.12）。
 	mux.HandleFunc("GET /api/v1/backups", handler.listBackups)
 	mux.HandleFunc("POST /api/v1/backups", handler.createBackup)
-	// 模型组合套装（0.1.0.4）。
+	// 模型组合套装（0.1.0.4 引入，0.1.0.5 许可按模型确认）。
 	mux.HandleFunc("GET /api/v1/model-bundles", handler.listModelBundles)
 	mux.HandleFunc("GET /api/v1/model-bundles/{id}", handler.getModelBundle)
 	mux.HandleFunc("POST /api/v1/model-bundles/{id}/preflight", handler.preflightModelBundle)
@@ -159,6 +159,7 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("GET /api/v1/model-bundles/{id}/installs/{installId}", handler.getModelBundleInstall)
 	mux.HandleFunc("POST /api/v1/model-bundles/{id}/installs/{installId}/{action}", handler.modelBundleInstallAction)
 	mux.HandleFunc("POST /api/v1/model-bundles/{id}/license", handler.confirmModelBundleLicense)
+	mux.HandleFunc("GET /api/v1/model-bundles/{id}/license/{file}", handler.downloadModelBundleLicenseFile)
 	mux.HandleFunc("POST /api/v1/model-bundles/{id}/link", handler.linkModelBundle)
 	mux.HandleFunc("GET /api/v1/model-bundles/{id}/acceptances", handler.listModelBundleAcceptances)
 	mux.HandleFunc("POST /api/v1/model-bundles/{id}/acceptances", handler.createModelBundleAcceptance)

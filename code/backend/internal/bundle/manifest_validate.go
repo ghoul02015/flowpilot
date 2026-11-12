@@ -43,7 +43,9 @@ var (
 	sha256Pattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 	// revision 必须是不可变提交，禁止浮动分支。
 	revisionPattern = regexp.MustCompile(`^[a-f0-9]{40}$`)
-	floatingRefs    = map[string]bool{"main": true, "master": true, "head": true, "dev": true, "latest": true}
+	// 许可版本使用官方许可日期，便于判断是否需要重新确认。
+	licenseVersionPattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+	floatingRefs          = map[string]bool{"main": true, "master": true, "head": true, "dev": true, "latest": true}
 )
 
 // Validate 执行清单级与套装级严格校验。
@@ -67,6 +69,9 @@ func (m *Manifest) Validate() error {
 	}
 	if len(m.Bundles) == 0 {
 		return fmt.Errorf("清单未包含任何套装")
+	}
+	if err := m.validateLicenses(); err != nil {
+		return err
 	}
 
 	seenBundle := map[string]bool{}
@@ -278,19 +283,64 @@ func (b *Bundle) validateDependencyGraph() error {
 
 func (b *Bundle) validateLicense() error {
 	license := b.License
-	if strings.TrimSpace(license.Name) == "" || strings.TrimSpace(license.SourceURL) == "" {
-		return invalid(b.ID, "license", "名称与原始链接不能为空")
+	if strings.TrimSpace(license.ModelName) == "" || license.ModelName != b.ModelName {
+		return invalid(b.ID, "license.modelName", "必须与套装 modelName 一致")
 	}
-	if !strings.HasPrefix(license.SourceURL, "https://") {
-		return invalid(b.ID, "license.sourceURL", "必须是 https 链接")
+	if strings.TrimSpace(license.Name) == "" || strings.TrimSpace(license.OfficialURL) == "" {
+		return invalid(b.ID, "license", "名称与官方链接不能为空")
+	}
+	if !strings.HasPrefix(license.OfficialURL, "https://") {
+		return invalid(b.ID, "license.officialURL", "必须是 https 链接")
+	}
+	if !licenseVersionPattern.MatchString(license.Version) {
+		return invalid(b.ID, "license.version", "许可版本必须是 YYYY-MM-DD，实际 %q", license.Version)
 	}
 	if strings.TrimSpace(license.AcknowledgementVersion) == "" {
 		return invalid(b.ID, "license.acknowledgementVersion", "不能为空")
+	}
+	if len(license.Summary) == 0 {
+		return invalid(b.ID, "license.summary", "至少给出一条许可摘要")
+	}
+	if strings.TrimSpace(license.NoticeText) == "" {
+		return invalid(b.ID, "license.noticeText", "不能为空")
+	}
+	if !strings.HasPrefix(license.LicenseFile, "licenses/") || !strings.HasPrefix(license.NoticeFile, "licenses/") {
+		return invalid(b.ID, "license.licenseFile", "许可文件必须位于 licenses/ 下")
+	}
+	if len(license.SnapshotSHA256) != 64 {
+		return invalid(b.ID, "license.snapshotSHA256", "必须是完整 SHA256")
 	}
 	switch license.ReviewStatus {
 	case "needs_review", "approved", "rejected":
 	default:
 		return invalid(b.ID, "license.reviewStatus", "只允许 needs_review／approved／rejected，实际 %q", license.ReviewStatus)
+	}
+	return nil
+}
+
+// validateLicenses 校验模型级许可配置：键与模型名一致、不同模型不得共用同一许可版本。
+func (m *Manifest) validateLicenses() error {
+	if len(m.Licenses) == 0 {
+		return fmt.Errorf("清单未配置任何模型许可")
+	}
+	versionOwner := map[string]string{}
+	for key, license := range m.Licenses {
+		if strings.TrimSpace(key) == "" {
+			return fmt.Errorf("licenses 存在空模型名")
+		}
+		if license.ModelName != "" && license.ModelName != key {
+			return fmt.Errorf("licenses[%s].modelName 必须与键一致，实际 %q", key, license.ModelName)
+		}
+		if previous, ok := versionOwner[license.Version]; ok && previous != key {
+			return fmt.Errorf("模型 %s 与 %s 共用许可版本 %s：不允许把一个模型的条款套用到另一个模型", previous, key, license.Version)
+		}
+		versionOwner[license.Version] = key
+	}
+	for index := range m.Bundles {
+		b := &m.Bundles[index]
+		if _, ok := m.Licenses[b.ModelName]; !ok {
+			return invalid(b.ID, "modelName", "模型 %s 未配置许可", b.ModelName)
+		}
 	}
 	return nil
 }

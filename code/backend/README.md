@@ -1,6 +1,6 @@
 # FlowPilot 后端
 
-当前版本：`0.1.0.4`。
+当前版本：`0.1.0.5`。
 
 轻量 Go 服务同时提供前端静态页面和 Docker API。仅使用 Go 标准库，通过 `/var/run/docker.sock` 访问 Docker Engine，不引入第三方 Docker SDK。
 
@@ -93,6 +93,21 @@
 
 - `POST /api/v1/imports` `{path, category, name?, sha256?}`：将白名单目录（`FLOWPILOT_IMPORT_DIRS`，默认 `/data/import`，即宿主机安装目录下 `import/`）内的文件任务化复制入共享仓库；与下载共用任务模型（`kind=import`），支持暂停与 SHA256 校验；源路径越出白名单或非普通文件一律拒绝。
 
+### 模型组合套装（MiniMax H3）
+
+- `GET /api/v1/model-bundles`：五个套装卡片，含状态、字节、硬件结论、模型级许可与 `licenseConfirmed`。
+- `GET /api/v1/model-bundles/{id}`：详情（文件项、硬件、工作流、许可确认历史、验收记录）。
+- `POST /api/v1/model-bundles/{id}/preflight` `{variant, selectedOptions}`：四项预检（硬件／镜像／磁盘／许可），不产生写操作。
+- `POST /api/v1/model-bundles/{id}/installs` `{variant, selectedOptions, requestKey}`：创建幂等安装计划；许可未确认返回 422。
+- `GET /api/v1/model-bundles/{id}/installs/{installId}`：安装进度（含当前文件实时字节）。
+- `POST /api/v1/model-bundles/{id}/installs/{installId}/pause|resume|cancel|retry`：暂停／继续／取消／只重试失败项。
+- `POST /api/v1/model-bundles/{id}/license` `{deliveryMethod}`：确认该套装所属**模型**的当前许可版本；同模型同版本幂等，版本变化需重新确认。
+- `GET /api/v1/model-bundles/{id}/license/{license|notice}`：下载内置许可原文或 NOTICE 文本。
+- `POST /api/v1/model-bundles/{id}/link`：把已齐备文件关联到实例。
+- `GET|POST /api/v1/model-bundles/{id}/acceptances`：人工验收记录的查询与新增；`.../{acceptanceId}/export` 导出脱敏 JSON。
+
+统一任务中心把套装安装聚合为 `bundle-install`，任务 ID 为 `bundle-<安装 ID>`。
+
 ## 本机无 Go 环境时验证
 
 在项目根目录执行：
@@ -103,4 +118,4 @@ docker run --rm -v "$PWD/code/backend:/src" -w /src golang:1.25-alpine sh -c 'go
 
 ## 当前边界
 
-此版本没有认证、用户权限和数据库。挂载 Docker Socket 等同于授予容器较高的 Docker 管理权限，因此服务仅应监听受信任的本机或管理网络；生产版本需要收紧接口权限并补充认证。实例自启动开关在创建时确定，运行中修改待后续版本补充。
+此版本已启用管理员认证、会话与操作审计，并使用 SQLite 持久化；尚未提供多租户与细粒度角色权限。挂载 Docker Socket 等同于授予容器较高的 Docker 管理权限，因此服务仅应监听受信任的本机或管理网络。实例自启动开关在创建时确定，运行中修改待后续版本补充。

@@ -1141,14 +1141,23 @@ export async function getHardwareCompat(): Promise<CompatReport> {
 // ===== 模型组合套装（0.1.0.4）=====
 
 export interface BundleLicense {
+  modelName: string
   name: string
-  sourceURL: string
+  version: string
+  licenseDate: string
   snapshotDate: string
+  officialURL: string
+  sourceURL: string
   reviewStatus: string
   noticeRequired: boolean
   commercialUIRequired: boolean
   acknowledgementVersion: string
   deliveryBoundary: string
+  summary: string[]
+  noticeText: string
+  licenseFile: string
+  noticeFile: string
+  snapshotSHA256: string
 }
 
 export interface BundleItemState {
@@ -1239,6 +1248,9 @@ export interface BundleCard {
   hardwareLevel: string
   hardwareNote: string
   license: BundleLicense
+  licenseConfirmed: boolean
+  licenseConfirmedAt?: string
+  licenseConfirmedBy?: string
   certification: { hardwareClass: string; status: string; evidence: string }[]
   activeInstall?: BundleInstall
   latestAcceptance?: BundleAcceptance
@@ -1272,6 +1284,22 @@ export interface BundleDetail {
   hardware: { gpus: { index: number; name: string; memoryTotalMB: number }[]; unifiedMemory: boolean; hostModel: string; error?: string }
   install?: BundleInstall
   acceptances: BundleAcceptance[]
+  licenseConfirmations: BundleLicenseConfirmation[]
+}
+
+export interface BundleLicenseConfirmation {
+  id: string
+  org: string
+  modelName: string
+  licenseVersion: string
+  licenseName: string
+  officialURL: string
+  bundleId: string
+  bundleVersion: string
+  deliveryMethod: string
+  operator: string
+  environment: string
+  confirmedAt: string
 }
 
 export async function getModelBundles(): Promise<{ bundles: BundleCard[]; manifest: string; bundleVersion: string; checksum: string }> {
@@ -1286,8 +1314,14 @@ export async function preflightModelBundle(id: string, variant: string, selected
   return sendJSON<BundlePreflight>('POST', `/api/v1/model-bundles/${encodeURIComponent(id)}/preflight`, { variant, selectedOptions })
 }
 
-export async function confirmModelBundleLicense(id: string, deliveryMethod = 'online'): Promise<void> {
-  await sendJSON('POST', `/api/v1/model-bundles/${encodeURIComponent(id)}/license`, { deliveryMethod })
+export async function confirmModelBundleLicense(id: string, deliveryMethod = 'online'): Promise<BundleLicenseConfirmation> {
+  const result = await sendJSON<{ status: string; confirmation: BundleLicenseConfirmation }>('POST', `/api/v1/model-bundles/${encodeURIComponent(id)}/license`, { deliveryMethod })
+  return result.confirmation
+}
+
+// modelBundleLicenseFileURL 返回内置 LICENSE／NOTICE 的下载地址。
+export function modelBundleLicenseFileURL(id: string, file: 'license' | 'notice'): string {
+  return `/api/v1/model-bundles/${encodeURIComponent(id)}/license/${file}`
 }
 
 export async function createBundleInstall(id: string, payload: { variant: string; selectedOptions: string[]; requestKey: string }): Promise<BundleInstall> {

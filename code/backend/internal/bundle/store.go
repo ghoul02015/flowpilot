@@ -68,15 +68,21 @@ type InstallItem struct {
 }
 
 // LicenseConfirmation 是许可确认记录。
+// LicenseConfirmation 是一条按“模型 + 许可版本”的轻量确认记录。
+// 同一模型同一版本只保留一条；版本变化会生成新记录并触发重新确认。
 type LicenseConfirmation struct {
-	ID                     string    `json:"id"`
-	BundleID               string    `json:"bundleId"`
-	BundleVersion          string    `json:"bundleVersion"`
-	AcknowledgementVersion string    `json:"acknowledgementVersion"`
-	LicenseSnapshotDate    string    `json:"licenseSnapshotDate"`
-	DeliveryMethod         string    `json:"deliveryMethod"`
-	Operator               string    `json:"operator"`
-	ConfirmedAt            time.Time `json:"confirmedAt"`
+	ID             string    `json:"id"`
+	Org            string    `json:"org"`
+	ModelName      string    `json:"modelName"`
+	LicenseVersion string    `json:"licenseVersion"`
+	LicenseName    string    `json:"licenseName"`
+	OfficialURL    string    `json:"officialURL"`
+	BundleID       string    `json:"bundleId"`
+	BundleVersion  string    `json:"bundleVersion"`
+	DeliveryMethod string    `json:"deliveryMethod"`
+	Operator       string    `json:"operator"`
+	Environment    string    `json:"environment"`
+	ConfirmedAt    time.Time `json:"confirmedAt"`
 }
 
 // Acceptance 是人工验收记录；它与"慧浪认证"是两件事。
@@ -318,25 +324,64 @@ func (s *Store) ConfirmLicense(ctx context.Context, confirmation LicenseConfirma
 	if confirmation.ConfirmedAt.IsZero() {
 		confirmation.ConfirmedAt = time.Now().UTC()
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT OR REPLACE INTO bundle_license_confirmations
-		(id, bundle_id, bundle_version, acknowledgement_version, license_snapshot_date, delivery_method, operator, confirmed_at, request_id)
-		VALUES (?,?,?,?,?,?,?,?,?)`,
-		confirmation.ID, confirmation.BundleID, confirmation.BundleVersion, confirmation.AcknowledgementVersion,
-		confirmation.LicenseSnapshotDate, confirmation.DeliveryMethod, confirmation.Operator,
-		confirmation.ConfirmedAt.Format(time.RFC3339), "")
+	if confirmation.Org == "" {
+		confirmation.Org = "default"
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO model_license_confirmations
+		(id, org, model_name, license_version, license_name, official_url, bundle_id, bundle_version,
+		 delivery_method, operator, environment, confirmed_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		confirmation.ID, confirmation.Org, confirmation.ModelName, confirmation.LicenseVersion,
+		confirmation.LicenseName, confirmation.OfficialURL, confirmation.BundleID, confirmation.BundleVersion,
+		confirmation.DeliveryMethod, confirmation.Operator, confirmation.Environment,
+		confirmation.ConfirmedAt.UTC().Format(time.RFC3339))
 	return err
 }
 
-// LicenseConfirmed 查询同一版本与许可版本是否已确认。
-func (s *Store) LicenseConfirmed(ctx context.Context, bundleID, bundleVersion, acknowledgementVersion, operator string) (bool, error) {
+// LicenseConfirmed 判断指定组织是否已确认“该模型 + 该许可版本”。
+// 与套装无关：S1 确认后，S2 只要模型和版本相同就不再重复确认。
+func (s *Store) LicenseConfirmed(ctx context.Context, org, modelName, licenseVersion string) (bool, error) {
+	if org == "" {
+		org = "default"
+	}
 	var count int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM bundle_license_confirmations
-		WHERE bundle_id=? AND bundle_version=? AND acknowledgement_version=? AND operator=?`,
-		bundleID, bundleVersion, acknowledgementVersion, operator).Scan(&count)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM model_license_confirmations
+		WHERE org=? AND model_name=? AND license_version=?`, org, modelName, licenseVersion).Scan(&count)
 	if err != nil {
 		return false, err
 	}
 	return count > 0, nil
+}
+
+// ListLicenseConfirmations 返回某模型的确认历史（最新在前）。
+func (s *Store) ListLicenseConfirmations(ctx context.Context, org, modelName string, limit int) ([]LicenseConfirmation, error) {
+	if org == "" {
+		org = "default"
+	}
+	if limit <= 0 || limit > 50 {
+		limit = 10
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, org, model_name, license_version, license_name, official_url,
+		bundle_id, bundle_version, delivery_method, operator, environment, confirmed_at
+		FROM model_license_confirmations WHERE org=? AND model_name=?
+		ORDER BY confirmed_at DESC LIMIT ?`, org, modelName, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	list := []LicenseConfirmation{}
+	for rows.Next() {
+		var item LicenseConfirmation
+		var confirmedAt string
+		if err := rows.Scan(&item.ID, &item.Org, &item.ModelName, &item.LicenseVersion, &item.LicenseName,
+			&item.OfficialURL, &item.BundleID, &item.BundleVersion, &item.DeliveryMethod, &item.Operator,
+			&item.Environment, &confirmedAt); err != nil {
+			return nil, err
+		}
+		item.ConfirmedAt, _ = time.Parse(time.RFC3339, confirmedAt)
+		list = append(list, item)
+	}
+	return list, rows.Err()
 }
 
 // CreateAcceptance 保存人工验收记录。

@@ -1,7 +1,7 @@
 {
   "manifestVersion": "minimax-h3-bundles/v1",
   "bundleVersion": "1.0.0",
-  "generatedAt": "2026-11-12T04:30:00Z",
+  "generatedAt": "2026-11-12T09:00:00Z",
   "repositoryRoot": "models",
   "sources": [
     {
@@ -17,6 +17,55 @@
       "lastModified": "2026-11-11T12:10:29Z"
     }
   ],
+  "licenses": {
+    "MiniMax-H3-Image": {
+      "modelName": "MiniMax-H3-Image",
+      "name": "MiniMax-H3-Image Community License Agreement",
+      "version": "2026-11-10",
+      "licenseDate": "2026-11-10",
+      "snapshotDate": "2026-11-12",
+      "officialURL": "https://github.com/MiniMax-AI/MiniMax-H3-Image/blob/main/LICENSE",
+      "reviewStatus": "needs_review",
+      "noticeRequired": true,
+      "commercialUIRequired": true,
+      "acknowledgementVersion": "2026-11-10",
+      "deliveryBoundary": "许可文本确认仅表示部署方已阅读并自行确认，不代表本平台授予商业授权或完成法务审核。",
+      "summary": [
+        "默认适用地区不包括欧盟、英国、韩国和美国；",
+        "你及/或关联方年化收入超过 100 万美元，须事先取得 MiniMax 书面授权；",
+        "向第三方提供 Hosted Service，须事先取得 MiniMax 书面授权；",
+        "商业产品或服务的用户界面应显著展示“MiniMax-H3-Image”；",
+        "向第三方分发或交付时，应按要求提供许可协议及 NOTICE 文件。"
+      ],
+      "noticeText": "MiniMax-H3-Image is licensed under the MiniMax-H3-Image Community License Agreement, Copyright © 2026 MiniMax. All Rights Reserved.",
+      "licenseFile": "licenses/minimax-h3-image/LICENSE",
+      "noticeFile": "licenses/minimax-h3-image/NOTICE",
+      "snapshotSHA256": "0ec3bb5e6d9e885fa2aaf15e84689e50fd51f42b53fa24d3a64ed9d8c76d423b"
+    },
+    "MiniMax-H3": {
+      "modelName": "MiniMax-H3",
+      "name": "MiniMax H3 Community License Agreement",
+      "version": "2026-08-02",
+      "licenseDate": "2026-08-02",
+      "snapshotDate": "2026-11-12",
+      "officialURL": "https://github.com/MiniMax-AI/MiniMax-H3/blob/main/LICENSE",
+      "reviewStatus": "needs_review",
+      "noticeRequired": true,
+      "commercialUIRequired": true,
+      "acknowledgementVersion": "2026-08-02",
+      "deliveryBoundary": "许可文本确认仅表示部署方已阅读并自行确认，不代表本平台授予商业授权或完成法务审核。",
+      "summary": [
+        "默认适用地区不包括欧盟、英国、韩国和美国；",
+        "商业产品与服务年收入超过 2000 万美元，须事先取得 MiniMax 书面授权；",
+        "商业产品或服务的用户界面应显著展示“MiniMax H3”；",
+        "向第三方分发或交付时，应按要求提供许可协议及 NOTICE 文件。"
+      ],
+      "noticeText": "MiniMax H3 is licensed under the MiniMax H3 Community License Agreement, Copyright © 2026 MiniMax. All Rights Reserved.",
+      "licenseFile": "licenses/minimax-h3/LICENSE",
+      "noticeFile": "licenses/minimax-h3/NOTICE",
+      "snapshotSHA256": "59b99642b95ea21630e311198ddbfffbfe05aadba0c2f5d884cbdf4efcc90f44"
+    }
+  },
   "bundles": [
     {
       "id": "h3-image-base",
@@ -134,16 +183,6 @@
           "acceptancePreset": "4MP-T2I / 4MP-edit"
         }
       ],
-      "license": {
-        "name": "MiniMax H3 Community License Agreement",
-        "sourceURL": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE",
-        "snapshotDate": "2026-11-12",
-        "reviewStatus": "needs_review",
-        "noticeRequired": true,
-        "commercialUIRequired": true,
-        "acknowledgementVersion": "minimax-h3-license-2026-11",
-        "deliveryBoundary": "许可确认仅表示用户已阅读，不代表平台授予商业授权或完成法务审核。"
-      },
       "certificationByHardware": [],
       "experimental": false
     },
@@ -283,16 +322,6 @@
           "acceptancePreset": "4MP-T2I / 16MP-edit / multi-reference"
         }
       ],
-      "license": {
-        "name": "MiniMax H3 Community License Agreement",
-        "sourceURL": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE",
-        "snapshotDate": "2026-11-12",
-        "reviewStatus": "needs_review",
-        "noticeRequired": true,
-        "commercialUIRequired": true,
-        "acknowledgementVersion": "minimax-h3-license-2026-11",
-        "deliveryBoundary": "许可确认仅表示用户已阅读，不代表平台授予商业授权或完成法务审核。"
-      },
       "certificationByHardware": [],
       "experimental": false
     },
@@ -491,16 +520,6 @@
           "acceptancePreset": "5s-T2V / 5s-I2V"
         }
       ],
-      "license": {
-        "name": "MiniMax H3 Community License Agreement",
-        "sourceURL": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE",
-        "snapshotDate": "2026-11-12",
-        "reviewStatus": "needs_review",
-        "noticeRequired": true,
-        "commercialUIRequired": true,
-        "acknowledgementVersion": "minimax-h3-license-2026-11",
-        "deliveryBoundary": "许可确认仅表示用户已阅读，不代表平台授予商业授权或完成法务审核。"
-      },
       "certificationByHardware": [],
       "experimental": false
     },
@@ -731,16 +750,6 @@
           "acceptancePreset": "reference-R2V / V2V（实验）"
         }
       ],
-      "license": {
-        "name": "MiniMax H3 Community License Agreement",
-        "sourceURL": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE",
-        "snapshotDate": "2026-11-12",
-        "reviewStatus": "needs_review",
-        "noticeRequired": true,
-        "commercialUIRequired": true,
-        "acknowledgementVersion": "minimax-h3-license-2026-11",
-        "deliveryBoundary": "许可确认仅表示用户已阅读，不代表平台授予商业授权或完成法务审核。"
-      },
       "certificationByHardware": [],
       "experimental": true
     },
@@ -1053,16 +1062,6 @@
           "acceptancePreset": "4MP-T2I + 5s-T2V"
         }
       ],
-      "license": {
-        "name": "MiniMax H3 Community License Agreement",
-        "sourceURL": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE",
-        "snapshotDate": "2026-11-12",
-        "reviewStatus": "needs_review",
-        "noticeRequired": true,
-        "commercialUIRequired": true,
-        "acknowledgementVersion": "minimax-h3-license-2026-11",
-        "deliveryBoundary": "许可确认仅表示用户已阅读，不代表平台授予商业授权或完成法务审核。"
-      },
       "certificationByHardware": [],
       "experimental": true
     }

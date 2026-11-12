@@ -196,4 +196,43 @@ var Migrations = []Migration{
 		CREATE INDEX IF NOT EXISTS idx_bundle_acceptances_bundle ON bundle_acceptances(bundle_id, created_at);
 		CREATE INDEX IF NOT EXISTS idx_bundle_acceptances_instance ON bundle_acceptances(instance_name);`,
 	},
+	{
+		Version: 6,
+		Name:    "model-license-confirmations",
+		// 许可确认从“套装级”调整为“模型 + 许可版本级”：
+		// S1 与 S2 共用 MiniMax-H3-Image，确认一次即可；版本变化后必须重新确认。
+		SQL: `CREATE TABLE IF NOT EXISTS model_license_confirmations (
+			id TEXT PRIMARY KEY,
+			org TEXT NOT NULL DEFAULT 'default',
+			model_name TEXT NOT NULL,
+			license_version TEXT NOT NULL,
+			license_name TEXT NOT NULL DEFAULT '',
+			official_url TEXT NOT NULL DEFAULT '',
+			bundle_id TEXT NOT NULL DEFAULT '',
+			bundle_version TEXT NOT NULL DEFAULT '',
+			delivery_method TEXT NOT NULL DEFAULT '',
+			operator TEXT NOT NULL DEFAULT '',
+			environment TEXT NOT NULL DEFAULT '',
+			confirmed_at TEXT NOT NULL DEFAULT ''
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_model_license_unique
+			ON model_license_confirmations(org, model_name, license_version);
+		CREATE INDEX IF NOT EXISTS idx_model_license_model
+			ON model_license_confirmations(model_name, confirmed_at);
+
+		-- 兼容 0.1.0.4 的套装级确认记录：按套装归属映射到对应模型与许可版本。
+		INSERT OR IGNORE INTO model_license_confirmations
+			(id, org, model_name, license_version, license_name, official_url, bundle_id, bundle_version,
+			 delivery_method, operator, environment, confirmed_at)
+		SELECT 'legacy-' || id, 'default',
+			CASE WHEN bundle_id LIKE 'h3-image-%' THEN 'MiniMax-H3-Image' ELSE 'MiniMax-H3' END,
+			CASE WHEN bundle_id LIKE 'h3-image-%' THEN '2026-11-10' ELSE '2026-08-02' END,
+			CASE WHEN bundle_id LIKE 'h3-image-%' THEN 'MiniMax-H3-Image Community License Agreement'
+				ELSE 'MiniMax H3 Community License Agreement' END,
+			CASE WHEN bundle_id LIKE 'h3-image-%'
+				THEN 'https://github.com/MiniMax-AI/MiniMax-H3-Image/blob/main/LICENSE'
+				ELSE 'https://github.com/MiniMax-AI/MiniMax-H3/blob/main/LICENSE' END,
+			bundle_id, bundle_version, delivery_method, operator, 'default', confirmed_at
+		FROM bundle_license_confirmations;`,
+	},
 }

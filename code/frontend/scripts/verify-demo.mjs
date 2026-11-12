@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.1.0.4') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.1.0.5') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   // 认证（0.0.9.6）：未登录先看到登录页 → 初始化 → 登录 → 会话恢复。
@@ -320,7 +320,13 @@ try {
     await buildDialog.getByLabel('GPU / PyTorch 配方').waitFor()
     const versionSelect = buildDialog.getByLabel(/ComfyUI 版本/)
     await versionSelect.waitFor()
-    const selectedVersionValue = await versionSelect.inputValue()
+    // 首次打开需要等待在线版本目录返回，不能立即读值。
+    let selectedVersionValue = ''
+    const versionDeadline = Date.now() + 25000
+    while (Date.now() < versionDeadline && !selectedVersionValue) {
+      selectedVersionValue = await versionSelect.inputValue()
+      if (!selectedVersionValue) await page.waitForTimeout(500)
+    }
     if (!selectedVersionValue) throw new Error('构建弹窗未默认选择稳定 Release')
     await buildDialog.getByTestId('comfy-version-picker').getByText('本次构建固定到该 commit', { exact: false }).waitFor({ timeout: 20000 })
     check('构建弹窗默认稳定 Release 并展示固定 commit')
@@ -680,10 +686,50 @@ try {
     if (!Array.isArray(afterBody.checks) || afterBody.checks.length !== 4) throw new Error('预检应返回四项结论')
     check('套装许可确认与四项预检')
 
+    // 许可按“模型 + 版本”生效：S2 复用 S1 的确认，S3 必须单独确认。
+    const s2Detail = await (await page.request.get(`${baseURL}/api/v1/model-bundles/h3-image-pro`)).json()
+    if (s2Detail.card?.licenseConfirmed !== true) throw new Error('S2 应复用 MiniMax-H3-Image 的确认')
+    const s3Detail = await (await page.request.get(`${baseURL}/api/v1/model-bundles/h3-av-base`)).json()
+    if (s3Detail.card?.licenseConfirmed === true) throw new Error('S3 不应复用 H3-Image 的确认')
+    if (s2Detail.card?.license?.version === s3Detail.card?.license?.version) throw new Error('两个模型的许可版本不应相同')
+    check('许可确认按模型生效（S2 复用、S3 独立）')
+
+    // 许可文件与官方原文一致，且 H3 不套用 H3-Image 文案。
+    const licenseFile = await page.request.get(`${baseURL}/api/v1/model-bundles/h3-image-base/license/license`)
+    const licenseText = await licenseFile.text()
+    if (!licenseFile.ok() || !licenseText.includes('MiniMax-H3-Image COMMUNITY LICENSE AGREEMENT')) throw new Error('LICENSE 下载内容异常')
+    const h3Notice = await (await page.request.get(`${baseURL}/api/v1/model-bundles/h3-av-base/license/notice`)).text()
+    if (!h3Notice.includes('MiniMax H3 is licensed under') || h3Notice.includes('MiniMax-H3-Image is licensed')) throw new Error('H3 NOTICE 套用了 H3-Image 文案')
+    check('许可原文与 NOTICE 按模型区分')
+
     await page.getByRole('tab', { name: '组合套装' }).click()
     await page.getByText('S1 H3-Image 基础创作包').waitFor()
-    await page.getByText('待法务审核', { exact: true }).first().waitFor()
-    check('组合套装标签与卡片渲染')
+    const s1Card = page.getByRole('article').filter({ hasText: 'S1 H3-Image 基础创作包' })
+    await s1Card.getByText('模型：MiniMax-H3-Image', { exact: true }).waitFor()
+    await s1Card.getByText('已确认', { exact: true }).waitFor()
+    await s1Card.getByRole('button', { name: '查看许可', exact: true }).click()
+    await page.getByRole('dialog').getByText('许可名称', { exact: true }).waitFor()
+    await page.getByRole('dialog').getByText('MiniMax-H3-Image Community License Agreement', { exact: true }).waitFor()
+    await page.getByRole('dialog').getByRole('link', { name: '下载 LICENSE' }).waitFor()
+    check('卡片完整模型名、许可文本状态与详情许可声明')
+    await page.keyboard.press('Escape')
+    await page.getByRole('dialog').waitFor({ state: 'detached' })
+
+    // 首次安装前必须出现许可确认弹窗，未勾选不能继续。
+    const s3Card = page.getByRole('article').filter({ hasText: 'S3 H3 音视频基础包' })
+    await s3Card.getByRole('button', { name: '预检安装', exact: true }).click()
+    await page.getByRole('dialog').getByRole('button', { name: '运行预检' }).click()
+    await page.getByRole('dialog').getByRole('button', { name: '确认许可并继续', exact: true }).click()
+    const licenseDialog = page.getByRole('dialog')
+    await licenseDialog.getByRole('heading', { name: '使用 MiniMax-H3 前请确认许可条件' }).waitFor()
+    const confirmButton = licenseDialog.getByRole('button', { name: '确认并继续安装' })
+    if (!(await confirmButton.isDisabled())) throw new Error('未勾选许可时确认按钮应禁用')
+    await licenseDialog.getByRole('checkbox').check()
+    if (await confirmButton.isDisabled()) throw new Error('勾选后确认按钮应可用')
+    check('首次安装许可确认弹窗与勾选闸门')
+    await licenseDialog.getByRole('button', { name: '取消', exact: true }).click()
+    await page.keyboard.press('Escape')
+    await page.getByRole('dialog').waitFor({ state: 'detached' })
     await page.getByRole('tab', { name: '本地仓库' }).click()
     if (seedFile) {
       // 预置的回归文件（部署时在目标机 seed）：checkpoints/regress-test.safetensors
@@ -1004,8 +1050,8 @@ try {
   // 数据底座（0.0.9.5）：状态卡 + 一致性检查 + 备份。
   const databaseResponse = await page.request.get(`${baseURL}/api/v1/database`)
   const databaseStatus = await databaseResponse.json()
-  if (!databaseResponse.ok() || databaseStatus.schemaVersion !== 5 || !databaseStatus.integrity.ok) throw new Error(`数据底座状态异常：${JSON.stringify(databaseStatus)}`)
-  check('数据底座状态接口（schema v4 · integrity ok）')
+  if (!databaseResponse.ok() || databaseStatus.schemaVersion !== 6 || !databaseStatus.integrity.ok) throw new Error(`数据底座状态异常：${JSON.stringify(databaseStatus)}`)
+  check('数据底座状态接口（schema v6 · integrity ok）')
   await page.getByRole('tab', { name: '数据底座' }).click()
   await page.getByTestId('database-panel').waitFor()
   await page.getByText('integrity_check 通过', { exact: true }).waitFor()

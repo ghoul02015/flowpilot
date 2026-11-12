@@ -163,3 +163,75 @@ func TestBundleByteTotals(t *testing.T) {
 		t.Fatalf("S1 应有 3 个必需项，实际 %d", base.RequiredItemCount())
 	}
 }
+
+// TestLicensesAreModelScoped 固定“一个模型一份许可”的边界：
+// H3-Image 与 H3 的版本、摘要、NOTICE 必须各自独立，不能互相复制。
+func TestLicensesAreModelScoped(t *testing.T) {
+	manifest := mustDefault(t)
+	image, ok := manifest.Licenses["MiniMax-H3-Image"]
+	if !ok {
+		t.Fatal("缺少 MiniMax-H3-Image 许可配置")
+	}
+	video, ok := manifest.Licenses["MiniMax-H3"]
+	if !ok {
+		t.Fatal("缺少 MiniMax-H3 许可配置")
+	}
+	if image.Version == video.Version {
+		t.Fatalf("两个模型的许可版本不应相同：%s", image.Version)
+	}
+	imageSummary := strings.Join(image.Summary, "\n")
+	videoSummary := strings.Join(video.Summary, "\n")
+	if !strings.Contains(imageSummary, "100 万美元") || !strings.Contains(imageSummary, "Hosted Service") {
+		t.Fatal("H3-Image 摘要应包含 100 万美元与 Hosted Service 条款")
+	}
+	if strings.Contains(videoSummary, "100 万美元") || strings.Contains(videoSummary, "Hosted Service") {
+		t.Fatal("H3 摘要不得套用 H3-Image 的 100 万美元与 Hosted Service 条款")
+	}
+	if !strings.Contains(videoSummary, "2000 万美元") {
+		t.Fatal("H3 摘要应使用自身许可的 2000 万美元门槛")
+	}
+	for _, b := range manifest.Bundles {
+		if b.License.ModelName != b.ModelName {
+			t.Fatalf("套装 %s 挂载了错误模型许可：%s", b.ID, b.License.ModelName)
+		}
+		if b.License.NoticeText == "" || b.License.SnapshotSHA256 == "" {
+			t.Fatalf("套装 %s 许可快照不完整", b.ID)
+		}
+	}
+	// 同一模型的不同套装必须拿到完全一致的许可配置。
+	s1, _ := manifest.FindBundle("h3-image-base")
+	s2, _ := manifest.FindBundle("h3-image-pro")
+	if s1.License.SnapshotSHA256 != s2.License.SnapshotSHA256 || s1.License.Version != s2.License.Version {
+		t.Fatal("同模型套装应共享同一份许可快照")
+	}
+}
+
+// TestLicenseSnapshotTamperRejected 校验快照哈希，防止只改版本号不改文件。
+func TestLicenseSnapshotTamperRejected(t *testing.T) {
+	manifest := mustDefault(t)
+	license := manifest.Licenses["MiniMax-H3-Image"]
+	license.SnapshotSHA256 = strings.Repeat("0", 64)
+	if err := verifyLicenseSnapshot(license); err == nil {
+		t.Fatal("许可文件被篡改时应校验失败")
+	}
+}
+
+// TestBundleWithoutLicenseRejected 未配置许可的模型必须拒绝加载。
+func TestBundleWithoutLicenseRejected(t *testing.T) {
+	manifest := mustDefault(t)
+	delete(manifest.Licenses, "MiniMax-H3")
+	if err := reparse(t, manifest); err == nil {
+		t.Fatal("缺少模型许可时应拒绝解析")
+	}
+}
+
+// TestLicenseVersionSharedAcrossModelsRejected 防止把同一许可版本复制给两个模型。
+func TestLicenseVersionSharedAcrossModelsRejected(t *testing.T) {
+	manifest := mustDefault(t)
+	shared := manifest.Licenses["MiniMax-H3"]
+	shared.Version = manifest.Licenses["MiniMax-H3-Image"].Version
+	manifest.Licenses["MiniMax-H3"] = shared
+	if err := reparse(t, manifest); err == nil {
+		t.Fatal("两个模型共用同一许可版本时应拒绝解析")
+	}
+}

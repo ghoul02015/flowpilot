@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"syscall"
@@ -46,6 +47,10 @@ func (a bundleDownloader) Action(_ context.Context, id, action string) error {
 	return err
 }
 
+func (a bundleDownloader) Delete(_ context.Context, id string) error {
+	return a.manager.Delete(id)
+}
+
 // FindByTarget 查找同目录同名文件的已有任务，用于复用取消或重启后的残留分片。
 func (a bundleDownloader) FindByTarget(_ context.Context, category, fileName string) (bundle.DownloadState, bool) {
 	for _, task := range a.manager.List() {
@@ -60,7 +65,7 @@ func downloadStateOf(task download.Task) bundle.DownloadState {
 	return bundle.DownloadState{
 		ID: task.ID, Status: task.Status,
 		DownloadedBytes: task.DownloadedBytes, TotalBytes: task.TotalBytes,
-		Message: task.Message,
+		Message: task.Message, SHA256: task.SHA256,
 	}
 }
 
@@ -227,5 +232,12 @@ func NewBundleService(
 		Hardware:   hardwareFn,
 		ImageMeta:  imageMeta,
 		LinkModels: linkModels,
+		Org:        "default",
+		Environment: func() string {
+			if host, err := os.Hostname(); err == nil && strings.TrimSpace(host) != "" {
+				return host
+			}
+			return "default"
+		}(),
 	}
 }

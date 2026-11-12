@@ -167,11 +167,44 @@ func (h *Handler) confirmModelBundleLicense(w http.ResponseWriter, r *http.Reque
 	if request.DeliveryMethod == "" {
 		request.DeliveryMethod = "online"
 	}
-	if err := h.bundles.ConfirmLicense(r.Context(), r.PathValue("id"), request.DeliveryMethod, h.currentOperator(r)); err != nil {
+	if confirmation, err := h.bundles.ConfirmLicense(r.Context(), r.PathValue("id"), request.DeliveryMethod, h.currentOperator(r)); err != nil {
+		h.writeBundleError(w, err)
+		return
+	} else {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "confirmed", "confirmation": confirmation})
+	}
+}
+
+// downloadModelBundleLicenseFile 下载内置许可快照（LICENSE／NOTICE）。
+func (h *Handler) downloadModelBundleLicenseFile(w http.ResponseWriter, r *http.Request) {
+	if !h.requireBundles(w) {
+		return
+	}
+	file := r.PathValue("file")
+	if file != "license" && file != "notice" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "只支持 license 或 notice"})
+		return
+	}
+	detail, err := h.bundles.Detail(r.Context(), r.PathValue("id"))
+	if err != nil {
 		h.writeBundleError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "confirmed"})
+	path := detail.Card.License.LicenseFile
+	name := "LICENSE"
+	if file == "notice" {
+		path = detail.Card.License.NoticeFile
+		name = "NOTICE"
+	}
+	data, err := bundle.LicenseAsset(path)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "许可快照缺失"})
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 // linkModelBundle 把齐备文件关联到现有实例。

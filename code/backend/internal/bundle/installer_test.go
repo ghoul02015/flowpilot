@@ -12,6 +12,7 @@ import (
 type fakeTask struct {
 	id         string
 	fileName   string
+	sha256     string
 	status     string
 	downloaded int64
 	total      int64
@@ -51,8 +52,8 @@ func (f *fakeDownloader) Create(_ context.Context, request DownloadRequest) (Dow
 	if f.pending {
 		status = "running"
 	}
-	f.tasks[id] = &fakeTask{id: id, fileName: request.FileName, status: status, total: 100, downloaded: 100, message: message}
-	return DownloadState{ID: id, Status: status, DownloadedBytes: 100, TotalBytes: 100, Message: message}, nil
+	f.tasks[id] = &fakeTask{id: id, fileName: request.FileName, sha256: request.SHA256, status: status, total: 100, downloaded: 100, message: message}
+	return DownloadState{ID: id, Status: status, DownloadedBytes: 100, TotalBytes: 100, Message: message, SHA256: request.SHA256}, nil
 }
 
 func (f *fakeDownloader) Get(_ context.Context, id string) (DownloadState, error) {
@@ -62,7 +63,7 @@ func (f *fakeDownloader) Get(_ context.Context, id string) (DownloadState, error
 	if !ok {
 		return DownloadState{}, fmt.Errorf("任务不存在：%s", id)
 	}
-	return DownloadState{ID: task.id, Status: task.status, DownloadedBytes: task.downloaded, TotalBytes: task.total, Message: task.message}, nil
+	return DownloadState{ID: task.id, Status: task.status, DownloadedBytes: task.downloaded, TotalBytes: task.total, Message: task.message, SHA256: task.sha256}, nil
 }
 
 func (f *fakeDownloader) Action(_ context.Context, id, action string) error {
@@ -88,10 +89,24 @@ func (f *fakeDownloader) FindByTarget(_ context.Context, _, fileName string) (Do
 	defer f.mu.Unlock()
 	for _, task := range f.tasks {
 		if task.fileName == fileName {
-			return DownloadState{ID: task.id, Status: task.status, DownloadedBytes: task.downloaded, TotalBytes: task.total, Message: task.message}, true
+			return DownloadState{ID: task.id, Status: task.status, DownloadedBytes: task.downloaded, TotalBytes: task.total, Message: task.message, SHA256: task.sha256}, true
 		}
 	}
 	return DownloadState{}, false
+}
+
+func (f *fakeDownloader) Delete(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	task, ok := f.tasks[id]
+	if !ok {
+		return fmt.Errorf("任务不存在：%s", id)
+	}
+	if task.status == "running" {
+		return fmt.Errorf("任务仍在进行，请先取消")
+	}
+	delete(f.tasks, id)
+	return nil
 }
 
 func (f *fakeDownloader) completeAll() {
@@ -365,7 +380,7 @@ func TestInstallerReusesPausedTask(t *testing.T) {
 	downloader := newFakeDownloader()
 	target := fileNameOf(plan.Items[0].TargetRelativePath)
 	// 模拟上次取消／重启留下的暂停任务。
-	downloader.tasks["dl-stale"] = &fakeTask{id: "dl-stale", fileName: target, status: "paused", total: 100, downloaded: 40, message: "平台重启，下载已暂停"}
+	downloader.tasks["dl-stale"] = &fakeTask{id: "dl-stale", fileName: target, sha256: plan.Items[0].SHA256, status: "paused", total: 100, downloaded: 40, message: "平台重启，下载已暂停"}
 
 	installer, store := newTestInstaller(t, downloader, nil)
 	install := createInstall(t, store, plan, StateQueued)
@@ -385,5 +400,76 @@ func TestInstallerReusesPausedTask(t *testing.T) {
 	// 3 个文件 = 1 个复用 + 2 个新建。
 	if taskCount != 3 {
 		t.Fatalf("应复用残留任务并新建 2 个，实际任务数 %d", taskCount)
+	}
+}
+
+func (f *fakeDownloader) statusOf(id string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if task, ok := f.tasks[id]; ok {
+		return task.status
+	}
+	return ""
+}
+
+// TestStopWorkerSettlesChildDownload 回归 0.1.0.4 实机失败：
+// 暂停/取消必须先取出子任务再注销 worker，否则下载会留在后台继续，
+// 平台重启后变成 paused 残留任务，阻塞下一次安装。
+func TestStopWorkerSettlesChildDownload(t *testing.T) {
+	manifest := mustDefault(t)
+	plan, err := Expand(manifest, "h3-image-base", "default", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"pause", "cancel"} {
+		t.Run(action, func(t *testing.T) {
+			downloader := newFakeDownloader()
+			downloader.pending = true
+			installer, store := newTestInstaller(t, downloader, nil)
+			install := createInstall(t, store, plan, StateQueued)
+			if err := installer.Start(context.Background(), install.ID); err != nil {
+				t.Fatal(err)
+			}
+			childID := ""
+			deadline := time.Now().Add(3 * time.Second)
+			for time.Now().Before(deadline) && childID == "" {
+				loaded, err := store.GetInstall(context.Background(), install.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, item := range loaded.Items {
+					if item.ChildTaskID != "" {
+						childID = item.ChildTaskID
+					}
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			if childID == "" {
+				t.Fatal("未创建子下载任务")
+			}
+			if downloader.statusOf(childID) != "running" {
+				t.Fatalf("子任务应处于运行中，实际 %s", downloader.statusOf(childID))
+			}
+			var stopErr error
+			if action == "pause" {
+				stopErr = installer.Pause(context.Background(), install.ID)
+			} else {
+				stopErr = installer.Cancel(context.Background(), install.ID)
+			}
+			if stopErr != nil {
+				t.Fatal(stopErr)
+			}
+			if status := downloader.statusOf(childID); status == "running" {
+				t.Fatalf("%s 之后子任务仍在运行，会留下残留任务", action)
+			}
+			loaded, _ := store.GetInstall(context.Background(), install.ID)
+			want := StatePaused
+			if action == "cancel" {
+				want = StateCancelled
+			}
+			if loaded.Status != want {
+				t.Fatalf("计划状态应为 %s，实际 %s", want, loaded.Status)
+			}
+		})
 	}
 }
