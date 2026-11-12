@@ -270,9 +270,32 @@ func (s *Service) CreateInstall(ctx context.Context, id string, request CreateIn
 	return s.Store.GetInstall(ctx, install.ID)
 }
 
-// GetInstall 读取安装计划。
+// GetInstall 读取安装计划，并补充当前文件的实时下载字节。
+// 只影响返回视图，不写库：CompletedBytes 落库值仍只统计已完成项。
 func (s *Service) GetInstall(ctx context.Context, installID string) (Install, error) {
-	return s.Store.GetInstall(ctx, installID)
+	install, err := s.Store.GetInstall(ctx, installID)
+	if err != nil {
+		return install, err
+	}
+	if s.Installer == nil {
+		return install, nil
+	}
+	for index := range install.Items {
+		item := &install.Items[index]
+		if item.Status != ItemDownloading || item.ChildTaskID == "" {
+			continue
+		}
+		state, err := s.Installer.Progress(ctx, item.ChildTaskID)
+		if err != nil || state.DownloadedBytes <= 0 {
+			continue
+		}
+		install.CurrentItemDownloaded = state.DownloadedBytes
+		// 已下载但尚未完成的字节也计入进度，避免 20GB 单文件期间进度条停在 0%。
+		if install.CompletedBytes+state.DownloadedBytes <= install.TotalBytes {
+			install.CompletedBytes += state.DownloadedBytes
+		}
+	}
+	return install, nil
 }
 
 // Action 执行安装计划操作。

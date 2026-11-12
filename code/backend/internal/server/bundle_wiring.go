@@ -46,6 +46,16 @@ func (a bundleDownloader) Action(_ context.Context, id, action string) error {
 	return err
 }
 
+// FindByTarget 查找同目录同名文件的已有任务，用于复用取消或重启后的残留分片。
+func (a bundleDownloader) FindByTarget(_ context.Context, category, fileName string) (bundle.DownloadState, bool) {
+	for _, task := range a.manager.List() {
+		if task.Category == category && task.FileName == fileName {
+			return downloadStateOf(task), true
+		}
+	}
+	return bundle.DownloadState{}, false
+}
+
 func downloadStateOf(task download.Task) bundle.DownloadState {
 	return bundle.DownloadState{
 		ID: task.ID, Status: task.Status,

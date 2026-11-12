@@ -176,3 +176,63 @@ func TestLicenseAndAcceptance(t *testing.T) {
 		t.Fatal("验收记录应按时间倒序")
 	}
 }
+
+// TestServiceInstallProgressIncludesCurrentItem 验证进行中文件的实时字节计入进度视图，
+// 避免大文件下载期间进度条停在 0%。
+func TestServiceInstallProgressIncludesCurrentItem(t *testing.T) {
+	store := openStore(t)
+	manifest := mustDefault(t)
+	plan := samplePlan(t)
+	install := Install{
+		ID: "install-progress", BundleID: plan.BundleID, BundleVersion: plan.BundleVersion,
+		ManifestChecksum: plan.ManifestChecksum, Variant: plan.Variant, TargetRepository: "models",
+		Status: StateInstalling, TotalBytes: plan.TotalBytes, Operator: "admin",
+	}
+	if err := store.CreateInstall(context.Background(), install, plan); err != nil {
+		t.Fatal(err)
+	}
+	// 模拟当前项正在下载，子任务已下载 12 MiB。
+	first := plan.Items[0]
+	if err := store.UpdateItem(context.Background(), install.ID, first.Key, ItemDownloading, "dl-progress", 0, "", "", "", false); err != nil {
+		t.Fatal(err)
+	}
+	downloader := &progressDownloader{downloaded: 12 << 20}
+	service := &Service{
+		Manifest: manifest, Store: store,
+		Installer: NewInstaller(store, manifest, downloader, func() (RepoSnapshot, int64, error) {
+			return NewRepoSnapshot("models", nil), 1 << 40, nil
+		}),
+	}
+	view, err := service.GetInstall(context.Background(), install.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.CurrentItemDownloaded != 12<<20 {
+		t.Fatalf("应补充当前文件字节，实际 %d", view.CurrentItemDownloaded)
+	}
+	if view.CompletedBytes < 12<<20 {
+		t.Fatalf("进度应包含当前文件已下载字节，实际 %d", view.CompletedBytes)
+	}
+	// 落库值不应被视图层污染。
+	stored, _ := store.GetInstall(context.Background(), install.ID)
+	if stored.CompletedBytes != 0 {
+		t.Fatalf("落库的 completedBytes 应仍为 0，实际 %d", stored.CompletedBytes)
+	}
+}
+
+// progressDownloader 只用于进度视图测试。
+type progressDownloader struct{ downloaded int64 }
+
+func (p *progressDownloader) Create(context.Context, DownloadRequest) (DownloadState, error) {
+	return DownloadState{}, nil
+}
+
+func (p *progressDownloader) Get(context.Context, string) (DownloadState, error) {
+	return DownloadState{ID: "dl-progress", Status: "running", DownloadedBytes: p.downloaded, TotalBytes: 1 << 30}, nil
+}
+
+func (p *progressDownloader) Action(context.Context, string, string) error { return nil }
+
+func (p *progressDownloader) FindByTarget(context.Context, string, string) (DownloadState, bool) {
+	return DownloadState{}, false
+}

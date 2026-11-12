@@ -396,6 +396,7 @@ function InstallProgress({ install, bundleId, onChanged }: { install: BundleInst
     </div>
     <div className="mt-2"><ProgressBar value={percent} /></div>
     <p className="mt-1 text-[11px] text-slate-500">{formatBytes(install.completedBytes)} / {formatBytes(install.totalBytes)}{install.currentItemKey ? ` · 当前 ${install.currentItemKey}` : ''}</p>
+    {install.currentItemDownloaded ? <p className="text-[11px] text-slate-400">当前文件已下载 {formatBytes(install.currentItemDownloaded)}</p> : null}
     {install.errorMessage && <p className="mt-1 text-[11px] text-rose-600">{install.errorMessage}</p>}
     {install.items && install.items.length > 0 && <ul className="mt-2 space-y-1">
       {install.items.map((item) => <li key={item.itemKey} className="flex items-center justify-between gap-2 text-[11px] text-slate-600">

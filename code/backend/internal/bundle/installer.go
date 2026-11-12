@@ -32,6 +32,8 @@ type Downloader interface {
 	Create(ctx context.Context, request DownloadRequest) (DownloadState, error)
 	Get(ctx context.Context, id string) (DownloadState, error)
 	Action(ctx context.Context, id, action string) error
+	// FindByTarget 按目录与文件名查找已有任务，用于复用取消或重启后残留的分片。
+	FindByTarget(ctx context.Context, category, fileName string) (DownloadState, bool)
 }
 
 // DefaultMirrorBase 是国内可达的模型传输通道；内容一致性由官方 SHA256 校验保证。
@@ -184,6 +186,14 @@ func (in *Installer) RetryFailed(ctx context.Context, installID string) error {
 	return in.Start(ctx, installID)
 }
 
+// Progress 返回子任务当前进度，供 API 补实时字节（不落库）。
+func (in *Installer) Progress(ctx context.Context, taskID string) (DownloadState, error) {
+	if taskID == "" {
+		return DownloadState{}, nil
+	}
+	return in.downloader.Get(ctx, taskID)
+}
+
 // Wait 等待安装结束，仅供测试与同步调用场景使用。
 func (in *Installer) Wait(installID string) {
 	for {
@@ -316,12 +326,37 @@ func (in *Installer) installItem(ctx context.Context, installID string, install 
 		}
 	}
 	if taskID == "" {
-		state, err := in.downloader.Create(ctx, DownloadRequest{
+		request := DownloadRequest{
 			URL:      in.buildURL(*planItem),
 			Category: planItem.Category,
 			FileName: fileNameOf(planItem.TargetRelativePath),
 			SHA256:   planItem.SHA256,
-		})
+		}
+		state, err := in.downloader.Create(ctx, request)
+		if err != nil {
+			// 取消或平台重启后，同目标可能留有 paused/failed 任务；
+			// 直接复用可保留已下载分片，否则新任务会被"目标已有任务在进行中"拒绝。
+			if existing, found := in.downloader.FindByTarget(ctx, request.Category, request.FileName); found {
+				switch existing.Status {
+				case "running", "paused":
+					if existing.Status == "paused" {
+						if resumeErr := in.downloader.Action(ctx, existing.ID, "resume"); resumeErr != nil {
+							break
+						}
+					}
+					state, err = existing, nil
+				case "failed", "cancelled":
+					if retryErr := in.downloader.Action(ctx, existing.ID, "retry"); retryErr == nil {
+						state, err = existing, nil
+					}
+				case "completed":
+					_ = in.store.UpdateItem(ctx, installID, item.ItemKey, ItemPresent, existing.ID, item.ExpectedBytes, item.ExpectedSHA256, "", "", false)
+					*completed += item.ExpectedBytes
+					_ = in.store.UpdateInstall(ctx, installID, StateInstalling, item.ItemKey, *completed, "", "")
+					return nil
+				}
+			}
+		}
 		if err != nil {
 			_ = in.store.UpdateItem(ctx, installID, item.ItemKey, ItemMissing, "", 0, "", "create_failed", err.Error(), true)
 			return fmt.Errorf("创建下载任务失败：%w", err)

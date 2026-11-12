@@ -11,6 +11,7 @@ import (
 
 type fakeTask struct {
 	id         string
+	fileName   string
 	status     string
 	downloaded int64
 	total      int64
@@ -33,6 +34,12 @@ func newFakeDownloader() *fakeDownloader {
 func (f *fakeDownloader) Create(_ context.Context, request DownloadRequest) (DownloadState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// 与真实引擎一致：同目标已有任务时拒绝创建。
+	for _, task := range f.tasks {
+		if task.fileName == request.FileName {
+			return DownloadState{}, fmt.Errorf("已有目标为 %s/%s 的任务在进行中", request.Category, request.FileName)
+		}
+	}
 	f.seq++
 	id := fmt.Sprintf("dl-%d", f.seq)
 	status := "completed"
@@ -44,7 +51,7 @@ func (f *fakeDownloader) Create(_ context.Context, request DownloadRequest) (Dow
 	if f.pending {
 		status = "running"
 	}
-	f.tasks[id] = &fakeTask{id: id, status: status, total: 100, downloaded: 100, message: message}
+	f.tasks[id] = &fakeTask{id: id, fileName: request.FileName, status: status, total: 100, downloaded: 100, message: message}
 	return DownloadState{ID: id, Status: status, DownloadedBytes: 100, TotalBytes: 100, Message: message}, nil
 }
 
@@ -74,6 +81,17 @@ func (f *fakeDownloader) Action(_ context.Context, id, action string) error {
 		task.status = "cancelled"
 	}
 	return nil
+}
+
+func (f *fakeDownloader) FindByTarget(_ context.Context, _, fileName string) (DownloadState, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, task := range f.tasks {
+		if task.fileName == fileName {
+			return DownloadState{ID: task.id, Status: task.status, DownloadedBytes: task.downloaded, TotalBytes: task.total, Message: task.message}, true
+		}
+	}
+	return DownloadState{}, false
 }
 
 func (f *fakeDownloader) completeAll() {
@@ -333,5 +351,39 @@ func TestInstallerOptionalFailureDoesNotBlock(t *testing.T) {
 	loaded, _ := store.GetInstall(context.Background(), install.ID)
 	if loaded.Status != StateFilesReady {
 		t.Fatalf("可选项失败不应阻断，实际 %s（%s）", loaded.Status, loaded.ErrorMessage)
+	}
+}
+
+// TestInstallerReusesPausedTask 验证取消或重启后残留的 paused 子任务会被复用续传，
+// 而不是因"目标已有任务在进行中"直接失败。
+func TestInstallerReusesPausedTask(t *testing.T) {
+	manifest := mustDefault(t)
+	plan, err := Expand(manifest, "h3-image-base", "default", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downloader := newFakeDownloader()
+	target := fileNameOf(plan.Items[0].TargetRelativePath)
+	// 模拟上次取消／重启留下的暂停任务。
+	downloader.tasks["dl-stale"] = &fakeTask{id: "dl-stale", fileName: target, status: "paused", total: 100, downloaded: 40, message: "平台重启，下载已暂停"}
+
+	installer, store := newTestInstaller(t, downloader, nil)
+	install := createInstall(t, store, plan, StateQueued)
+	if err := installer.Start(context.Background(), install.ID); err != nil {
+		t.Fatal(err)
+	}
+	installer.Wait(install.ID)
+
+	loaded, _ := store.GetInstall(context.Background(), install.ID)
+	if loaded.Status != StateFilesReady {
+		t.Fatalf("残留任务应被复用并完成，实际 %s（%s）", loaded.Status, loaded.ErrorMessage)
+	}
+	// 复用任务不应被当成新任务重复创建。
+	downloader.mu.Lock()
+	taskCount := len(downloader.tasks)
+	downloader.mu.Unlock()
+	// 3 个文件 = 1 个复用 + 2 个新建。
+	if taskCount != 3 {
+		t.Fatalf("应复用残留任务并新建 2 个，实际任务数 %d", taskCount)
 	}
 }

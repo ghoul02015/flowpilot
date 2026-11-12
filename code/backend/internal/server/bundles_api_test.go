@@ -46,6 +46,10 @@ func (s *stubDownloader) Get(_ context.Context, id string) (bundle.DownloadState
 
 func (s *stubDownloader) Action(_ context.Context, _, _ string) error { return nil }
 
+func (s *stubDownloader) FindByTarget(_ context.Context, _, _ string) (bundle.DownloadState, bool) {
+	return bundle.DownloadState{}, false
+}
+
 func newBundleTestServer(t *testing.T) (http.Handler, *bundle.Service) {
 	t.Helper()
 	db, err := database.Open(filepath.Join(t.TempDir(), "bundles-api.db"))

@@ -1200,6 +1200,7 @@ export interface BundleInstall {
   currentItemKey: string
   totalBytes: number
   completedBytes: number
+  currentItemDownloaded?: number
   errorMessage?: string
   createdAt: string
   updatedAt: string

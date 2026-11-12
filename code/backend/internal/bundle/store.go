@@ -19,27 +19,29 @@ var (
 
 // Install 是一个安装计划。
 type Install struct {
-	ID               string        `json:"id"`
-	BundleID         string        `json:"bundleId"`
-	BundleVersion    string        `json:"bundleVersion"`
-	ManifestChecksum string        `json:"manifestChecksum"`
-	Variant          string        `json:"variant"`
-	SelectedOptions  []string      `json:"selectedOptions"`
-	TargetRepository string        `json:"targetRepository"`
-	Status           string        `json:"status"`
-	CurrentItemKey   string        `json:"currentItemKey"`
-	TotalBytes       int64         `json:"totalBytes"`
-	CompletedBytes   int64         `json:"completedBytes"`
-	ErrorCode        string        `json:"errorCode,omitempty"`
-	ErrorMessage     string        `json:"errorMessage,omitempty"`
-	RequestKey       string        `json:"-"`
-	Operator         string        `json:"operator"`
-	RecoveryReason   string        `json:"recoveryReason,omitempty"`
-	CreatedAt        time.Time     `json:"createdAt"`
-	UpdatedAt        time.Time     `json:"updatedAt"`
-	StartedAt        *time.Time    `json:"startedAt,omitempty"`
-	FinishedAt       *time.Time    `json:"finishedAt,omitempty"`
-	Items            []InstallItem `json:"items,omitempty"`
+	ID               string   `json:"id"`
+	BundleID         string   `json:"bundleId"`
+	BundleVersion    string   `json:"bundleVersion"`
+	ManifestChecksum string   `json:"manifestChecksum"`
+	Variant          string   `json:"variant"`
+	SelectedOptions  []string `json:"selectedOptions"`
+	TargetRepository string   `json:"targetRepository"`
+	Status           string   `json:"status"`
+	CurrentItemKey   string   `json:"currentItemKey"`
+	TotalBytes       int64    `json:"totalBytes"`
+	CompletedBytes   int64    `json:"completedBytes"`
+	// CurrentItemDownloaded 是当前正在下载文件的实时字节数（仅视图层补充，不落库）。
+	CurrentItemDownloaded int64         `json:"currentItemDownloaded"`
+	ErrorCode             string        `json:"errorCode,omitempty"`
+	ErrorMessage          string        `json:"errorMessage,omitempty"`
+	RequestKey            string        `json:"-"`
+	Operator              string        `json:"operator"`
+	RecoveryReason        string        `json:"recoveryReason,omitempty"`
+	CreatedAt             time.Time     `json:"createdAt"`
+	UpdatedAt             time.Time     `json:"updatedAt"`
+	StartedAt             *time.Time    `json:"startedAt,omitempty"`
+	FinishedAt            *time.Time    `json:"finishedAt,omitempty"`
+	Items                 []InstallItem `json:"items,omitempty"`
 	// Plan 是安装时的不可变快照，只用于内部执行，不重复对外输出。
 	Plan Plan `json:"-"`
 }
