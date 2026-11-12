@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.1.0.3') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.1.0.4') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   // 认证（0.0.9.6）：未登录先看到登录页 → 初始化 → 登录 → 会话恢复。
@@ -652,6 +652,39 @@ try {
     await page.getByText('本地仓库', { exact: true }).first().waitFor()
     await page.getByText('每 3 秒自动刷新', { exact: true }).waitFor()
     check('模型中心分组统计条')
+
+    // 组合套装（0.1.0.4）：清单、详情、许可闸门与四项预检。
+    const bundlesResponse = await page.request.get(`${baseURL}/api/v1/model-bundles`)
+    const bundlesBody = await bundlesResponse.json()
+    if (!bundlesResponse.ok() || bundlesBody.bundles?.length !== 5) throw new Error(`套装列表异常：${JSON.stringify(bundlesBody).slice(0, 200)}`)
+    if (!bundlesBody.checksum) throw new Error('套装列表缺少清单校验值')
+    check('组合套装列表接口（5 个套装 + 清单校验值）')
+
+    const bundleDetail = await (await page.request.get(`${baseURL}/api/v1/model-bundles/h3-image-base`)).json()
+    if (bundleDetail.items?.length !== 3 || !bundleDetail.manifest?.checksum) throw new Error('套装详情文件项或清单校验值异常')
+    check('套装详情接口（S1 三个文件项）')
+
+    const preflightBefore = await page.request.post(`${baseURL}/api/v1/model-bundles/h3-image-base/preflight`, { headers: { 'X-FlowPilot-CSRF': csrfToken }, data: { variant: 'default' } })
+    const beforeBody = await preflightBefore.json()
+    if (beforeBody.canInstall !== false) throw new Error('许可未确认时不应允许安装')
+    if (!beforeBody.checks?.some((item) => item.code === 'license' && item.status === 'block')) throw new Error('许可预检应阻断')
+    check('套装预检：许可未确认阻断安装')
+
+    const installBlocked = await page.request.post(`${baseURL}/api/v1/model-bundles/h3-image-base/installs`, { headers: { 'X-FlowPilot-CSRF': csrfToken }, data: { variant: 'default' } })
+    if (installBlocked.status() !== 422) throw new Error(`缺少许可确认应返回 422，实际 ${installBlocked.status()}`)
+    check('套装安装受许可确认约束（422）')
+
+    const licenseResponse = await page.request.post(`${baseURL}/api/v1/model-bundles/h3-image-base/license`, { headers: { 'X-FlowPilot-CSRF': csrfToken }, data: { deliveryMethod: 'online' } })
+    if (!licenseResponse.ok()) throw new Error('许可确认接口失败')
+    const afterBody = await (await page.request.post(`${baseURL}/api/v1/model-bundles/h3-image-base/preflight`, { headers: { 'X-FlowPilot-CSRF': csrfToken }, data: { variant: 'default' } })).json()
+    if (!Array.isArray(afterBody.checks) || afterBody.checks.length !== 4) throw new Error('预检应返回四项结论')
+    check('套装许可确认与四项预检')
+
+    await page.getByRole('tab', { name: '组合套装' }).click()
+    await page.getByText('S1 H3-Image 基础创作包').waitFor()
+    await page.getByText('待法务审核', { exact: true }).first().waitFor()
+    check('组合套装标签与卡片渲染')
+    await page.getByRole('tab', { name: '本地仓库' }).click()
     if (seedFile) {
       // 预置的回归文件（部署时在目标机 seed）：checkpoints/regress-test.safetensors
       // 0.0.9.3 起按类别分组：类别在组头，行内不再重复展示。
@@ -971,7 +1004,7 @@ try {
   // 数据底座（0.0.9.5）：状态卡 + 一致性检查 + 备份。
   const databaseResponse = await page.request.get(`${baseURL}/api/v1/database`)
   const databaseStatus = await databaseResponse.json()
-  if (!databaseResponse.ok() || databaseStatus.schemaVersion !== 4 || !databaseStatus.integrity.ok) throw new Error(`数据底座状态异常：${JSON.stringify(databaseStatus)}`)
+  if (!databaseResponse.ok() || databaseStatus.schemaVersion !== 5 || !databaseStatus.integrity.ok) throw new Error(`数据底座状态异常：${JSON.stringify(databaseStatus)}`)
   check('数据底座状态接口（schema v4 · integrity ok）')
   await page.getByRole('tab', { name: '数据底座' }).click()
   await page.getByTestId('database-panel').waitFor()

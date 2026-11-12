@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ghoul02015/flowpilot/internal/bundle"
 	"github.com/ghoul02015/flowpilot/internal/tasks"
 )
 
@@ -106,6 +107,17 @@ func (h *Handler) listUnifiedTasks(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
+	// 模型套装安装（0.1.0.4）。
+	if h.bundles != nil && (taskType == "" || taskType == tasks.TypeBundleInstall) {
+		if items, _, err := h.bundles.Store.ListInstalls(r.Context(), 100, 0); err == nil {
+			for _, item := range items {
+				if taskType != "" && taskType != tasks.TypeBundleInstall {
+					continue
+				}
+				views = append(views, bundleInstallView(item))
+			}
+		}
+	}
 	// 持久化任务（迁移与平台备份）。
 	storedTypes := map[string]bool{tasks.TypeMigration: true, tasks.TypeBackup: true}
 	if h.taskStore != nil && (taskType == "" || storedTypes[taskType]) {
@@ -160,6 +172,12 @@ func (h *Handler) getUnifiedTask(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if strings.HasPrefix(id, "bundle-") && h.bundles != nil {
+		if install, err := h.bundles.Store.GetInstall(r.Context(), strings.TrimPrefix(id, "bundle-")); err == nil {
+			writeJSON(w, http.StatusOK, bundleInstallView(install))
+			return
+		}
+	}
 	if len(id) > 4 && id[:4] == "img-" && h.images != nil {
 		for _, item := range h.images.List() {
 			if "img-"+item.ID == id {
@@ -182,6 +200,23 @@ func (h *Handler) deleteUnifiedTask(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.downloads.Delete(strings.TrimPrefix(id, "dl-")); err != nil {
 			h.writeDownloadError(w, err, "删除任务记录失败")
+			return
+		}
+	case strings.HasPrefix(id, "bundle-"):
+		if h.bundles == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "模型套装未启用"})
+			return
+		}
+		installID := strings.TrimPrefix(id, "bundle-")
+		if err := h.bundles.Store.DeleteInstall(r.Context(), installID); err != nil {
+			switch {
+			case errors.Is(err, bundle.ErrInstallNotFound):
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "安装计划不存在"})
+			case errors.Is(err, bundle.ErrActiveInstall):
+				writeJSON(w, http.StatusConflict, map[string]string{"error": "安装仍在进行，请先取消"})
+			default:
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "删除安装记录失败"})
+			}
 			return
 		}
 	case strings.HasPrefix(id, "img-"):
@@ -356,4 +391,83 @@ func formatOptionalTime(value time.Time) string {
 		return ""
 	}
 	return value.UTC().Format(time.RFC3339)
+}
+
+// bundleInstallView 把套装安装计划映射为统一任务视图。
+func bundleInstallView(install bundle.Install) tasks.View {
+	progress := -1
+	if install.TotalBytes > 0 {
+		progress = int(float64(install.CompletedBytes) / float64(install.TotalBytes) * 100)
+		if progress > 100 {
+			progress = 100
+		}
+	}
+	message := install.ErrorMessage
+	if message == "" {
+		message = bundleStatusText(install.Status)
+	}
+	if install.CurrentItemKey != "" && install.Status == bundle.StateInstalling {
+		message = "正在处理 " + install.CurrentItemKey
+	}
+	view := tasks.View{
+		ID:         "bundle-" + install.ID,
+		Type:       tasks.TypeBundleInstall,
+		Name:       "模型套装 · " + install.BundleID,
+		ObjectType: "bundle",
+		ObjectRef:  install.BundleID,
+		Status:     mapBundleStatus(install.Status),
+		Progress:   progress,
+		Message:    message,
+		Error:      install.ErrorMessage,
+		Cancelable: install.Status == bundle.StateQueued || install.Status == bundle.StateInstalling,
+		CreatedAt:  formatOptionalTime(install.CreatedAt),
+		StartedAt:  formatOptionalTimePtr(install.StartedAt),
+		FinishedAt: formatOptionalTimePtr(install.FinishedAt),
+	}
+	return view
+}
+
+func formatOptionalTimePtr(value *time.Time) string {
+	if value == nil {
+		return ""
+	}
+	return formatOptionalTime(*value)
+}
+
+func mapBundleStatus(status string) string {
+	switch status {
+	case bundle.StateQueued:
+		return tasks.StatusQueued
+	case bundle.StateInstalling:
+		return tasks.StatusRunning
+	case bundle.StatePaused:
+		return tasks.StatusPaused
+	case bundle.StateFilesReady:
+		return tasks.StatusSucceeded
+	case bundle.StateFailed:
+		return tasks.StatusFailed
+	case bundle.StateCancelled:
+		return tasks.StatusCancelled
+	default:
+		return tasks.StatusQueued
+	}
+}
+
+func bundleStatusText(status string) string {
+	switch status {
+	case bundle.StateQueued:
+		return "排队等待安装"
+	case bundle.StateInstalling:
+		return "正在安装"
+	case bundle.StatePaused:
+		return "已暂停，待继续"
+	case bundle.StateFilesReady:
+		return "文件齐备，待关联与人工验收"
+	case bundle.StateFailed:
+		return "安装失败"
+	case bundle.StateCancelled:
+		return "已取消，已完成文件保留"
+	default:
+		return status
+	}
 }

@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { EmptyState, PageHeader, Panel, ProgressBar, StatusBadge } from '@/components/common'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { ModelItem } from '@/types'
+import ModelBundles from '@/components/ModelBundles'
 
 interface Props {
   models: ModelItem[]
@@ -88,6 +89,7 @@ function ModelRow({ item, duplicateCount, selected, onToggleSelect, onPause, onD
 }
 
 export function Models({ models, realMode, modelsRoot, totalBytes, network, runningInstanceNames, onAdd, onPause, onDelete, onLocalize, onBatchDelete, onBatchLocalize }: Props) {
+  const [tab, setTab] = useState<'local' | 'bundles'>('local')
   const [query, setQuery] = useState('')
   const [type, setType] = useState('all')
   const [sort, setSort] = useState<'default' | 'size' | 'time'>('default')
@@ -195,7 +197,12 @@ export function Models({ models, realMode, modelsRoot, totalBytes, network, runn
     ]
 
   return <>
-    <PageHeader eyebrow="MODEL STORE" title="模型中心" description="统一管理本地与网络存储（NAS）模型仓库，支持下载、导入、本地化、断点续传和校验。" action={<button type="button" className="btn-primary" onClick={onAdd}><Plus className="size-4" />添加模型</button>} />
+    <PageHeader eyebrow="MODEL STORE" title="模型中心" description="本地仓库负责文件与下载；组合套装按场景整组部署和验收，不随发布包附带权重。" action={tab === 'local' ? <button type="button" className="btn-primary" onClick={onAdd}><Plus className="size-4" />添加模型</button> : undefined} />
+    <div className="mb-4 flex gap-1 rounded-lg bg-slate-100 p-1 text-sm" role="tablist">
+      <button type="button" role="tab" aria-selected={tab === 'local'} className={`rounded-md px-4 py-1.5 font-medium transition ${tab === 'local' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`} onClick={() => setTab('local')}>本地仓库</button>
+      <button type="button" role="tab" aria-selected={tab === 'bundles'} className={`rounded-md px-4 py-1.5 font-medium transition ${tab === 'bundles' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`} onClick={() => setTab('bundles')}>组合套装</button>
+    </div>
+    {tab === 'bundles' ? <ModelBundles /> : <>
     <div className="mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
       {stats.map((item) => <Panel key={item.label} className="p-5"><div className="text-sm text-slate-500">{item.label}</div><div className="mt-2 text-xl font-bold text-slate-900">{item.value}</div><div className="mt-1 truncate text-xs text-slate-500" title={item.note}>{item.note}</div></Panel>)}
     </div>
@@ -230,5 +237,6 @@ export function Models({ models, realMode, modelsRoot, totalBytes, network, runn
     </div>
     <Dialog open={Boolean(deleting)} onOpenChange={(open) => !open && setDeleteId(null)}><DialogContent>{deleting && <><DialogHeader><DialogTitle>{deleting.id.startsWith('dl-') ? '移除下载任务' : '删除模型文件'}</DialogTitle><DialogDescription>{deleting.id.startsWith('dl-') ? `将取消并移除 ${deleting.name} 的下载任务，已下载的临时分片会一并清理。` : `将从本地共享仓库物理删除 ${deleting.name}，实例工作流和输出不受影响。`}</DialogDescription></DialogHeader><div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{deleting.id.startsWith('dl-') ? '任务记录移除后不可恢复，已入库的模型文件不受影响。' : `此操作不可撤销，将永久删除本地仓库中的文件 ${deleting.rawPath ?? deleting.id}。`}</div><DialogFooter><button type="button" className="btn-secondary" onClick={() => setDeleteId(null)}>取消</button><button type="button" className="btn-danger" onClick={() => { onDelete(deleting.id); setDeleteId(null) }}><Trash2 className="size-4" />确认删除</button></DialogFooter></>}</DialogContent></Dialog>
     <Dialog open={batchDeleteOpen} onOpenChange={setBatchDeleteOpen}><DialogContent><DialogHeader><DialogTitle>批量删除模型文件</DialogTitle><DialogDescription>将从本地共享仓库物理删除选中的 {selectedLocal.length} 个模型文件，实例工作流和输出不受影响。</DialogDescription></DialogHeader><div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">此操作不可撤销；网络存储（只读）和下载任务不在批量删除范围内，已自动排除。</div><DialogFooter><button type="button" className="btn-secondary" onClick={() => setBatchDeleteOpen(false)}>取消</button><button type="button" className="btn-danger" onClick={() => { onBatchDelete(selectedLocal); setSelected([]); setBatchDeleteOpen(false) }}><Trash2 className="size-4" />确认删除 {selectedLocal.length} 个</button></DialogFooter></DialogContent></Dialog>
+    </>}
   </>
 }

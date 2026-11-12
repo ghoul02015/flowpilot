@@ -40,6 +40,8 @@ type Install struct {
 	StartedAt        *time.Time    `json:"startedAt,omitempty"`
 	FinishedAt       *time.Time    `json:"finishedAt,omitempty"`
 	Items            []InstallItem `json:"items,omitempty"`
+	// Plan 是安装时的不可变快照，只用于内部执行，不重复对外输出。
+	Plan Plan `json:"-"`
 }
 
 // InstallItem 是计划中的单个文件项。
@@ -189,6 +191,7 @@ func (s *Store) GetInstall(ctx context.Context, id string) (Install, error) {
 		return Install{}, err
 	}
 	_ = json.Unmarshal([]byte(optionsJSON), &install.SelectedOptions)
+	_ = json.Unmarshal([]byte(planJSON), &install.Plan)
 	install.CreatedAt = parseTime(createdAt)
 	install.UpdatedAt = parseTime(updatedAt)
 	install.StartedAt = parseOptionalTime(startedAt)
@@ -399,4 +402,76 @@ func parseOptionalTime(value string) *time.Time {
 		return nil
 	}
 	return &parsed
+}
+
+// FindActiveByBundle 查找某套装任意变体的活动计划（列表与详情使用）。
+func (s *Store) FindActiveByBundle(ctx context.Context, bundleID, version, repo string) (Install, bool, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM bundle_installs
+		WHERE bundle_id=? AND bundle_version=? AND target_repository=?
+		  AND status IN (?,?,?) ORDER BY updated_at DESC LIMIT 1`,
+		bundleID, version, repo, StateQueued, StateInstalling, StatePaused).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Install{}, false, nil
+	}
+	if err != nil {
+		return Install{}, false, err
+	}
+	install, err := s.GetInstall(ctx, id)
+	if err != nil {
+		return Install{}, false, err
+	}
+	return install, true, nil
+}
+
+// ListInstalls 返回最近的安装计划（含子项摘要），供统一任务中心聚合。
+func (s *Store) ListInstalls(ctx context.Context, limit, offset int) ([]Install, int, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM bundle_installs`).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM bundle_installs ORDER BY updated_at DESC LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	list := make([]Install, 0, len(ids))
+	for _, id := range ids {
+		install, err := s.GetInstall(ctx, id)
+		if err != nil {
+			continue
+		}
+		list = append(list, install)
+	}
+	return list, total, nil
+}
+
+// DeleteInstall 删除终态安装计划记录；活动计划需先取消。
+func (s *Store) DeleteInstall(ctx context.Context, id string) error {
+	install, err := s.GetInstall(ctx, id)
+	if err != nil {
+		return err
+	}
+	if statusIsActive(install.Status) {
+		return ErrActiveInstall
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM bundle_install_items WHERE install_id=?`, id); err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `DELETE FROM bundle_installs WHERE id=?`, id)
+	return err
 }

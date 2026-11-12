@@ -17,6 +17,7 @@ import (
 
 	"github.com/ghoul02015/flowpilot/internal/auth"
 	"github.com/ghoul02015/flowpilot/internal/backup"
+	"github.com/ghoul02015/flowpilot/internal/bundle"
 	"github.com/ghoul02015/flowpilot/internal/catalog"
 	"github.com/ghoul02015/flowpilot/internal/database"
 	"github.com/ghoul02015/flowpilot/internal/docker"
@@ -31,7 +32,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/tasks"
 )
 
-const Version = "0.1.0.3"
+const Version = "0.1.0.4"
 
 type Handler struct {
 	docker        *docker.Client
@@ -54,14 +55,16 @@ type Handler struct {
 	backupRunner  *backup.Runner
 	comfyGateway  string
 	comfyClient   *http.Client
+	bundles       *bundle.Service
 }
 
-func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imageManager *image.Manager, downloadManager *download.Manager, comfyGateway string, catalogManager *catalog.Manager, storageManager *storage.Manager, dataStore *database.Store, backupDir string, authManager *auth.Manager, authDisabled bool, migrationManager *migration.Manager, workspaceRoot string, healthChecker *health.Checker, unifiedTasks *tasks.Store, backups *backup.Runner) http.Handler {
+func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardware.Collector, instanceManager *instance.Manager, modelManager *model.Manager, imageManager *image.Manager, downloadManager *download.Manager, comfyGateway string, catalogManager *catalog.Manager, storageManager *storage.Manager, dataStore *database.Store, backupDir string, authManager *auth.Manager, authDisabled bool, migrationManager *migration.Manager, workspaceRoot string, healthChecker *health.Checker, unifiedTasks *tasks.Store, backups *backup.Runner, bundleService *bundle.Service) http.Handler {
 	if comfyGateway == "" {
 		comfyGateway = "host.docker.internal"
 	}
 	handler := &Handler{
-		docker: dockerClient, staticDir: staticDir, hardware: hardwareCollector, instances: instanceManager,
+		bundles: bundleService,
+		docker:  dockerClient, staticDir: staticDir, hardware: hardwareCollector, instances: instanceManager,
 		models: modelManager, images: imageManager, downloads: downloadManager, catalog: catalogManager,
 		storage:       storageManager,
 		database:      dataStore,
@@ -148,6 +151,18 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	// 备份（0.0.9.12）。
 	mux.HandleFunc("GET /api/v1/backups", handler.listBackups)
 	mux.HandleFunc("POST /api/v1/backups", handler.createBackup)
+	// 模型组合套装（0.1.0.4）。
+	mux.HandleFunc("GET /api/v1/model-bundles", handler.listModelBundles)
+	mux.HandleFunc("GET /api/v1/model-bundles/{id}", handler.getModelBundle)
+	mux.HandleFunc("POST /api/v1/model-bundles/{id}/preflight", handler.preflightModelBundle)
+	mux.HandleFunc("POST /api/v1/model-bundles/{id}/installs", handler.createModelBundleInstall)
+	mux.HandleFunc("GET /api/v1/model-bundles/{id}/installs/{installId}", handler.getModelBundleInstall)
+	mux.HandleFunc("POST /api/v1/model-bundles/{id}/installs/{installId}/{action}", handler.modelBundleInstallAction)
+	mux.HandleFunc("POST /api/v1/model-bundles/{id}/license", handler.confirmModelBundleLicense)
+	mux.HandleFunc("POST /api/v1/model-bundles/{id}/link", handler.linkModelBundle)
+	mux.HandleFunc("GET /api/v1/model-bundles/{id}/acceptances", handler.listModelBundleAcceptances)
+	mux.HandleFunc("POST /api/v1/model-bundles/{id}/acceptances", handler.createModelBundleAcceptance)
+	mux.HandleFunc("GET /api/v1/model-bundles/{id}/acceptances/{acceptanceId}/export", handler.exportModelBundleAcceptance)
 	// 统一任务（0.0.9.9）。
 	mux.HandleFunc("GET /api/v1/tasks", handler.listUnifiedTasks)
 	mux.HandleFunc("DELETE /api/v1/tasks", handler.cleanupFinishedTasks)

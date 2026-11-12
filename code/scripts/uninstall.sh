@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="0.1.0.3"
+VERSION="0.1.0.4"
 IMAGE="${FLOWPILOT_IMAGE:-flowpilot-web:${VERSION}}"
 CONTAINER_NAME="${FLOWPILOT_CONTAINER:-flowpilot-web-demo}"
 INSTALL_HOME="${FLOWPILOT_HOME:-${XDG_DATA_HOME:-${HOME}/.local/share}/flowpilot}"

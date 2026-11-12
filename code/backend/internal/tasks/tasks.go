@@ -23,12 +23,13 @@ const (
 
 // 统一类型。
 const (
-	TypeDownload   = "download"
-	TypeImport     = "import"
-	TypeImagePull  = "image-pull"
-	TypeImageBuild = "image-build"
-	TypeMigration  = "migration"
-	TypeBackup     = "backup"
+	TypeDownload      = "download"
+	TypeImport        = "import"
+	TypeImagePull     = "image-pull"
+	TypeImageBuild    = "image-build"
+	TypeMigration     = "migration"
+	TypeBackup        = "backup"
+	TypeBundleInstall = "bundle-install"
 )
 
 // 任务记录删除错误。

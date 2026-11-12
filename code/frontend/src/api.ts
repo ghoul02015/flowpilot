@@ -1137,3 +1137,178 @@ export interface CompatReport {
 export async function getHardwareCompat(): Promise<CompatReport> {
   return getJSON<CompatReport>('/api/v1/hardware/compat', AbortSignal.timeout(8000))
 }
+
+// ===== 模型组合套装（0.1.0.4）=====
+
+export interface BundleLicense {
+  name: string
+  sourceURL: string
+  snapshotDate: string
+  reviewStatus: string
+  noticeRequired: boolean
+  commercialUIRequired: boolean
+  acknowledgementVersion: string
+  deliveryBoundary: string
+}
+
+export interface BundleItemState {
+  key: string
+  role: string
+  required: boolean
+  targetPath: string
+  status: string
+  expectedBytes: number
+  actualBytes: number
+  reason?: string
+}
+
+export interface BundleState {
+  bundleId: string
+  state: string
+  items: BundleItemState[]
+  requiredTotal: number
+  requiredPresent: number
+  optionalTotal: number
+  optionalPresent: number
+  requiredBytes: number
+  presentBytes: number
+  missingBytes: number
+  scannedAt: string
+}
+
+export interface BundleInstallItem {
+  itemKey: string
+  ordinal: number
+  required: boolean
+  targetPath: string
+  expectedBytes: number
+  expectedSha256: string
+  status: string
+  childTaskId?: string
+  actualBytes: number
+  attempts: number
+  errorMessage?: string
+}
+
+export interface BundleInstall {
+  id: string
+  bundleId: string
+  bundleVersion: string
+  variant: string
+  selectedOptions: string[]
+  status: string
+  currentItemKey: string
+  totalBytes: number
+  completedBytes: number
+  errorMessage?: string
+  createdAt: string
+  updatedAt: string
+  startedAt?: string
+  finishedAt?: string
+  items?: BundleInstallItem[]
+}
+
+export interface BundleAcceptance {
+  id: string
+  bundleId: string
+  bundleVersion: string
+  installId: string
+  instanceName: string
+  result: string
+  notes: string
+  operator: string
+  createdAt: string
+}
+
+export interface BundleCard {
+  id: string
+  version: string
+  name: string
+  modelName: string
+  summary: string
+  capability: string[]
+  releaseChannel: string
+  experimental: boolean
+  requiredItems: number
+  optionalItems: number
+  requiredBytes: number
+  totalBytes: number
+  state: BundleState
+  hardwareClass: string
+  hardwareLevel: string
+  hardwareNote: string
+  license: BundleLicense
+  certification: { hardwareClass: string; status: string; evidence: string }[]
+  activeInstall?: BundleInstall
+  latestAcceptance?: BundleAcceptance
+}
+
+export interface BundleCheck {
+  code: string
+  status: string
+  title: string
+  detail: string
+  observed?: string
+  required?: string
+  remediation?: string
+}
+
+export interface BundlePreflight {
+  bundleId: string
+  bundleVersion: string
+  variant: string
+  checks: BundleCheck[]
+  canInstall: boolean
+  canDownloadOnly: boolean
+  plan?: { totalBytes?: number; requiredBytes?: number; optionalBytes?: number }
+}
+
+export interface BundleDetail {
+  card: BundleCard
+  manifest: { version: string; bundleVersion: string; checksum: string; generatedAt: string }
+  items: BundleItemState[]
+  workflows: { name: string; officialURL: string; templateStatus: string; acceptancePreset: string }[]
+  hardware: { gpus: { index: number; name: string; memoryTotalMB: number }[]; unifiedMemory: boolean; hostModel: string; error?: string }
+  install?: BundleInstall
+  acceptances: BundleAcceptance[]
+}
+
+export async function getModelBundles(): Promise<{ bundles: BundleCard[]; manifest: string; bundleVersion: string; checksum: string }> {
+  return getJSON('/api/v1/model-bundles', AbortSignal.timeout(10000))
+}
+
+export async function getModelBundle(id: string): Promise<BundleDetail> {
+  return getJSON(`/api/v1/model-bundles/${encodeURIComponent(id)}`, AbortSignal.timeout(10000))
+}
+
+export async function preflightModelBundle(id: string, variant: string, selectedOptions: string[]): Promise<BundlePreflight> {
+  return sendJSON<BundlePreflight>('POST', `/api/v1/model-bundles/${encodeURIComponent(id)}/preflight`, { variant, selectedOptions })
+}
+
+export async function confirmModelBundleLicense(id: string, deliveryMethod = 'online'): Promise<void> {
+  await sendJSON('POST', `/api/v1/model-bundles/${encodeURIComponent(id)}/license`, { deliveryMethod })
+}
+
+export async function createBundleInstall(id: string, payload: { variant: string; selectedOptions: string[]; requestKey: string }): Promise<BundleInstall> {
+  return sendJSON<BundleInstall>('POST', `/api/v1/model-bundles/${encodeURIComponent(id)}/installs`, payload)
+}
+
+export async function getBundleInstall(id: string, installId: string): Promise<BundleInstall> {
+  return getJSON(`/api/v1/model-bundles/${encodeURIComponent(id)}/installs/${encodeURIComponent(installId)}`, AbortSignal.timeout(8000))
+}
+
+export async function bundleInstallAction(id: string, installId: string, action: 'pause' | 'resume' | 'cancel' | 'retry'): Promise<BundleInstall> {
+  return sendJSON<BundleInstall>('POST', `/api/v1/model-bundles/${encodeURIComponent(id)}/installs/${encodeURIComponent(installId)}/${action}`)
+}
+
+export async function linkModelBundle(id: string, installId: string, instance: string): Promise<{ added: string[] }> {
+  return sendJSON('POST', `/api/v1/model-bundles/${encodeURIComponent(id)}/link`, { installId, instance })
+}
+
+export async function listBundleAcceptances(id: string): Promise<{ acceptances: BundleAcceptance[]; total: number }> {
+  return getJSON(`/api/v1/model-bundles/${encodeURIComponent(id)}/acceptances`, AbortSignal.timeout(8000))
+}
+
+export async function createBundleAcceptance(id: string, payload: { installId?: string; instance: string; result: string; notes: string }): Promise<BundleAcceptance> {
+  return sendJSON<BundleAcceptance>('POST', `/api/v1/model-bundles/${encodeURIComponent(id)}/acceptances`, payload)
+}

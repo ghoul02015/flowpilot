@@ -168,7 +168,7 @@ func main() {
 
 	httpServer := &http.Server{
 		Addr:    address,
-		Handler: server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imageManager, downloadManager, environment("FLOWPILOT_HOST_GATEWAY", "host.docker.internal"), catalogManager, storageManager, dataStore, backupDir, authManager, authDisabledFlag, migrationManager, workspacesContainerRoot, healthChecker, taskStore, backupRunner),
+		Handler: server.New(staticDir, dockerClient, hardwareCollector, instanceManager, modelManager, imageManager, downloadManager, environment("FLOWPILOT_HOST_GATEWAY", "host.docker.internal"), catalogManager, storageManager, dataStore, backupDir, authManager, authDisabledFlag, migrationManager, workspacesContainerRoot, healthChecker, taskStore, backupRunner, server.NewBundleService(dataStore, modelManager, downloadManager, dockerClient, hardwareCollector, instanceManager)),
 		// 镜像导入/导出可能是 GB 级长连接；保留请求头超时，正文与响应不设置固定上限。
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
