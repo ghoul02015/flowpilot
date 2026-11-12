@@ -486,8 +486,8 @@ func TestDatabaseEndpointsWithStore(t *testing.T) {
 	if err := json.NewDecoder(response.Body).Decode(&status); err != nil {
 		t.Fatal(err)
 	}
-	if status.SchemaVersion != 4 || !status.Integrity.OK {
-		t.Fatalf("schema 版本应为 4 且完整性通过，实际 %+v", status)
+	if status.SchemaVersion != 5 || !status.Integrity.OK {
+		t.Fatalf("schema 版本应为 5 且完整性通过，实际 %+v", status)
 	}
 
 	// 检查：无实例时空报告。

@@ -33,8 +33,8 @@ func TestMigrateIdempotent(t *testing.T) {
 		}
 	}
 	version, err := SchemaVersion(db)
-	if err != nil || version != 4 {
-		t.Fatalf("schema 版本应为 4，实际 %d（err=%v）", version, err)
+	if err != nil || version != 5 {
+		t.Fatalf("schema 版本应为 5，实际 %d（err=%v）", version, err)
 	}
 }
 
@@ -230,5 +230,45 @@ func TestBackupAndIntegrity(t *testing.T) {
 	var total int
 	if err := backupDB.QueryRow("SELECT COUNT(*) FROM instances").Scan(&total); err != nil || total != 1 {
 		t.Fatalf("备份应包含 1 条实例记录，实际 %d（err=%v）", total, err)
+	}
+}
+
+// TestBundleSchemaAndActiveUniqueness 验证 Version 5 四张表与活动计划唯一约束。
+func TestBundleSchemaAndActiveUniqueness(t *testing.T) {
+	db := openTestDB(t)
+	if _, err := Migrate(db, Migrations); err != nil {
+		t.Fatalf("迁移失败：%v", err)
+	}
+	for _, table := range []string{"bundle_installs", "bundle_install_items", "bundle_license_confirmations", "bundle_acceptances"} {
+		var name string
+		if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name); err != nil {
+			t.Fatalf("缺少表 %s：%v", table, err)
+		}
+	}
+	insert := func(id, status string) error {
+		_, err := db.Exec(`INSERT INTO bundle_installs (id, bundle_id, bundle_version, variant, target_repository, status, created_at, updated_at)
+			VALUES (?, 'h3-image-base', '1.0.0', 'default', 'models', ?, '2026-11-12T00:00:00Z', '2026-11-12T00:00:00Z')`, id, status)
+		return err
+	}
+	if err := insert("install-1", "installing"); err != nil {
+		t.Fatalf("首个活动计划应可写入：%v", err)
+	}
+	if err := insert("install-2", "installing"); err == nil {
+		t.Fatal("同一套装+版本+变体+仓库不允许第二个活动计划")
+	}
+	// 终态计划不受活动唯一约束限制。
+	if err := insert("install-3", "files_ready"); err != nil {
+		t.Fatalf("终态计划应可共存：%v", err)
+	}
+	// 子项唯一键。
+	if _, err := db.Exec(`INSERT INTO bundle_install_items (install_id, item_key, target_path) VALUES ('install-1','k1','vae/a.safetensors')`); err != nil {
+		t.Fatalf("子项写入失败：%v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO bundle_install_items (install_id, item_key, target_path) VALUES ('install-1','k1','vae/b.safetensors')`); err == nil {
+		t.Fatal("(install_id, item_key) 必须唯一")
+	}
+	// 重复迁移幂等。
+	if applied, err := Migrate(db, Migrations); err != nil || applied != 0 {
+		t.Fatalf("重复迁移应幂等：applied=%d err=%v", applied, err)
 	}
 }

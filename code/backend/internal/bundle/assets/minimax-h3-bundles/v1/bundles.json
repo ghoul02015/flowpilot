@@ -1,0 +1,1070 @@
+{
+  "manifestVersion": "minimax-h3-bundles/v1",
+  "bundleVersion": "1.0.0",
+  "generatedAt": "2026-11-12T04:30:00Z",
+  "repositoryRoot": "models",
+  "sources": [
+    {
+      "repo": "Comfy-Org/MiniMax-H3",
+      "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+      "licenseName": "minimax-h3-community-license-agreement",
+      "lastModified": "2026-11-02T21:17:20Z"
+    },
+    {
+      "repo": "Comfy-Org/MiniMax-H3-Image",
+      "revision": "0bb149f51e3156ed4b90dd45d5620346bfe1df8f",
+      "licenseName": "minimax-h3-community-license-agreement",
+      "lastModified": "2026-11-11T12:10:29Z"
+    }
+  ],
+  "bundles": [
+    {
+      "id": "h3-image-base",
+      "version": "1.0.0",
+      "name": "S1 H3-Image 基础创作包",
+      "modelName": "MiniMax-H3-Image",
+      "summary": "H3-Image 基础文生图与单参考编辑，INT8 扩散模型＋32B 文本编码器。",
+      "capability": [
+        "image"
+      ],
+      "releaseChannel": "standard",
+      "requiredComfyUI": ">=0.45.0",
+      "requiredTemplatePack": "0.11.104",
+      "variants": [
+        {
+          "key": "default",
+          "name": "默认（INT8）",
+          "default": true
+        }
+      ],
+      "items": [
+        {
+          "key": "img-diffusion-int8",
+          "role": "diffusion_model",
+          "required": true,
+          "optionalGroup": "",
+          "category": "diffusion_models",
+          "fileName": "minimax_h3_image_pruned_int8_convrot.safetensors",
+          "targetRelativePath": "diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3-Image",
+              "revision": "0bb149f51e3156ed4b90dd45d5620346bfe1df8f",
+              "filePath": "diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors",
+              "sizeBytes": 20979314802,
+              "sha256": "83eb140f1ff95c068f8a6886e6d3f3d0d4ab2e07bb2fe6d2ef992a51146ee622"
+            }
+          ]
+        },
+        {
+          "key": "img-text-encoder-int8",
+          "role": "text_encoder",
+          "required": true,
+          "optionalGroup": "",
+          "category": "text_encoders",
+          "fileName": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+          "targetRelativePath": "text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3-Image",
+              "revision": "0bb149f51e3156ed4b90dd45d5620346bfe1df8f",
+              "filePath": "text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+              "sizeBytes": 27141342152,
+              "sha256": "bc2ced0fbea64757fa9acddccfc0b3f4819d1dcf1da6c124d690d368be283923"
+            }
+          ]
+        },
+        {
+          "key": "img-vae-fp16",
+          "role": "vae",
+          "required": true,
+          "optionalGroup": "",
+          "category": "vae",
+          "fileName": "minimax_h3_image_vae_fp16.safetensors",
+          "targetRelativePath": "vae/minimax_h3_image_vae_fp16.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3-Image",
+              "revision": "0bb149f51e3156ed4b90dd45d5620346bfe1df8f",
+              "filePath": "vae/minimax_h3_image_vae_fp16.safetensors",
+              "sizeBytes": 1168505312,
+              "sha256": "d80e9c2e5cfc9844869961ff5a58c9a9e52182df6bfb30b26018dd7f348721af"
+            }
+          ]
+        }
+      ],
+      "hardwareRules": [
+        {
+          "hardwareClass": "spark-128g",
+          "level": "candidate",
+          "note": "统一内存，单用户私有化推荐候选"
+        },
+        {
+          "hardwareClass": "pro6000-96g",
+          "level": "priority",
+          "note": "专业图像主力推荐候选"
+        },
+        {
+          "hardwareClass": "rtx5090-32g",
+          "level": "experimental",
+          "note": "offload 实验，不承诺速度"
+        },
+        {
+          "hardwareClass": "rtx4090-24g",
+          "level": "experimental",
+          "note": "offload 实验，不作开箱机型"
+        },
+        {
+          "hardwareClass": "none",
+          "level": "unknown",
+          "note": "不可评估运行环境，仅允许下载资产"
+        }
+      ],
+      "workflows": [
+        {
+          "name": "H3-Image 文生图 / 单参考编辑",
+          "officialURL": "https://docs.comfy.org/tutorials/image/minimax/minimax-h3-image",
+          "templateStatus": "unverified",
+          "acceptancePreset": "4MP-T2I / 4MP-edit"
+        }
+      ],
+      "license": {
+        "name": "MiniMax H3 Community License Agreement",
+        "sourceURL": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE",
+        "snapshotDate": "2026-11-12",
+        "reviewStatus": "needs_review",
+        "noticeRequired": true,
+        "commercialUIRequired": true,
+        "acknowledgementVersion": "minimax-h3-license-2026-11",
+        "deliveryBoundary": "许可确认仅表示用户已阅读，不代表平台授予商业授权或完成法务审核。"
+      },
+      "certificationByHardware": [],
+      "experimental": false
+    },
+    {
+      "id": "h3-image-pro",
+      "version": "1.0.0",
+      "name": "S2 H3-Image 专业创作包",
+      "modelName": "MiniMax-H3-Image",
+      "summary": "在 S1 基础上增加 9B W4A8 GPTQ 编码器，覆盖 4MP/16MP 与多参考编辑。",
+      "capability": [
+        "image"
+      ],
+      "releaseChannel": "standard",
+      "requiredComfyUI": ">=0.45.0",
+      "requiredTemplatePack": "0.11.104",
+      "variants": [
+        {
+          "key": "default",
+          "name": "默认（含 9B 编码器）",
+          "default": true
+        }
+      ],
+      "items": [
+        {
+          "key": "img-diffusion-int8",
+          "role": "diffusion_model",
+          "required": true,
+          "optionalGroup": "",
+          "category": "diffusion_models",
+          "fileName": "minimax_h3_image_pruned_int8_convrot.safetensors",
+          "targetRelativePath": "diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3-Image",
+              "revision": "0bb149f51e3156ed4b90dd45d5620346bfe1df8f",
+              "filePath": "diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors",
+              "sizeBytes": 20979314802,
+              "sha256": "83eb140f1ff95c068f8a6886e6d3f3d0d4ab2e07bb2fe6d2ef992a51146ee622"
+            }
+          ]
+        },
+        {
+          "key": "img-text-encoder-int8",
+          "role": "text_encoder",
+          "required": true,
+          "optionalGroup": "",
+          "category": "text_encoders",
+          "fileName": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+          "targetRelativePath": "text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3-Image",
+              "revision": "0bb149f51e3156ed4b90dd45d5620346bfe1df8f",
+              "filePath": "text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+              "sizeBytes": 27141342152,
+              "sha256": "bc2ced0fbea64757fa9acddccfc0b3f4819d1dcf1da6c124d690d368be283923"
+            }
+          ]
+        },
+        {
+          "key": "img-vae-fp16",
+          "role": "vae",
+          "required": true,
+          "optionalGroup": "",
+          "category": "vae",
+          "fileName": "minimax_h3_image_vae_fp16.safetensors",
+          "targetRelativePath": "vae/minimax_h3_image_vae_fp16.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3-Image",
+              "revision": "0bb149f51e3156ed4b90dd45d5620346bfe1df8f",
+              "filePath": "vae/minimax_h3_image_vae_fp16.safetensors",
+              "sizeBytes": 1168505312,
+              "sha256": "d80e9c2e5cfc9844869961ff5a58c9a9e52182df6bfb30b26018dd7f348721af"
+            }
+          ]
+        },
+        {
+          "key": "img-text-encoder-9b-w4a8",
+          "role": "text_encoder",
+          "required": true,
+          "optionalGroup": "",
+          "category": "text_encoders",
+          "fileName": "qwen3.5_9b_w4a8_gptq.safetensors",
+          "targetRelativePath": "text_encoders/qwen3.5_9b_w4a8_gptq.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3-Image",
+              "revision": "0bb149f51e3156ed4b90dd45d5620346bfe1df8f",
+              "filePath": "text_encoders/qwen3.5_9b_w4a8_gptq.safetensors",
+              "sizeBytes": 7343591088,
+              "sha256": "4cc6a1543ad2061806da46f35f90cadb4801dcba246c44782cf42ec0feb6407c"
+            }
+          ]
+        }
+      ],
+      "hardwareRules": [
+        {
+          "hardwareClass": "spark-128g",
+          "level": "candidate",
+          "note": "4MP 推荐候选，16MP 需人工验收"
+        },
+        {
+          "hardwareClass": "pro6000-96g",
+          "level": "priority",
+          "note": "16MP 与多参考优先候选"
+        },
+        {
+          "hardwareClass": "rtx5090-32g",
+          "level": "experimental",
+          "note": "offload 实验"
+        },
+        {
+          "hardwareClass": "rtx4090-24g",
+          "level": "not_recommended",
+          "note": "不建议标准交付"
+        },
+        {
+          "hardwareClass": "none",
+          "level": "unknown",
+          "note": "不可评估运行环境"
+        }
+      ],
+      "workflows": [
+        {
+          "name": "H3-Image PE 开/关、4MP/16MP 编辑",
+          "officialURL": "https://docs.comfy.org/tutorials/image/minimax/minimax-h3-image",
+          "templateStatus": "unverified",
+          "acceptancePreset": "4MP-T2I / 16MP-edit / multi-reference"
+        }
+      ],
+      "license": {
+        "name": "MiniMax H3 Community License Agreement",
+        "sourceURL": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE",
+        "snapshotDate": "2026-11-12",
+        "reviewStatus": "needs_review",
+        "noticeRequired": true,
+        "commercialUIRequired": true,
+        "acknowledgementVersion": "minimax-h3-license-2026-11",
+        "deliveryBoundary": "许可确认仅表示用户已阅读，不代表平台授予商业授权或完成法务审核。"
+      },
+      "certificationByHardware": [],
+      "experimental": false
+    },
+    {
+      "id": "h3-av-base",
+      "version": "1.0.0",
+      "name": "S3 H3 音视频基础包",
+      "modelName": "MiniMax-H3",
+      "summary": "FL2VA 视频＋音频联合生成，INT8 扩散模型＋NVFP4 编码器，Turbo 可选。",
+      "capability": [
+        "video",
+        "audio"
+      ],
+      "releaseChannel": "standard",
+      "requiredComfyUI": ">=0.45.0",
+      "requiredTemplatePack": "0.11.104",
+      "variants": [
+        {
+          "key": "default",
+          "name": "默认（不含 Turbo）",
+          "default": true
+        },
+        {
+          "key": "turbo-4step",
+          "name": "Turbo 4-step",
+          "default": false,
+          "optionalGroup": "fl2v-turbo",
+          "selects": [
+            "lora-fl2v-turbo-4step"
+          ]
+        },
+        {
+          "key": "turbo-8step",
+          "name": "Turbo 8-step",
+          "default": false,
+          "optionalGroup": "fl2v-turbo",
+          "selects": [
+            "lora-fl2v-turbo-8step"
+          ]
+        }
+      ],
+      "items": [
+        {
+          "key": "vid-diffusion-fl2va-int8",
+          "role": "diffusion_model",
+          "required": true,
+          "optionalGroup": "",
+          "category": "diffusion_models",
+          "fileName": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+          "targetRelativePath": "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+              "sizeBytes": 20970379616,
+              "sha256": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
+            }
+          ]
+        },
+        {
+          "key": "vid-text-encoder-nvfp4",
+          "role": "text_encoder",
+          "required": true,
+          "optionalGroup": "",
+          "category": "text_encoders",
+          "fileName": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+          "targetRelativePath": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+              "sizeBytes": 15687142551,
+              "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6"
+            }
+          ]
+        },
+        {
+          "key": "vid-vae-fp16",
+          "role": "vae",
+          "required": true,
+          "optionalGroup": "",
+          "category": "vae",
+          "fileName": "minimax_h3_video_vae_fp16.safetensors",
+          "targetRelativePath": "vae/minimax_h3_video_vae_fp16.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "vae/minimax_h3_video_vae_fp16.safetensors",
+              "sizeBytes": 5207808496,
+              "sha256": "7c1f131492e7eddacaac9069a61b81bdd39de5cc96561e677c5eab1cdce5e522"
+            }
+          ]
+        },
+        {
+          "key": "vid-audio-vae-fp32",
+          "role": "vae",
+          "required": true,
+          "optionalGroup": "",
+          "category": "vae",
+          "fileName": "minimax_h3_audio_vae_fp32.safetensors",
+          "targetRelativePath": "vae/minimax_h3_audio_vae_fp32.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "vae/minimax_h3_audio_vae_fp32.safetensors",
+              "sizeBytes": 605254808,
+              "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48"
+            }
+          ]
+        },
+        {
+          "key": "lora-fl2v-turbo-4step",
+          "role": "lora",
+          "required": false,
+          "optionalGroup": "fl2v-turbo",
+          "category": "loras",
+          "fileName": "minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors",
+          "targetRelativePath": "loras/minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "loras/minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors",
+              "sizeBytes": 1956192992,
+              "sha256": "c396a9a06f58399e9df9754b18299818d84a2ddd371724ba48fe4a41221437dc"
+            }
+          ]
+        },
+        {
+          "key": "lora-fl2v-turbo-8step",
+          "role": "lora",
+          "required": false,
+          "optionalGroup": "fl2v-turbo",
+          "category": "loras",
+          "fileName": "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+          "targetRelativePath": "loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+              "sizeBytes": 1956193000,
+              "sha256": "2339acdf19bfe123f46b971ea35d367a84adb85de43627e1eceafa5a5b2b111e"
+            }
+          ]
+        }
+      ],
+      "hardwareRules": [
+        {
+          "hardwareClass": "spark-128g",
+          "level": "priority",
+          "note": "优先认证候选，单用户音视频"
+        },
+        {
+          "hardwareClass": "pro6000-96g",
+          "level": "candidate",
+          "note": "推荐认证候选"
+        },
+        {
+          "hardwareClass": "rtx5090-32g",
+          "level": "experimental",
+          "note": "实验／待认证"
+        },
+        {
+          "hardwareClass": "rtx4090-24g",
+          "level": "experimental",
+          "note": "实验／待认证"
+        },
+        {
+          "hardwareClass": "none",
+          "level": "unknown",
+          "note": "不可评估运行环境"
+        }
+      ],
+      "workflows": [
+        {
+          "name": "H3 5 秒 T2V / I2V",
+          "officialURL": "https://docs.comfy.org/tutorials/video/minimax/minimax-h3",
+          "templateStatus": "unverified",
+          "acceptancePreset": "5s-T2V / 5s-I2V"
+        }
+      ],
+      "license": {
+        "name": "MiniMax H3 Community License Agreement",
+        "sourceURL": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE",
+        "snapshotDate": "2026-11-12",
+        "reviewStatus": "needs_review",
+        "noticeRequired": true,
+        "commercialUIRequired": true,
+        "acknowledgementVersion": "minimax-h3-license-2026-11",
+        "deliveryBoundary": "许可确认仅表示用户已阅读，不代表平台授予商业授权或完成法务审核。"
+      },
+      "certificationByHardware": [],
+      "experimental": false
+    },
+    {
+      "id": "h3-av-reference",
+      "version": "1.0.0",
+      "name": "S4 H3 全参考视频包",
+      "modelName": "MiniMax-H3",
+      "summary": "在 S3 基础上增加 Ref2VA 全参考视频模型，参考一致性与复杂运动为实验能力。",
+      "capability": [
+        "video",
+        "audio",
+        "reference"
+      ],
+      "releaseChannel": "experimental",
+      "requiredComfyUI": ">=0.45.0",
+      "requiredTemplatePack": "0.11.104",
+      "variants": [
+        {
+          "key": "default",
+          "name": "默认（含 Ref2VA）",
+          "default": true
+        },
+        {
+          "key": "ref2v-turbo",
+          "name": "Ref2V Turbo 4-step",
+          "default": false,
+          "optionalGroup": "ref2v-turbo",
+          "selects": [
+            "lora-ref2v-turbo-4step"
+          ]
+        }
+      ],
+      "items": [
+        {
+          "key": "vid-diffusion-fl2va-int8",
+          "role": "diffusion_model",
+          "required": true,
+          "optionalGroup": "",
+          "category": "diffusion_models",
+          "fileName": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+          "targetRelativePath": "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+              "sizeBytes": 20970379616,
+              "sha256": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
+            }
+          ]
+        },
+        {
+          "key": "vid-text-encoder-nvfp4",
+          "role": "text_encoder",
+          "required": true,
+          "optionalGroup": "",
+          "category": "text_encoders",
+          "fileName": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+          "targetRelativePath": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+              "sizeBytes": 15687142551,
+              "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6"
+            }
+          ]
+        },
+        {
+          "key": "vid-vae-fp16",
+          "role": "vae",
+          "required": true,
+          "optionalGroup": "",
+          "category": "vae",
+          "fileName": "minimax_h3_video_vae_fp16.safetensors",
+          "targetRelativePath": "vae/minimax_h3_video_vae_fp16.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "vae/minimax_h3_video_vae_fp16.safetensors",
+              "sizeBytes": 5207808496,
+              "sha256": "7c1f131492e7eddacaac9069a61b81bdd39de5cc96561e677c5eab1cdce5e522"
+            }
+          ]
+        },
+        {
+          "key": "vid-audio-vae-fp32",
+          "role": "vae",
+          "required": true,
+          "optionalGroup": "",
+          "category": "vae",
+          "fileName": "minimax_h3_audio_vae_fp32.safetensors",
+          "targetRelativePath": "vae/minimax_h3_audio_vae_fp32.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "vae/minimax_h3_audio_vae_fp32.safetensors",
+              "sizeBytes": 605254808,
+              "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48"
+            }
+          ]
+        },
+        {
+          "key": "vid-diffusion-ref2va-int8",
+          "role": "diffusion_model",
+          "required": true,
+          "optionalGroup": "",
+          "category": "diffusion_models",
+          "fileName": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+          "targetRelativePath": "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+              "sizeBytes": 20970379616,
+              "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779"
+            }
+          ]
+        },
+        {
+          "key": "lora-fl2v-turbo-4step",
+          "role": "lora",
+          "required": false,
+          "optionalGroup": "fl2v-turbo",
+          "category": "loras",
+          "fileName": "minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors",
+          "targetRelativePath": "loras/minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "loras/minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors",
+              "sizeBytes": 1956192992,
+              "sha256": "c396a9a06f58399e9df9754b18299818d84a2ddd371724ba48fe4a41221437dc"
+            }
+          ]
+        },
+        {
+          "key": "lora-fl2v-turbo-8step",
+          "role": "lora",
+          "required": false,
+          "optionalGroup": "fl2v-turbo",
+          "category": "loras",
+          "fileName": "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+          "targetRelativePath": "loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+              "sizeBytes": 1956193000,
+              "sha256": "2339acdf19bfe123f46b971ea35d367a84adb85de43627e1eceafa5a5b2b111e"
+            }
+          ]
+        },
+        {
+          "key": "lora-ref2v-turbo-4step",
+          "role": "lora",
+          "required": false,
+          "optionalGroup": "ref2v-turbo",
+          "category": "loras",
+          "fileName": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+          "targetRelativePath": "loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+              "sizeBytes": 1956193000,
+              "sha256": "5b9ab5ade15d0775676d01a907268a69a1468dc6033b3b0d3ded5502f3ebb84c"
+            }
+          ]
+        }
+      ],
+      "hardwareRules": [
+        {
+          "hardwareClass": "spark-128g",
+          "level": "conditional",
+          "note": "条件认证，需人工验收"
+        },
+        {
+          "hardwareClass": "pro6000-96g",
+          "level": "conditional",
+          "note": "条件认证"
+        },
+        {
+          "hardwareClass": "rtx5090-32g",
+          "level": "not_committed",
+          "note": "不承诺"
+        },
+        {
+          "hardwareClass": "rtx4090-24g",
+          "level": "not_committed",
+          "note": "不承诺"
+        },
+        {
+          "hardwareClass": "none",
+          "level": "unknown",
+          "note": "不可评估运行环境"
+        }
+      ],
+      "workflows": [
+        {
+          "name": "H3 R2V / V2V 全参考",
+          "officialURL": "https://docs.comfy.org/tutorials/video/minimax/minimax-h3",
+          "templateStatus": "unverified",
+          "acceptancePreset": "reference-R2V / V2V（实验）"
+        }
+      ],
+      "license": {
+        "name": "MiniMax H3 Community License Agreement",
+        "sourceURL": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE",
+        "snapshotDate": "2026-11-12",
+        "reviewStatus": "needs_review",
+        "noticeRequired": true,
+        "commercialUIRequired": true,
+        "acknowledgementVersion": "minimax-h3-license-2026-11",
+        "deliveryBoundary": "许可确认仅表示用户已阅读，不代表平台授予商业授权或完成法务审核。"
+      },
+      "certificationByHardware": [],
+      "experimental": true
+    },
+    {
+      "id": "h3-studio",
+      "version": "1.0.0",
+      "name": "S5 H3 图视一体创作包",
+      "modelName": "MiniMax-H3",
+      "summary": "组合 S2 图像专业包与 S3 音视频基础包，全参考扩展可选，图像与视频编码器分别保留。",
+      "capability": [
+        "image",
+        "video",
+        "audio"
+      ],
+      "releaseChannel": "experimental",
+      "requiredComfyUI": ">=0.45.0",
+      "requiredTemplatePack": "0.11.104",
+      "variants": [
+        {
+          "key": "default",
+          "name": "默认（S2＋S3）",
+          "default": true
+        },
+        {
+          "key": "with-reference",
+          "name": "含全参考扩展",
+          "default": false,
+          "optionalGroup": "full-reference",
+          "selects": [
+            "vid-diffusion-ref2va-int8"
+          ]
+        }
+      ],
+      "items": [
+        {
+          "key": "img-diffusion-int8",
+          "role": "diffusion_model",
+          "required": true,
+          "optionalGroup": "",
+          "category": "diffusion_models",
+          "fileName": "minimax_h3_image_pruned_int8_convrot.safetensors",
+          "targetRelativePath": "diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3-Image",
+              "revision": "0bb149f51e3156ed4b90dd45d5620346bfe1df8f",
+              "filePath": "diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors",
+              "sizeBytes": 20979314802,
+              "sha256": "83eb140f1ff95c068f8a6886e6d3f3d0d4ab2e07bb2fe6d2ef992a51146ee622"
+            }
+          ]
+        },
+        {
+          "key": "img-text-encoder-int8",
+          "role": "text_encoder",
+          "required": true,
+          "optionalGroup": "",
+          "category": "text_encoders",
+          "fileName": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+          "targetRelativePath": "text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3-Image",
+              "revision": "0bb149f51e3156ed4b90dd45d5620346bfe1df8f",
+              "filePath": "text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+              "sizeBytes": 27141342152,
+              "sha256": "bc2ced0fbea64757fa9acddccfc0b3f4819d1dcf1da6c124d690d368be283923"
+            }
+          ]
+        },
+        {
+          "key": "img-vae-fp16",
+          "role": "vae",
+          "required": true,
+          "optionalGroup": "",
+          "category": "vae",
+          "fileName": "minimax_h3_image_vae_fp16.safetensors",
+          "targetRelativePath": "vae/minimax_h3_image_vae_fp16.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3-Image",
+              "revision": "0bb149f51e3156ed4b90dd45d5620346bfe1df8f",
+              "filePath": "vae/minimax_h3_image_vae_fp16.safetensors",
+              "sizeBytes": 1168505312,
+              "sha256": "d80e9c2e5cfc9844869961ff5a58c9a9e52182df6bfb30b26018dd7f348721af"
+            }
+          ]
+        },
+        {
+          "key": "img-text-encoder-9b-w4a8",
+          "role": "text_encoder",
+          "required": true,
+          "optionalGroup": "",
+          "category": "text_encoders",
+          "fileName": "qwen3.5_9b_w4a8_gptq.safetensors",
+          "targetRelativePath": "text_encoders/qwen3.5_9b_w4a8_gptq.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3-Image",
+              "revision": "0bb149f51e3156ed4b90dd45d5620346bfe1df8f",
+              "filePath": "text_encoders/qwen3.5_9b_w4a8_gptq.safetensors",
+              "sizeBytes": 7343591088,
+              "sha256": "4cc6a1543ad2061806da46f35f90cadb4801dcba246c44782cf42ec0feb6407c"
+            }
+          ]
+        },
+        {
+          "key": "vid-diffusion-fl2va-int8",
+          "role": "diffusion_model",
+          "required": true,
+          "optionalGroup": "",
+          "category": "diffusion_models",
+          "fileName": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+          "targetRelativePath": "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+              "sizeBytes": 20970379616,
+              "sha256": "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a"
+            }
+          ]
+        },
+        {
+          "key": "vid-text-encoder-nvfp4",
+          "role": "text_encoder",
+          "required": true,
+          "optionalGroup": "",
+          "category": "text_encoders",
+          "fileName": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+          "targetRelativePath": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+              "sizeBytes": 15687142551,
+              "sha256": "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6"
+            }
+          ]
+        },
+        {
+          "key": "vid-vae-fp16",
+          "role": "vae",
+          "required": true,
+          "optionalGroup": "",
+          "category": "vae",
+          "fileName": "minimax_h3_video_vae_fp16.safetensors",
+          "targetRelativePath": "vae/minimax_h3_video_vae_fp16.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "vae/minimax_h3_video_vae_fp16.safetensors",
+              "sizeBytes": 5207808496,
+              "sha256": "7c1f131492e7eddacaac9069a61b81bdd39de5cc96561e677c5eab1cdce5e522"
+            }
+          ]
+        },
+        {
+          "key": "vid-audio-vae-fp32",
+          "role": "vae",
+          "required": true,
+          "optionalGroup": "",
+          "category": "vae",
+          "fileName": "minimax_h3_audio_vae_fp32.safetensors",
+          "targetRelativePath": "vae/minimax_h3_audio_vae_fp32.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "vae/minimax_h3_audio_vae_fp32.safetensors",
+              "sizeBytes": 605254808,
+              "sha256": "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48"
+            }
+          ]
+        },
+        {
+          "key": "lora-fl2v-turbo-4step",
+          "role": "lora",
+          "required": false,
+          "optionalGroup": "fl2v-turbo",
+          "category": "loras",
+          "fileName": "minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors",
+          "targetRelativePath": "loras/minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "loras/minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors",
+              "sizeBytes": 1956192992,
+              "sha256": "c396a9a06f58399e9df9754b18299818d84a2ddd371724ba48fe4a41221437dc"
+            }
+          ]
+        },
+        {
+          "key": "lora-fl2v-turbo-8step",
+          "role": "lora",
+          "required": false,
+          "optionalGroup": "fl2v-turbo",
+          "category": "loras",
+          "fileName": "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+          "targetRelativePath": "loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+              "sizeBytes": 1956193000,
+              "sha256": "2339acdf19bfe123f46b971ea35d367a84adb85de43627e1eceafa5a5b2b111e"
+            }
+          ]
+        },
+        {
+          "key": "vid-diffusion-ref2va-int8",
+          "role": "diffusion_model",
+          "required": false,
+          "optionalGroup": "full-reference",
+          "category": "diffusion_models",
+          "fileName": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+          "targetRelativePath": "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+          "dependsOn": [],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+              "sizeBytes": 20970379616,
+              "sha256": "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779"
+            }
+          ]
+        },
+        {
+          "key": "lora-ref2v-turbo-4step",
+          "role": "lora",
+          "required": false,
+          "optionalGroup": "ref2v-turbo",
+          "category": "loras",
+          "fileName": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+          "targetRelativePath": "loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+          "dependsOn": [
+            "vid-diffusion-ref2va-int8"
+          ],
+          "conflicts": [],
+          "sources": [
+            {
+              "repo": "Comfy-Org/MiniMax-H3",
+              "revision": "54472221d27c695fca9621b0c3ed52f06c4af707",
+              "filePath": "loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+              "sizeBytes": 1956193000,
+              "sha256": "5b9ab5ade15d0775676d01a907268a69a1468dc6033b3b0d3ded5502f3ebb84c"
+            }
+          ]
+        }
+      ],
+      "hardwareRules": [
+        {
+          "hardwareClass": "spark-128g",
+          "level": "candidate",
+          "note": "紧凑旗舰候选，顺序运行"
+        },
+        {
+          "hardwareClass": "pro6000-96g",
+          "level": "priority",
+          "note": "图视旗舰优先候选"
+        },
+        {
+          "hardwareClass": "rtx5090-32g",
+          "level": "not_committed",
+          "note": "不承诺"
+        },
+        {
+          "hardwareClass": "rtx4090-24g",
+          "level": "not_committed",
+          "note": "不承诺"
+        },
+        {
+          "hardwareClass": "none",
+          "level": "unknown",
+          "note": "不可评估运行环境"
+        }
+      ],
+      "workflows": [
+        {
+          "name": "H3 图视一体组合（图像 4MP＋视频 5s）",
+          "officialURL": "https://docs.comfy.org/tutorials/video/minimax/minimax-h3",
+          "templateStatus": "unverified",
+          "acceptancePreset": "4MP-T2I + 5s-T2V"
+        }
+      ],
+      "license": {
+        "name": "MiniMax H3 Community License Agreement",
+        "sourceURL": "https://huggingface.co/MiniMaxAI/MiniMax-H3/blob/main/LICENSE",
+        "snapshotDate": "2026-11-12",
+        "reviewStatus": "needs_review",
+        "noticeRequired": true,
+        "commercialUIRequired": true,
+        "acknowledgementVersion": "minimax-h3-license-2026-11",
+        "deliveryBoundary": "许可确认仅表示用户已阅读，不代表平台授予商业授权或完成法务审核。"
+      },
+      "certificationByHardware": [],
+      "experimental": true
+    }
+  ]
+}
