@@ -101,6 +101,15 @@ type Manager struct {
 	tasks      map[string]*taskState
 	now        func() time.Time
 	idSeq      int64
+	// onFinish 在任务成功写入仓库后触发，用于让模型缓存失效。
+	onFinish func(Task)
+}
+
+// SetOnFinish 注册任务完成回调（成功写入仓库后调用）。
+func (m *Manager) SetOnFinish(callback func(Task)) {
+	m.mu.Lock()
+	m.onFinish = callback
+	m.mu.Unlock()
 }
 
 // NewManager 创建下载任务管理器，root 为模型仓库根目录，
@@ -689,7 +698,8 @@ func (m *Manager) finish(id string, partPath string) {
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	completed := false
+	var finished Task
 	if state, ok := m.tasks[id]; ok {
 		state.task.Status = "completed"
 		if kind == "import" {
@@ -708,6 +718,12 @@ func (m *Manager) finish(id string, partPath string) {
 		}
 		state.task.UpdatedAt = m.now()
 		m.persist()
+		completed = true
+		finished = state.task
+	}
+	m.mu.Unlock()
+	if completed && m.onFinish != nil {
+		m.onFinish(finished)
 	}
 }
 

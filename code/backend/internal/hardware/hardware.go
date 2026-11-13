@@ -84,6 +84,17 @@ type Collector struct {
 	prevIdle  uint64
 	prevTotal uint64
 	prevValid bool
+
+	// 短时缓存与单飞：并发请求共享同一次采集，避免重复执行 nvidia-smi。
+	cache      *Report
+	cacheAt    time.Time
+	collecting bool
+	wait       chan struct{}
+	// nvidia-smi 不存在等持续性错误使用负缓存，避免每次刷新都重复失败。
+	gpuNegUntil time.Time
+	gpuNegErr   string
+	collects    int
+	cacheTTL    time.Duration
 }
 
 // NewCollector 按配置创建采集器；零值字段取默认值。
@@ -106,8 +117,63 @@ func orDefault(value, fallback string) string {
 	return value
 }
 
-// Collect 执行一次完整采集。除 /proc 读取外的子项失败只会影响对应字段。
+// 采集缓存与负缓存参数；测试可调整。
+const (
+	collectCacheTTL = 2 * time.Second
+	gpuNegativeTTL  = 60 * time.Second
+)
+
+// Collect 执行一次完整采集；短时并发请求合并为一次执行。
 func (c *Collector) Collect(ctx context.Context) Report {
+	c.mu.Lock()
+	if c.cacheTTL > 0 && c.cache != nil && time.Since(c.cacheAt) < c.cacheTTL {
+		report := *c.cache
+		c.mu.Unlock()
+		return report
+	}
+	if c.collecting {
+		wait := c.wait
+		c.mu.Unlock()
+		<-wait
+		c.mu.Lock()
+		var report Report
+		if c.cache != nil {
+			report = *c.cache
+		}
+		c.mu.Unlock()
+		return report
+	}
+	c.collecting = true
+	wait := make(chan struct{})
+	c.wait = wait
+	c.mu.Unlock()
+
+	report := c.collectOnce(ctx)
+
+	c.mu.Lock()
+	if c.cacheTTL > 0 {
+		c.cache = &report
+		c.cacheAt = time.Now()
+	}
+	c.collecting = false
+	c.wait = nil
+	c.collects++
+	close(wait)
+	c.mu.Unlock()
+	return report
+}
+
+// SetCacheTTL 覆盖短时缓存有效期；测试使用，ttl<=0 表示不缓存。
+func (c *Collector) SetCacheTTL(ttl time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cacheTTL = ttl
+	c.cache = nil
+	c.cacheAt = time.Time{}
+}
+
+// collectOnce 是实际执行采集的路径。
+func (c *Collector) collectOnce(ctx context.Context) Report {
 	report := Report{
 		CollectedAt:   time.Now().UTC(),
 		HostName:      c.hostName(),
@@ -122,11 +188,39 @@ func (c *Collector) Collect(ctx context.Context) Report {
 	report.CPUUsagePercent = c.cpuUsage()
 	report.MemoryTotalMB, report.MemoryUsedMB = c.memory()
 	report.StoragePath, report.StorageTotalBytes, report.StorageUsedBytes = c.storage()
+
+	c.mu.Lock()
+	negative := time.Now().Before(c.gpuNegUntil)
+	negativeErr := c.gpuNegErr
+	c.mu.Unlock()
+	if negative {
+		report.GPUAvailable = false
+		report.GPUError = negativeErr
+		return report
+	}
+
 	report.GPUs, report.GPUAvailable, report.GPUMemoryMode, report.GPUError = c.gpus(ctx)
+	if !report.GPUAvailable && persistentGPUError(report.GPUError) {
+		c.mu.Lock()
+		c.gpuNegUntil = time.Now().Add(gpuNegativeTTL)
+		c.gpuNegErr = report.GPUError
+		c.mu.Unlock()
+	}
 	if report.GPUAvailable {
 		report.DriverVersion, report.CUDAVersion = c.versions(ctx)
 	}
 	return report
+}
+
+// persistentGPUError 判断是否为“命令不存在”这类持续错误。
+func persistentGPUError(message string) bool {
+	lower := strings.ToLower(message)
+	for _, marker := range []string{"executable file not found", "no such file", "not found", "命令不存在"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Collector) hostName() string {

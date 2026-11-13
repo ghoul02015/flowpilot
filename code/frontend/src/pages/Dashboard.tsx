@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Activity, Box, ChevronRight, Cpu, Database, Download, Gauge, HardDrive, MemoryStick, Plus, Server, Workflow } from 'lucide-react'
 import { formatBytes, getHardware, type HardwareReport } from '@/api'
+import { usePolling } from '@/hooks/use-polling'
 import { EmptyState, PageHeader, Panel, PanelHeader, ProgressBar, StatusBadge, TextButton } from '@/components/common'
 import type { Instance, ModelItem, NavigateOptions, PageKey, TaskItem } from '@/types'
 
@@ -33,23 +34,13 @@ function usagePercent(used: number, total: number) {
 function HardwareBrief({ gpuCount, gpuSummary, onNavigate }: { gpuCount: number; gpuSummary: string; onNavigate: Props['onNavigate'] }) {
   const [report, setReport] = useState<HardwareReport | null>(null)
 
-  useEffect(() => {
-    let cancelled = false
-    async function poll() {
-      try {
-        const next = await getHardware()
-        if (!cancelled) setReport(next)
-      } catch {
-        // 首页简述容忍采集失败，保留上一次数据
-      }
+  usePolling(async (signal) => {
+    try {
+      setReport(await getHardware(signal))
+    } catch {
+      // 首页简述容忍采集失败，保留上一次数据
     }
-    void poll()
-    const timer = window.setInterval(() => void poll(), 2000)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [])
+  }, { interval: 5000 })
 
   const bars = report
     ? [

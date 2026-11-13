@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { usePolling } from '@/hooks/use-polling'
 import { Ban, CloudDownload, Cpu, Download, FileText, Hammer, Layers, LoaderCircle, RefreshCw, ScrollText, Tag, Trash2, Upload, XCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { buildScriptURL, cancelImageTask, deleteImageTask, deleteLocalImageApi, exportLocalImageURL, formatBytes, getImageCatalog, getImageDiskUsage, getImageTasks, getLocalImages, imageBuildSummary, importLocalImageApi, isComfyImage, pruneImageBuildCache, startImageBuild, startImagePull, tagLocalImageApi, type ComfyVersion, type ImageBuildSpec, type ImageDiskUsage, type ImageRecipe, type ImageTask, type LocalImage } from '@/api'
@@ -120,18 +121,14 @@ export function ImageManager() {
 
   useEffect(() => { refresh() }, [refresh])
 
-  // 有排队／进行中任务时每 2 秒轮询任务列表；全部收口后刷新一次镜像清单。
-  const activeCount = tasks.filter(isActiveTask).length
-  useEffect(() => {
-    if (activeCount === 0) return
-    const timer = window.setInterval(() => {
-      getImageTasks().then((next) => {
-        setTasks(next)
-        if (!next.some(isActiveTask)) refresh()
-      }).catch(() => {})
-    }, 2000)
-    return () => window.clearInterval(timer)
-  }, [activeCount, refresh])
+  // 有排队／进行中任务时每 2 秒轮询任务列表；页面隐藏时暂停。
+  const activeRef = useRef(false)
+  activeRef.current = tasks.some(isActiveTask)
+  usePolling(async (signal) => {
+    const next = await getImageTasks(signal)
+    setTasks(next)
+    if (!next.some(isActiveTask)) await refresh()
+  }, { enabled: activeRef.current, interval: 2000 })
 
   const activeBuildByImage = useMemo(() => {
     const map = new Map<string, ImageTask>()

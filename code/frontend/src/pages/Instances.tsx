@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { usePolling } from '@/hooks/use-polling'
 import { ExternalLink, Link2, Play, Plus, RefreshCw, ScrollText, Search, Settings2, Square, Trash2 } from 'lucide-react'
 import { getInstanceEvents, getInstanceHealth, type InstanceEventEntry, type InstanceHealthView, type ModelReport } from '@/api'
 import { EmptyState, PageHeader, Panel, StatusBadge } from '@/components/common'
@@ -45,25 +46,26 @@ export function Instances({ instances, gpuNames, realMode, busyIds, initialFocus
   const filtered = useMemo(() => instances.filter((item) => item.name.toLowerCase().includes(query.toLowerCase()) && (status === 'all' || item.status === status)), [instances, query, status])
   const detail = instances.find((item) => item.id === detailId)
   const detailName = detail?.name
-  const detailStatus = detail?.status
-  useEffect(() => {
-    const name: string = detailName ?? ''
-    if (!name) return
-    let cancelled = false
-    const loadAll = async (targetName: string): Promise<void> => {
-      try {
-        const healthResult = await getInstanceHealth(targetName)
-        if (!cancelled) setDetailHealth(healthResult.health)
-      } catch { /* 健康接口失败保持上次状态 */ }
-      try {
-        const eventResult = await getInstanceEvents(targetName, 20)
-        if (!cancelled) setDetailEvents(eventResult.events)
-      } catch { /* 忽略 */ }
+  // 详情健康 5 秒、事件 15 秒；详情关闭或页面隐藏时停止。
+  usePolling(async (signal) => {
+    if (!detailName) return
+    try {
+      const result = await getInstanceHealth(detailName, signal)
+      setDetailHealth(result.health)
+    } catch {
+      // 健康接口失败保持上次状态
     }
-    void loadAll(name)
-    const timer = window.setInterval(() => void loadAll(name), 5000)
-    return () => { cancelled = true; window.clearInterval(timer) }
-  }, [detailName, detailStatus])
+  }, { enabled: Boolean(detailName), interval: 5000 })
+
+  usePolling(async (signal) => {
+    if (!detailName) return
+    try {
+      const result = await getInstanceEvents(detailName, 20, signal)
+      setDetailEvents(result.events)
+    } catch {
+      // 事件读取失败保持上次结果
+    }
+  }, { enabled: Boolean(detailName), interval: 15000 })
   const deleting = instances.find((item) => item.id === deleteId)
 
   // 跳转高亮 3 秒后自动消退；定时器回调属异步更新，不产生级联渲染。

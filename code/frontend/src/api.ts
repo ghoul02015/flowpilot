@@ -139,6 +139,14 @@ export interface CreateInstanceSpec {
   workflowsTarget?: string
 }
 
+// withTimeout 合并调用方取消信号与单请求超时；浏览器不支持 any 时退化为超时。
+export function withTimeout(signal: AbortSignal | undefined, ms: number): AbortSignal {
+  const timeout = AbortSignal.timeout(ms)
+  if (!signal) return timeout
+  const anyFactory = (AbortSignal as unknown as { any?: (signals: AbortSignal[]) => AbortSignal }).any
+  return typeof anyFactory === 'function' ? anyFactory([signal, timeout]) : timeout
+}
+
 async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, { headers: { Accept: 'application/json' }, signal })
   if (!response.ok) {
@@ -359,8 +367,8 @@ export async function resolveComfyVersion(ref: string, kind?: string, commit?: s
   return sendJSON<ComfyVersion>('POST', '/api/v1/images/comfyui-resolve', { ref, kind, commit })
 }
 
-export async function getImageTasks(): Promise<ImageTask[]> {
-  const body = await getJSON<{ tasks: ImageTask[] }>('/api/v1/images/tasks', AbortSignal.timeout(5000))
+export async function getImageTasks(signal?: AbortSignal): Promise<ImageTask[]> {
+  const body = await getJSON<{ tasks: ImageTask[] }>('/api/v1/images/tasks', signal ?? AbortSignal.timeout(5000))
   return body.tasks
 }
 
@@ -653,8 +661,8 @@ export interface ComfyStatus {
   comfyuiVersion?: string
 }
 
-export async function getComfyStatus(name: string): Promise<ComfyStatus> {
-  return getJSON<ComfyStatus>(`/api/v1/instances/${encodeURIComponent(name)}/comfy/status`, AbortSignal.timeout(6000))
+export async function getComfyStatus(name: string, signal?: AbortSignal): Promise<ComfyStatus> {
+  return getJSON<ComfyStatus>(`/api/v1/instances/${encodeURIComponent(name)}/comfy/status`, signal ?? AbortSignal.timeout(6000))
 }
 
 export async function createInstanceApi(spec: CreateInstanceSpec): Promise<RealInstance> {
@@ -1024,12 +1032,12 @@ export interface RebuildPlan {
   dataNote: string
 }
 
-export async function getInstanceHealth(name: string): Promise<{ health: InstanceHealthView; recentEvents: InstanceEventEntry[] }> {
-  return getJSON<{ health: InstanceHealthView; recentEvents: InstanceEventEntry[] }>(`/api/v1/instances/${encodeURIComponent(name)}/health`, AbortSignal.timeout(5000))
+export async function getInstanceHealth(name: string, signal?: AbortSignal): Promise<{ health: InstanceHealthView; recentEvents: InstanceEventEntry[] }> {
+  return getJSON<{ health: InstanceHealthView; recentEvents: InstanceEventEntry[] }>(`/api/v1/instances/${encodeURIComponent(name)}/health`, signal ?? AbortSignal.timeout(5000))
 }
 
-export async function getInstanceEvents(name: string, limit = 50): Promise<{ events: InstanceEventEntry[] }> {
-  return getJSON<{ events: InstanceEventEntry[] }>(`/api/v1/instances/${encodeURIComponent(name)}/events?limit=${limit}`, AbortSignal.timeout(6000))
+export async function getInstanceEvents(name: string, limit = 50, signal?: AbortSignal): Promise<{ events: InstanceEventEntry[] }> {
+  return getJSON<{ events: InstanceEventEntry[] }>(`/api/v1/instances/${encodeURIComponent(name)}/events?limit=${limit}`, signal ?? AbortSignal.timeout(6000))
 }
 
 export async function getRebuildPlan(name: string): Promise<RebuildPlan> {
@@ -1061,7 +1069,7 @@ export interface UnifiedTaskPage {
   offset: number
 }
 
-export async function getUnifiedTasks(params?: { type?: string; status?: string; q?: string; limit?: number; offset?: number }): Promise<UnifiedTaskPage> {
+export async function getUnifiedTasks(params?: { type?: string; status?: string; q?: string; limit?: number; offset?: number }, signal?: AbortSignal): Promise<UnifiedTaskPage> {
   const query = new URLSearchParams()
   if (params?.type) query.set('type', params.type)
   if (params?.status) query.set('status', params.status)
@@ -1069,7 +1077,7 @@ export async function getUnifiedTasks(params?: { type?: string; status?: string;
   if (params?.limit) query.set('limit', String(params.limit))
   if (params?.offset) query.set('offset', String(params.offset))
   const suffix = query.toString() ? `?${query.toString()}` : ''
-  return getJSON<UnifiedTaskPage>(`/api/v1/tasks${suffix}`, AbortSignal.timeout(6000))
+  return getJSON<UnifiedTaskPage>(`/api/v1/tasks${suffix}`, signal ?? AbortSignal.timeout(6000))
 }
 
 export async function getUnifiedTask(id: string): Promise<UnifiedTaskView> {
@@ -1302,12 +1310,24 @@ export interface BundleLicenseConfirmation {
   confirmedAt: string
 }
 
-export async function getModelBundles(): Promise<{ bundles: BundleCard[]; manifest: string; bundleVersion: string; checksum: string }> {
-  return getJSON('/api/v1/model-bundles', AbortSignal.timeout(10000))
+export async function getModelBundles(signal?: AbortSignal): Promise<{ bundles: BundleCard[]; manifest: string; bundleVersion: string; checksum: string }> {
+  return getJSON('/api/v1/model-bundles', signal ?? AbortSignal.timeout(10000))
 }
 
-export async function getModelBundle(id: string): Promise<BundleDetail> {
-  return getJSON(`/api/v1/model-bundles/${encodeURIComponent(id)}`, AbortSignal.timeout(10000))
+// TaskSummary 是导航角标使用的轻量计数，不带任务明细。
+export interface TaskSummary {
+  counts: Record<string, number>
+  total: number
+  active: number
+  updatedAt: string
+}
+
+export async function getTaskSummary(signal?: AbortSignal): Promise<TaskSummary> {
+  return getJSON<TaskSummary>('/api/v1/tasks/summary', signal ?? AbortSignal.timeout(6000))
+}
+
+export async function getModelBundle(id: string, signal?: AbortSignal): Promise<BundleDetail> {
+  return getJSON(`/api/v1/model-bundles/${encodeURIComponent(id)}`, signal ?? AbortSignal.timeout(10000))
 }
 
 export async function preflightModelBundle(id: string, variant: string, selectedOptions: string[]): Promise<BundlePreflight> {
@@ -1328,8 +1348,8 @@ export async function createBundleInstall(id: string, payload: { variant: string
   return sendJSON<BundleInstall>('POST', `/api/v1/model-bundles/${encodeURIComponent(id)}/installs`, payload)
 }
 
-export async function getBundleInstall(id: string, installId: string): Promise<BundleInstall> {
-  return getJSON(`/api/v1/model-bundles/${encodeURIComponent(id)}/installs/${encodeURIComponent(installId)}`, AbortSignal.timeout(8000))
+export async function getBundleInstall(id: string, installId: string, signal?: AbortSignal): Promise<BundleInstall> {
+  return getJSON(`/api/v1/model-bundles/${encodeURIComponent(id)}/installs/${encodeURIComponent(installId)}`, signal ?? AbortSignal.timeout(8000))
 }
 
 export async function bundleInstallAction(id: string, installId: string, action: 'pause' | 'resume' | 'cancel' | 'retry'): Promise<BundleInstall> {

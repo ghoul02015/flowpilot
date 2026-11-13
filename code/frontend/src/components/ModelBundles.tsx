@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { usePolling } from '@/hooks/use-polling'
 import { AlertTriangle, ArrowRight, CheckCircle2, Cpu, Download, ExternalLink, FileText, Layers, LoaderCircle, Pause, Play, RefreshCw, ShieldAlert, XCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { EmptyState, Panel, PanelHeader, ProgressBar } from '@/components/common'
@@ -92,7 +93,6 @@ export default function ModelBundles() {
   const [detailTab, setDetailTab] = useState<'overview' | 'files' | 'hardware' | 'license' | 'acceptance'>('overview')
   const [wizardOpen, setWizardOpen] = useState(false)
   const [acceptanceOpen, setAcceptanceOpen] = useState(false)
-  const pollRef = useRef<number | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -114,25 +114,20 @@ export default function ModelBundles() {
   }, [load])
 
   // 有活动安装时轮询进度；不触发全量列表刷新。
-  useEffect(() => {
-    const active = cards.filter((card) => card.activeInstall && ['queued', 'installing'].includes(card.activeInstall.status))
-    if (active.length === 0) return
-    const timer = window.setInterval(() => {
-      for (const card of active) {
-        if (!card.activeInstall) continue
-        void getBundleInstall(card.id, card.activeInstall.id)
-          .then((install) => {
-            setCards((prev) => prev.map((item) => (item.id === card.id ? { ...item, activeInstall: install, state: { ...item.state, state: install.status } } : item)))
-            if (detailId === card.id && detail) {
-              setDetail({ ...detail, install })
-            }
-          })
-          .catch(() => {})
+  const cardsRef = useRef(cards)
+  cardsRef.current = cards
+  const activeInstallRef = useRef(false)
+  activeInstallRef.current = cards.some((card) => card.activeInstall && ['queued', 'installing'].includes(card.activeInstall.status))
+  usePolling(async (signal) => {
+    for (const card of cardsRef.current) {
+      if (!card.activeInstall || !['queued', 'installing'].includes(card.activeInstall.status)) continue
+      const install = await getBundleInstall(card.id, card.activeInstall.id, signal)
+      setCards((prev) => prev.map((item) => (item.id === card.id ? { ...item, activeInstall: install, state: { ...item.state, state: install.status } } : item)))
+      if (detailId === card.id && detail) {
+        setDetail({ ...detail, install })
       }
-    }, 3000)
-    pollRef.current = timer
-    return () => window.clearInterval(timer)
-  }, [cards, detail, detailId])
+    }
+  }, { enabled: activeInstallRef.current, interval: 3000 })
 
   const filtered = useMemo(() => {
     return cards.filter((card) => {
@@ -544,13 +539,13 @@ function InstallWizard({ bundleId, instances, onClose }: { bundleId: string; ins
     }).catch((err: unknown) => setPreflightError(err instanceof Error ? err.message : '读取详情失败'))
   }, [bundleId])
 
-  useEffect(() => {
-    if (!install || !['queued', 'installing'].includes(install.status)) return
-    const timer = window.setInterval(() => {
-      void getBundleInstall(bundleId, install.id).then(setInstall).catch(() => {})
-    }, 2500)
-    return () => window.clearInterval(timer)
-  }, [install, bundleId])
+  const installRef = useRef(install)
+  installRef.current = install
+  usePolling(async (signal) => {
+    const current = installRef.current
+    if (!current) return
+    setInstall(await getBundleInstall(bundleId, current.id, signal))
+  }, { enabled: Boolean(install && ['queued', 'installing'].includes(install.status)), interval: 2500 })
 
   const optionalGroups = useMemo(() => {
     const groups = new Map<string, { key: string; label: string }[]>()

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 )
 
 const dgxSparkSMI = "0, NVIDIA GB10, [N/A], [N/A], 0, 38, 10.82, [N/A]\n"
@@ -142,6 +144,7 @@ func TestCollectGPUFailureDegrades(t *testing.T) {
 
 func TestCPUUsageDelta(t *testing.T) {
 	collector, root := newFixtureCollector(t, dgxSparkSMI)
+	collector.SetCacheTTL(0)
 	proc := filepath.Join(root, "proc")
 	writeFixture(t, proc, "stat", "cpu  100 0 100 800 0 0 0 0 0 0\n")
 	if usage := collector.Collect(context.Background()).CPUUsagePercent; usage != nil {
@@ -194,6 +197,7 @@ func TestParseVersions(t *testing.T) {
 // Collect 在 GPU 可用时应带上版本字段；版本查询失败不影响 GPU 指标。
 func TestCollectIncludesVersions(t *testing.T) {
 	collector := NewCollector(Config{ProcRoot: t.TempDir(), HostRoot: t.TempDir(), DataDir: t.TempDir(), NvidiaSMIBin: "disabled"})
+	collector.SetCacheTTL(0)
 	collector.queryGPU = func(context.Context) (string, error) { return dualL40SSMI, nil }
 	collector.queryVersions = func(context.Context) (string, error) { return nvidiaSMIHeaderSample, nil }
 	report := collector.Collect(context.Background())
@@ -208,5 +212,54 @@ func TestCollectIncludesVersions(t *testing.T) {
 	}
 	if report.DriverVersion != "" || report.CUDAVersion != "" {
 		t.Fatalf("版本查询失败时应为空串：%q %q", report.DriverVersion, report.CUDAVersion)
+	}
+}
+
+// TestCollectCoalescesConcurrent 并发采集应共享同一次执行。
+func TestCollectCoalescesConcurrent(t *testing.T) {
+	collector, _ := newFixtureCollector(t, dgxSparkSMI)
+	collector.SetCacheTTL(2 * time.Second)
+	calls := 0
+	collector.queryGPU = func(context.Context) (string, error) {
+		calls++
+		time.Sleep(50 * time.Millisecond)
+		return dgxSparkSMI, nil
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			collector.Collect(context.Background())
+		}()
+	}
+	wg.Wait()
+	collector.mu.Lock()
+	executed := collector.collects
+	collector.mu.Unlock()
+	if executed != 1 || calls != 1 {
+		t.Fatalf("并发请求应只执行一次采集：collects=%d queryGPU=%d", executed, calls)
+	}
+}
+
+// TestGPUCommandMissingNegativeCache nvidia-smi 不存在时 60 秒内不重复调用。
+func TestGPUCommandMissingNegativeCache(t *testing.T) {
+	collector, _ := newFixtureCollector(t, "")
+	collector.SetCacheTTL(0)
+	calls := 0
+	collector.queryGPU = func(context.Context) (string, error) {
+		calls++
+		return "", errors.New("exec: \"nvidia-smi\": executable file not found in $PATH")
+	}
+	first := collector.Collect(context.Background())
+	second := collector.Collect(context.Background())
+	if first.GPUAvailable || second.GPUAvailable {
+		t.Fatal("GPU 不可用状态应递减")
+	}
+	if calls != 1 {
+		t.Fatalf("持续缺失命令应命中负缓存，实际调用 %d 次", calls)
+	}
+	if second.GPUError == "" {
+		t.Fatal("负缓存命中时仍应返回可读错误")
 	}
 }

@@ -32,7 +32,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/tasks"
 )
 
-const Version = "0.1.0.6"
+const Version = "0.1.0.7"
 
 type Handler struct {
 	docker        *docker.Client
@@ -165,6 +165,7 @@ func New(staticDir string, dockerClient *docker.Client, hardwareCollector *hardw
 	mux.HandleFunc("POST /api/v1/model-bundles/{id}/acceptances", handler.createModelBundleAcceptance)
 	mux.HandleFunc("GET /api/v1/model-bundles/{id}/acceptances/{acceptanceId}/export", handler.exportModelBundleAcceptance)
 	// 统一任务（0.0.9.9）。
+	mux.HandleFunc("GET /api/v1/tasks/summary", handler.taskSummary)
 	mux.HandleFunc("GET /api/v1/tasks", handler.listUnifiedTasks)
 	mux.HandleFunc("DELETE /api/v1/tasks", handler.cleanupFinishedTasks)
 	mux.HandleFunc("GET /api/v1/tasks/{id}", handler.getUnifiedTask)
@@ -606,6 +607,10 @@ func (h *Handler) putNetworkStorage(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "保存网络存储配置失败", "detail": err.Error()})
 		return
+	}
+	// 配置变化只失效网络仓库缓存，本地仓库不受影响。
+	if h.models != nil {
+		h.models.InvalidateNetwork()
 	}
 	writeJSON(w, http.StatusOK, h.storage.View())
 }

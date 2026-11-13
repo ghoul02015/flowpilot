@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { usePolling } from '@/hooks/use-polling'
 import { Ban, CheckCircle2, ChevronLeft, ChevronRight, FileText, Loader2, Pause, Play, RefreshCw, RotateCcw, Search, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cancelImageTask, cleanupFinishedTasks, deleteUnifiedTask, downloadActionApi, getImageTaskLogs, getUnifiedTasks, type UnifiedTaskView } from '@/api'
@@ -92,6 +93,10 @@ function TaskActions({ task, onAction, onDelete, onDetail }: {
 }
 
 // Tasks 统一任务中心：活跃任务优先，终态任务保留可审计记录，可按类型/状态/关键词筛选。
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')
+}
+
 export function Tasks() {
   const [tasks, setTasks] = useState<UnifiedTaskView[] | null>(null)
   const [total, setTotal] = useState(0)
@@ -117,35 +122,33 @@ export function Tasks() {
     return () => window.clearTimeout(timer)
   }, [search])
 
+  const activeRef = useRef(false)
+  const initializedRef = useRef(false)
+  // 活跃任务 2 秒、空闲 15 秒；筛选变化立即刷新一次。
+  const poll = usePolling(async (signal) => {
+    if (!initializedRef.current) setLoading(true)
+    try {
+      const result = await getUnifiedTasks({
+        type: type === 'all' ? undefined : type,
+        status: status === 'all' ? undefined : status,
+        q: query || undefined,
+        limit: PAGE_SIZE,
+        offset: page * PAGE_SIZE,
+      }, signal)
+      setTasks(result.tasks)
+      setTotal(result.total)
+      activeRef.current = result.tasks.some((task) => ['queued', 'running', 'paused'].includes(task.status))
+    } catch (error) {
+      if (!isAbortError(error) && !initializedRef.current) setTasks(null)
+    } finally {
+      initializedRef.current = true
+      setLoading(false)
+    }
+  }, { interval: 2000, idleInterval: 15000, immediate: false, isActive: () => activeRef.current })
+
   useEffect(() => {
-    const controller = new AbortController()
-    let cancelled = false
-    async function load(initial: boolean) {
-      if (initial) setLoading(true)
-      try {
-        const result = await getUnifiedTasks({
-          type: type === 'all' ? undefined : type,
-          status: status === 'all' ? undefined : status,
-          q: query || undefined,
-          limit: PAGE_SIZE,
-          offset: page * PAGE_SIZE,
-        })
-        if (cancelled) return
-        setTasks(result.tasks)
-        setTotal(result.total)
-      } catch {
-        if (!cancelled && initial) setTasks(null)
-      } finally {
-        if (!cancelled && initial) setLoading(false)
-      }
-    }
-    void load(true)
-    const timer = window.setInterval(() => void load(false), 5000)
-    return () => {
-      cancelled = true
-      controller.abort()
-      window.clearInterval(timer)
-    }
+    void poll.refresh()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [type, status, query, page, refreshKey])
 
   useEffect(() => {

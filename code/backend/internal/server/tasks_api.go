@@ -49,14 +49,8 @@ func mapImageState(state string) string {
 	}
 }
 
-// listUnifiedTasks 统一任务列表：聚合下载/导入、镜像构建/拉取与迁移任务，
-// 映射为统一状态与进度语义；迁移任务来自 tasks 表，其余实时读取各子系统。
-func (h *Handler) listUnifiedTasks(w http.ResponseWriter, r *http.Request) {
-	taskType := r.URL.Query().Get("type")
-	status := r.URL.Query().Get("status")
-	query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
-	limit := intQuery(r, "limit", 50)
-	offset := intQuery(r, "offset", 0)
+// collectTaskViews 汇总所有任务来源，供列表与摘要共用，保证口径一致。
+func (h *Handler) collectTaskViews(ctx context.Context, taskType string) []tasks.View {
 	views := []tasks.View{}
 
 	// 下载／导入任务。
@@ -110,7 +104,7 @@ func (h *Handler) listUnifiedTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	// 模型套装安装（0.1.0.4）。
 	if h.bundles != nil && (taskType == "" || taskType == tasks.TypeBundleInstall) {
-		if items, _, err := h.bundles.Store.ListInstalls(r.Context(), 100, 0); err == nil {
+		if items, _, err := h.bundles.Store.ListInstalls(ctx, 100, 0); err == nil {
 			for _, item := range items {
 				if taskType != "" && taskType != tasks.TypeBundleInstall {
 					continue
@@ -130,6 +124,38 @@ func (h *Handler) listUnifiedTasks(w http.ResponseWriter, r *http.Request) {
 			views = append(views, item)
 		}
 	}
+	return views
+}
+
+// taskSummary 返回导航所需的轻量任务计数，不携带任务明细与日志。
+func (h *Handler) taskSummary(w http.ResponseWriter, r *http.Request) {
+	views := h.collectTaskViews(r.Context(), "")
+	counts := map[string]int{
+		tasks.StatusQueued: 0, tasks.StatusRunning: 0, tasks.StatusPaused: 0,
+		tasks.StatusSucceeded: 0, tasks.StatusFailed: 0, tasks.StatusCancelled: 0,
+	}
+	for _, item := range views {
+		if _, ok := counts[item.Status]; ok {
+			counts[item.Status]++
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"counts":    counts,
+		"total":     len(views),
+		"active":    counts[tasks.StatusQueued] + counts[tasks.StatusRunning] + counts[tasks.StatusPaused],
+		"updatedAt": time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// listUnifiedTasks 统一任务列表：聚合下载/导入、镜像构建/拉取与迁移任务，
+// 映射为统一状态与进度语义；迁移任务来自 tasks 表，其余实时读取各子系统。
+func (h *Handler) listUnifiedTasks(w http.ResponseWriter, r *http.Request) {
+	taskType := r.URL.Query().Get("type")
+	status := r.URL.Query().Get("status")
+	query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	limit := intQuery(r, "limit", 50)
+	offset := intQuery(r, "offset", 0)
+	views := h.collectTaskViews(r.Context(), taskType)
 	// 状态过滤 + 时间倒序；total 必须反映筛选后的总数而非分页前聚合量。
 	filtered := make([]tasks.View, 0, len(views))
 	for _, item := range views {

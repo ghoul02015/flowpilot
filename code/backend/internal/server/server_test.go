@@ -569,3 +569,46 @@ func TestCleanupFinishedStoredTasks(t *testing.T) {
 		t.Fatal("已结束任务应被清理")
 	}
 }
+
+// TestTaskSummaryCounts 摘要必须与统一任务口径一致，且不携带明细。
+func TestTaskSummaryCounts(t *testing.T) {
+	db, err := database.Open(filepath.Join(t.TempDir(), "summary-test.db"))
+	if err != nil {
+		t.Fatalf("打开数据库失败：%v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := database.Migrate(db, database.Migrations); err != nil {
+		t.Fatalf("迁移失败：%v", err)
+	}
+	store := tasks.NewStore(db)
+	store.Upsert(tasks.View{ID: "t-run", Type: tasks.TypeBackup, Status: tasks.StatusRunning, CreatedAt: "2026-01-01T00:00:00Z"})
+	store.Upsert(tasks.View{ID: "t-ok1", Type: tasks.TypeBackup, Status: tasks.StatusSucceeded, CreatedAt: "2026-01-02T00:00:00Z"})
+	store.Upsert(tasks.View{ID: "t-ok2", Type: tasks.TypeMigration, Status: tasks.StatusSucceeded, CreatedAt: "2026-01-03T00:00:00Z"})
+	store.Upsert(tasks.View{ID: "t-fail", Type: tasks.TypeMigration, Status: tasks.StatusFailed, CreatedAt: "2026-01-04T00:00:00Z"})
+
+	handler := &Handler{taskStore: store}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/summary", nil)
+	response := httptest.NewRecorder()
+	handler.taskSummary(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("摘要应 200，实际 %d", response.Code)
+	}
+	var body struct {
+		Counts map[string]int `json:"counts"`
+		Total  int            `json:"total"`
+		Active int            `json:"active"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Counts[tasks.StatusRunning] != 1 || body.Counts[tasks.StatusSucceeded] != 2 || body.Counts[tasks.StatusFailed] != 1 {
+		t.Fatalf("状态计数异常：%+v", body.Counts)
+	}
+	if body.Total != 4 || body.Active != 1 {
+		t.Fatalf("总数或活动数异常：total=%d active=%d", body.Total, body.Active)
+	}
+	// 摘要不得携带任务明细。
+	if strings.Contains(response.Body.String(), "t-ok1") {
+		t.Fatal("摘要不应包含任务 ID 明细")
+	}
+}

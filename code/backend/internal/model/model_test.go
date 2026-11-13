@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func writeFile(t *testing.T, root, rel string, size int) {
@@ -203,5 +204,71 @@ func TestDeleteCascadesInstanceLinks(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(instanceDir, "b.safetensors")); err != nil {
 		t.Fatalf("其余关联不应受影响：%v", err)
+	}
+}
+
+// TestCacheTTLAndInvalidate 本地缓存命中、写后失效可立即看到新文件。
+func TestCacheTTLAndInvalidate(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "vae"), "a.safetensors", 10)
+	manager := NewManager(root)
+	manager.SetCacheTTL(time.Hour, time.Hour)
+	first, err := manager.Scan()
+	if err != nil || len(first.Files) != 1 {
+		t.Fatalf("首次扫描异常：%v files=%d", err, len(first.Files))
+	}
+	writeFile(t, filepath.Join(root, "vae"), "b.safetensors", 20)
+	cached, _ := manager.Scan()
+	if len(cached.Files) != 1 {
+		t.Fatalf("TTL 内应命中缓存，实际 %d 个文件", len(cached.Files))
+	}
+	manager.InvalidateLocal()
+	after, _ := manager.Scan()
+	if len(after.Files) != 2 {
+		t.Fatalf("失效后应重新扫描到 2 个文件，实际 %d", len(after.Files))
+	}
+}
+
+// TestNetworkFailureKeepsLocal NAS 不可用时本地结果仍可返回，网络状态标记错误。
+func TestNetworkFailureKeepsLocal(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "checkpoints"), "local.safetensors", 8)
+	manager := NewManager(root)
+	manager.SetNetworkSource(func() (string, bool) {
+		return filepath.Join(root, "missing-nas"), true
+	})
+	report, err := manager.Scan()
+	if err != nil {
+		t.Fatalf("NAS 故障不应让本地扫描失败：%v", err)
+	}
+	if len(report.Files) != 1 || report.Files[0].Origin != "local" {
+		t.Fatalf("本地文件应保留：%+v", report.Files)
+	}
+	if report.Network == nil || report.Network.Available {
+		t.Fatalf("网络状态应标记不可用：%+v", report.Network)
+	}
+	if report.Network.Error == "" {
+		t.Fatal("网络不可用时应带错误说明")
+	}
+}
+
+// TestNetworkInvalidateIndependent 网络失效不影响本地缓存命中。
+func TestNetworkInvalidateIndependent(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "vae"), "a.safetensors", 10)
+	manager := NewManager(root)
+	manager.SetCacheTTL(time.Hour, time.Hour)
+	if _, err := manager.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	manager.InvalidateNetwork()
+	if _, err := manager.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	// 本地缓存仍有效：新增文件在 TTL 内不可见。
+	writeFile(t, filepath.Join(root, "vae"), "b.safetensors", 10)
+	report, _ := manager.Scan()
+	if len(report.Files) != 1 {
+		t.Fatalf("网络失效不应清空本地缓存，实际 %d", len(report.Files))
 	}
 }

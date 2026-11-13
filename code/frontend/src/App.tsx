@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { Activity, Box, ChevronRight, Cpu, Database, Images, LayoutDashboard, LogOut, Menu, Server, Settings, Waves, X } from 'lucide-react'
 import { Toaster, toast } from 'sonner'
-import { createDownloadApi, createImportApi, createInstanceApi, deleteDownloadApi, deleteInstanceApi, deleteModelApi, downloadActionApi, formatBytes, getComfyStatus, getDownloads, getHardware, getHealth, getInstances, getModels, getSetupStatus, getSession, logout, modelTypeToCategory, postInstanceAction, setCSRFToken, setUnauthorizedHandler, type CatalogEntry, type ComfyStatus, type DownloadTask, type InstanceDefaults, type ModelReport, type OnlineFile, type RealInstance } from '@/api'
+import { usePolling } from '@/hooks/use-polling'
+import { emitRefresh, subscribeRefresh } from '@/lib/refresh-events'
+import { createDownloadApi, createImportApi, createInstanceApi, deleteDownloadApi, deleteInstanceApi, deleteModelApi, downloadActionApi, formatBytes, getComfyStatus, getDownloads, getHardware, getHealth, getInstances, getModels, getSetupStatus, getSession, getTaskSummary, logout, modelTypeToCategory, postInstanceAction, setCSRFToken, setUnauthorizedHandler, type CatalogEntry, type ComfyStatus, type DownloadTask, type InstanceDefaults, type ModelReport, type OnlineFile, type RealInstance } from '@/api'
 import { CreateInstanceDialog } from '@/components/CreateInstanceDialog'
 import { AddModelDialog } from '@/components/AddModelDialog'
 import { LoginPage } from '@/components/LoginPage'
@@ -26,6 +28,11 @@ const navigation: { key: PageKey; label: string; icon: typeof LayoutDashboard }[
 ]
 
 const pageNames: Record<PageKey, string> = { dashboard: '首页看板', instances: 'ComfyUI 实例', models: '模型中心', images: '镜像中心', tasks: '任务中心', hardware: '硬件管理', system: '系统管理' }
+
+// 主动取消与超时不应被当作离线或错误提示。
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')
+}
 
 export default function App() {
   // 认证门卫（0.0.9.6）：checking → setup（未初始化）→ login → ready。
@@ -53,7 +60,8 @@ export default function App() {
   // 同步镜像 busyIds，避免同一帧内双击穿透渲染快照的 includes 检查。
   const busyRef = useRef<Set<string>>(new Set())
   // 界面版本号跟随后端 /health，避免硬编码漂移；离线时回退常量。
-  const [backendVersion, setBackendVersion] = useState('0.1.0.6')
+  const [backendVersion, setBackendVersion] = useState('0.1.0.7')
+  const [taskSummary, setTaskSummary] = useState({ active: 0, total: 0 })
 
   const realMode = realInstances !== null
   const realModelMode = realModels !== null
@@ -94,120 +102,134 @@ export default function App() {
     }
   }
 
-  // 主机名与 GPU 列表：硬件接口冷启动（如 nvidia-smi 首次调用）可能超时，
-  // 失败后每 3 秒重试，避免单次失败导致整个会话无法创建 GPU 实例。
-  useEffect(() => {
-    let cancelled = false
-    let retryTimer = 0
-    async function load() {
-      try {
-        const report = await getHardware()
-        if (cancelled) return
-        setHostInfo({
-          name: report.hostName,
-          gpuSummary: report.gpus.length ? `${report.gpus.length} × ${report.gpus[0].name}` : '未检测到 GPU',
-        })
-        setGpuNames(report.gpus.map((gpu) => gpu.name))
-      } catch {
-        if (cancelled) return
-        setHostInfo({ name: '硬件接口不可用', gpuSummary: '—' })
-        retryTimer = window.setTimeout(() => void load(), 3000)
-      }
-    }
-    void load()
-    return () => {
-      cancelled = true
-      window.clearTimeout(retryTimer)
-    }
-  }, [])
+    // 页面级数据按需启用：只有当前页面消费的数据才维持轮询。
+  const pageRef = useRef(page)
+  pageRef.current = page
+  const busyCountRef = useRef(busyIds.length)
+  busyCountRef.current = busyIds.length
+  const summaryActiveRef = useRef(0)
+  const downloadsActiveRef = useRef(false)
+  const completedTasksRef = useRef<Set<string>>(new Set())
 
-  // 业务轮询仅在已登录（ready）状态运行；登录/初始化页不产生无效 401 请求。
-  useEffect(() => {
-    if (authState !== 'ready') return
-    let cancelled = false
-    async function poll() {
-      let online = false
-      try {
-        const next = await getInstances()
-        if (!cancelled) {
-          setRealInstances(next.instances)
-          setInstanceDefaults(next.defaults)
-          online = true
-          // 并行探测运行中实例的 ComfyUI 制图队列；失败的实例本轮缺席。
-          const running = next.instances.filter((item) => item.status === 'running')
-          const statuses = await Promise.allSettled(running.map((item) => getComfyStatus(item.name)))
-          if (!cancelled) {
-            setComfyStatuses((previous) => {
-              const merged = { ...previous }
-              running.forEach((item, index) => {
-                const result = statuses[index]
-                if (result.status === 'fulfilled') merged[item.name] = result.value
-              })
-              return merged
-            })
-          }
-        }
-      } catch {
-        if (!cancelled) setRealInstances(null)
-      }
-      try {
-        const report = await getModels()
-        if (!cancelled) {
-          setRealModels(report)
-          online = true
-        }
-      } catch {
-        if (!cancelled) setRealModels(null)
-      }
-      try {
-        const downloadTasks = await getDownloads()
-        if (!cancelled) {
-          setRealDownloads(downloadTasks)
-          online = true
-        }
-      } catch {
-        if (!cancelled) setRealDownloads(null)
-      }
-      if (!cancelled) setBackendOnline(online)
-      if (online) {
-        getHealth().then((health) => { if (!cancelled) setBackendVersion(health.version) }).catch(() => {})
-      }
-    }
-    void poll()
-    const timer = window.setInterval(() => void poll(), 3000)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [authState])
+  // 导航摘要：3 秒活跃 / 30 秒空闲，不再拉全量任务列表。
+  const summaryPoll = usePolling(async (signal) => {
+    const summary = await getTaskSummary(signal)
+    summaryActiveRef.current = summary.active
+    setTaskSummary({ active: summary.active, total: summary.total })
+  }, { enabled: authState === 'ready', interval: 3000, idleInterval: 30000, isActive: () => summaryActiveRef.current > 0 })
 
-  async function refreshInstances() {
+  // 实例列表：首页／实例页／模型页／系统页需要；状态迁移期 3 秒，稳定后 5 秒。
+  const instancesPoll = usePolling(async (signal) => {
     try {
-      const next = await getInstances()
+      const next = await getInstances(signal)
       setRealInstances(next.instances)
       setInstanceDefaults(next.defaults)
-    } catch {
+      setBackendOnline(true)
+      if (pageRef.current === 'instances' || pageRef.current === 'dashboard') {
+        const running = next.instances.filter((item) => item.status === 'running')
+        const statuses = await Promise.allSettled(running.map((item) => getComfyStatus(item.name, signal)))
+        setComfyStatuses((previous) => {
+          const merged = { ...previous }
+          running.forEach((item, index) => {
+            const result = statuses[index]
+            if (result.status === 'fulfilled') merged[item.name] = result.value
+          })
+          return merged
+        })
+      }
+    } catch (error) {
+      if (isAbortError(error)) return
       setRealInstances(null)
+      setBackendOnline(false)
     }
+  }, {
+    enabled: authState === 'ready' && ['dashboard', 'instances', 'models', 'system'].includes(page),
+    interval: 3000, idleInterval: 5000, isActive: () => busyCountRef.current > 0,
+  })
+
+  // 模型列表：仅首页／模型页／系统页，空闲 60 秒；写操作通过刷新事件立即失效。
+  const modelsPoll = usePolling(async (signal) => {
+    try {
+      setRealModels(await getModels(signal))
+      setBackendOnline(true)
+    } catch (error) {
+      if (!isAbortError(error)) setRealModels(null)
+    }
+  }, { enabled: authState === 'ready' && ['dashboard', 'models', 'system'].includes(page), interval: 60000 })
+
+  // 下载任务：仅需要任务投影的页面；活跃 3 秒、空闲 15 秒。
+  const downloadsPoll = usePolling(async (signal) => {
+    try {
+      const tasks = await getDownloads(signal)
+      const nextActive = tasks.some((task) => ['running', 'paused'].includes(task.status))
+      // 出现新的已完成任务说明仓库刚多了一个文件：立即失效模型列表。
+      // 极快的导入可能在两次轮询间完成，不能只依赖“活跃→空闲”的边沿。
+      const completedIds = tasks.filter((task) => task.status === 'completed').map((task) => task.id)
+      const hasNewCompleted = completedIds.some((id) => !completedTasksRef.current.has(id))
+      if (hasNewCompleted) {
+        emitRefresh('models', 'task-summary')
+      }
+      completedTasksRef.current = new Set(completedIds)
+      downloadsActiveRef.current = nextActive
+      setRealDownloads(tasks)
+      setBackendOnline(true)
+    } catch (error) {
+      if (!isAbortError(error)) setRealDownloads(null)
+    }
+  }, {
+    enabled: authState === 'ready' && ['dashboard', 'models', 'system'].includes(page),
+    interval: 3000, idleInterval: 15000, isActive: () => downloadsActiveRef.current,
+  })
+
+  // 主机与 GPU 摘要：首页 5 秒，其他页面 60 秒；失败按退避重试，不形成紧循环。
+  const hardwarePoll = usePolling(async (signal) => {
+    const report = await getHardware(signal)
+    setHostInfo({
+      name: report.hostName,
+      gpuSummary: report.gpus.length ? `${report.gpus.length} × ${report.gpus[0].name}` : '未检测到 GPU',
+    })
+    setGpuNames(report.gpus.map((gpu) => gpu.name))
+  }, {
+    enabled: authState === 'ready',
+    // 页面切换会重启轮询，保证首页立即回到 5 秒周期。
+    interval: page === 'dashboard' ? 5000 : 60000,
+    onError: () => setHostInfo({ name: '硬件接口不可用', gpuSummary: '—' }),
+  })
+
+  // 版本信息：登录后 60 秒，写操作不触发。
+  usePolling(async (signal) => {
+    const health = await getHealth(signal)
+    setBackendVersion(health.version)
+  }, { enabled: authState === 'ready', interval: 60000 })
+
+  // 刷新事件：业务写操作后只通知相关数据。
+  const pollRef = useRef({ summaryPoll, instancesPoll, modelsPoll, downloadsPoll, hardwarePoll })
+  pollRef.current = { summaryPoll, instancesPoll, modelsPoll, downloadsPoll, hardwarePoll }
+  useEffect(() => {
+    const unsubscribe = [
+      subscribeRefresh('task-summary', () => void pollRef.current.summaryPoll.refresh()),
+      subscribeRefresh('tasks', () => void pollRef.current.summaryPoll.refresh()),
+      subscribeRefresh('instances', () => void pollRef.current.instancesPoll.refresh()),
+      subscribeRefresh('models', () => void pollRef.current.modelsPoll.refresh()),
+      subscribeRefresh('downloads', () => void pollRef.current.downloadsPoll.refresh()),
+      subscribeRefresh('hardware', () => void pollRef.current.hardwarePoll.refresh()),
+    ]
+    return () => unsubscribe.forEach((off) => off())
+  }, [])
+
+  async function refreshInstances() {
+    await instancesPoll.refresh()
   }
 
   async function refreshModels() {
-    try {
-      setRealModels(await getModels())
-    } catch {
-      setRealModels(null)
-    }
+    await modelsPoll.refresh()
   }
 
   async function refreshDownloads() {
-    try {
-      setRealDownloads(await getDownloads())
-    } catch {
-      setRealDownloads(null)
-    }
+    await downloadsPoll.refresh()
   }
 
-  function requireBackend(action: string): boolean {
+function requireBackend(action: string): boolean {
     if (backendOnline) return true
     toast.error(`${action}失败`, { description: 'FlowPilot 后端未连接，请确认服务已启动。' })
     return false
@@ -312,6 +334,7 @@ export default function App() {
           toast.warning(`${actionName}提示`, { description: result.queueWarning })
         }
         toast.success(`实例已${actionName}`, { description: target.name })
+        emitRefresh('instances', 'task-summary')
       })
       .catch((error: unknown) => {
         toast.error(`实例${actionName}失败`, { description: error instanceof Error ? error.message : '请求失败' })
@@ -351,6 +374,7 @@ export default function App() {
     deleteInstanceApi(target.name, target.status === 'running', purge === true)
       .then(() => {
         toast.success(purge ? '实例及数据已彻底删除' : '实例容器已删除', { description: purge ? `${target.name} · 容器与全部实例数据已清理` : `${target.name} · 实例数据已保留，重建同名实例自动沿用` })
+        emitRefresh('instances', 'task-summary')
         void refreshInstances()
       })
       .catch((error: unknown) => {
@@ -367,6 +391,7 @@ export default function App() {
         ? await createImportApi({ path: input.source, category: modelTypeToCategory(input.type), name: input.name || undefined })
         : await createDownloadApi({ url: input.source, category: modelTypeToCategory(input.type), name: input.name || undefined })
       toast.success(input.sourceType === '本地导入' ? '导入任务已创建' : '下载任务已创建', { description: `${task.fileName} → ${task.path}` })
+      emitRefresh('downloads', 'tasks', 'task-summary')
       void refreshDownloads()
       return true
     } catch (error) {
@@ -415,6 +440,7 @@ export default function App() {
     deleteModelApi(rawPath)
       .then(() => {
         toast.success('模型文件已删除', { description: rawPath })
+      emitRefresh('models')
         void refreshModels()
       })
       .catch((error: unknown) => {
@@ -508,7 +534,7 @@ export default function App() {
     ...(realDownloads ?? []).filter((task) => ['running', 'paused'].includes(task.status)).map((task) => task.path),
   ]
 
-  const activeTasks = displayTasks.filter((task) => ['running', 'paused'].includes(task.status)).length
+  const activeTasks = taskSummary.active
 
   // 认证门卫渲染：初始化页／登录页优先于业务界面。
   if (authState === 'setup') {

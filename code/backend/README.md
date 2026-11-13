@@ -1,6 +1,6 @@
 # FlowPilot 后端
 
-当前版本：`0.1.0.6`。
+当前版本：`0.1.0.7`。
 
 轻量 Go 服务同时提供前端静态页面和 Docker API。仅使用 Go 标准库，通过 `/var/run/docker.sock` 访问 Docker Engine，不引入第三方 Docker SDK。
 
@@ -94,6 +94,9 @@
 - `POST /api/v1/imports` `{path, category, name?, sha256?}`：将白名单目录（`FLOWPILOT_IMPORT_DIRS`，默认 `/data/import`，即宿主机安装目录下 `import/`）内的文件任务化复制入共享仓库；与下载共用任务模型（`kind=import`），支持暂停与 SHA256 校验；源路径越出白名单或非普通文件一律拒绝。
 
 ### 模型组合套装（MiniMax H3）
+
+- `GET /api/v1/tasks/summary`：导航角标使用的轻量任务计数（`counts`／`total`／`active`），与统一任务列表同源，不含明细与日志。
+- `GET /api/v1/models`：返回 `local` 与 `network` 来源状态（`available`／`scannedAt`／`stale`／`error`）；本地缓存 60 秒、NAS 120 秒，同一来源并发扫描合并。
 
 - `GET /api/v1/model-bundles`：五个套装卡片，含状态、字节、硬件结论、模型级许可与 `licenseConfirmed`。
 - `GET /api/v1/model-bundles/{id}`：详情（文件项、硬件、工作流、许可确认历史、验收记录）。

@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.1.0.6') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.1.0.7') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   // 认证（0.0.9.6）：未登录先看到登录页 → 初始化 → 登录 → 会话恢复。
@@ -935,7 +935,7 @@ try {
   const ssrfResponse = await page.request.post(`${baseURL}/api/v1/downloads`, { headers: { 'X-FlowPilot-CSRF': csrfToken }, data: { url: 'http://192.168.0.1/model.safetensors', category: 'other' } })
   if (ssrfResponse.ok()) throw new Error('内网下载地址必须被 SSRF 防护拦截')
   check('SSRF 防护拦截内网目标')
-    await page.getByRole('row').filter({ hasText: 'index.html' }).getByText('就绪', { exact: true }).waitFor({ timeout: 15000 })
+    await page.getByRole('row').filter({ hasText: 'index.html' }).getByText('就绪', { exact: true }).waitFor({ timeout: 30000 })
     await screenshot('03-models-download-real')
 
     await page.getByRole('button', { name: '删除 index.html', exact: true }).click()

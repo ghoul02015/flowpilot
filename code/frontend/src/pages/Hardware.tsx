@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Activity, ChevronDown, CircleAlert, Cpu, Gauge, HardDrive, MemoryStick, Server, Thermometer, Zap } from 'lucide-react'
 import { formatBytes, getHardware, type HardwareReport, type RealGPU } from '@/api'
 import { EmptyState, PageHeader, Panel, PanelHeader, ProgressBar } from '@/components/common'
+import { usePolling } from '@/hooks/use-polling'
 import { getHardwareCompat, type CompatItem } from '@/api'
 
 function clamp(value: number) {
@@ -78,26 +79,14 @@ export function Hardware() {
   const [report, setReport] = useState<HardwareReport | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    let cancelled = false
-    async function poll() {
-      try {
-        const next = await getHardware()
-        if (!cancelled) {
-          setReport(next)
-          setError(null)
-        }
-      } catch (reason) {
-        if (!cancelled) setError(reason instanceof Error ? reason.message : '硬件采集接口不可用')
-      }
+  usePolling(async (signal) => {
+    try {
+      setReport(await getHardware(signal))
+      setError(null)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '硬件采集接口不可用')
     }
-    void poll()
-    const timer = window.setInterval(() => void poll(), 2000)
-    return () => {
-      cancelled = true
-      window.clearInterval(timer)
-    }
-  }, [])
+  }, { interval: 2000 })
 
   const unified = report?.gpuMemoryMode === 'unified'
   const gpus = report?.gpus ?? []

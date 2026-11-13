@@ -102,6 +102,12 @@ func main() {
 		slog.Info("已设置内网模型源白名单", "hosts", len(hosts))
 	}
 	downloadManager := download.NewManager(filepath.Join(dataDir, "models"), importDirs, filepath.Join(dataDir, "tasks.json"))
+	// 任务完成写入仓库后立即失效本地模型缓存，避免页面等 60 秒才看到新文件。
+	downloadManager.SetOnFinish(func(task download.Task) {
+		if task.Status == "completed" {
+			modelManager.InvalidateLocal()
+		}
+	})
 	catalogManager := catalog.NewManager(filepath.Join(dataDir, "catalog.json"))
 
 	// 数据底座（0.0.9.5）：嵌入式 SQLite，迁移后由 server 在启动时同步实例映射。
