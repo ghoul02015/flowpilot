@@ -283,7 +283,11 @@ func (b *Bundle) validateDependencyGraph() error {
 
 func (b *Bundle) validateLicense() error {
 	license := b.License
-	if strings.TrimSpace(license.ModelName) == "" || license.ModelName != b.ModelName {
+	// 未配置许可的模型跳过校验：它们不进入许可确认流程。
+	if !license.Configured() {
+		return nil
+	}
+	if license.ModelName != b.ModelName {
 		return invalid(b.ID, "license.modelName", "必须与套装 modelName 一致")
 	}
 	if strings.TrimSpace(license.Name) == "" || strings.TrimSpace(license.OfficialURL) == "" {
@@ -321,7 +325,8 @@ func (b *Bundle) validateLicense() error {
 // validateLicenses 校验模型级许可配置：键与模型名一致、不同模型不得共用同一许可版本。
 func (m *Manifest) validateLicenses() error {
 	if len(m.Licenses) == 0 {
-		return fmt.Errorf("清单未配置任何模型许可")
+		// 允许整个清单都不配置许可；此时所有套装都不需要确认。
+		return nil
 	}
 	versionOwner := map[string]string{}
 	for key, license := range m.Licenses {
@@ -335,12 +340,6 @@ func (m *Manifest) validateLicenses() error {
 			return fmt.Errorf("模型 %s 与 %s 共用许可版本 %s：不允许把一个模型的条款套用到另一个模型", previous, key, license.Version)
 		}
 		versionOwner[license.Version] = key
-	}
-	for index := range m.Bundles {
-		b := &m.Bundles[index]
-		if _, ok := m.Licenses[b.ModelName]; !ok {
-			return invalid(b.ID, "modelName", "模型 %s 未配置许可", b.ModelName)
-		}
 	}
 	return nil
 }

@@ -1,6 +1,6 @@
 # FlowPilot 后端
 
-当前版本：`0.1.0.5`。
+当前版本：`0.1.0.6`。
 
 轻量 Go 服务同时提供前端静态页面和 Docker API。仅使用 Go 标准库，通过 `/var/run/docker.sock` 访问 Docker Engine，不引入第三方 Docker SDK。
 
@@ -101,7 +101,7 @@
 - `POST /api/v1/model-bundles/{id}/installs` `{variant, selectedOptions, requestKey}`：创建幂等安装计划；许可未确认返回 422。
 - `GET /api/v1/model-bundles/{id}/installs/{installId}`：安装进度（含当前文件实时字节）。
 - `POST /api/v1/model-bundles/{id}/installs/{installId}/pause|resume|cancel|retry`：暂停／继续／取消／只重试失败项。
-- `POST /api/v1/model-bundles/{id}/license` `{deliveryMethod}`：确认该套装所属**模型**的当前许可版本；同模型同版本幂等，版本变化需重新确认。
+- `POST /api/v1/model-bundles/{id}/license` `{deliveryMethod}`：确认该套装所属**模型**的当前许可版本；同模型同版本幂等，版本变化需重新确认。未配置许可的模型不需要确认，也不阻断安装。
 - `GET /api/v1/model-bundles/{id}/license/{license|notice}`：下载内置许可原文或 NOTICE 文本。
 - `POST /api/v1/model-bundles/{id}/link`：把已齐备文件关联到实例。
 - `GET|POST /api/v1/model-bundles/{id}/acceptances`：人工验收记录的查询与新增；`.../{acceptanceId}/export` 导出脱敏 JSON。

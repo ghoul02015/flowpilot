@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.1.0.5') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.1.0.6') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   // 认证（0.0.9.6）：未登录先看到登录页 → 初始化 → 登录 → 会话恢复。
@@ -721,12 +721,11 @@ try {
     await page.getByRole('dialog').getByRole('button', { name: '运行预检' }).click()
     await page.getByRole('dialog').getByRole('button', { name: '确认许可并继续', exact: true }).click()
     const licenseDialog = page.getByRole('dialog')
-    await licenseDialog.getByRole('heading', { name: '使用 MiniMax-H3 前请确认许可条件' }).waitFor()
-    const confirmButton = licenseDialog.getByRole('button', { name: '确认并继续安装' })
-    if (!(await confirmButton.isDisabled())) throw new Error('未勾选许可时确认按钮应禁用')
-    await licenseDialog.getByRole('checkbox').check()
-    if (await confirmButton.isDisabled()) throw new Error('勾选后确认按钮应可用')
-    check('首次安装许可确认弹窗与勾选闸门')
+    await licenseDialog.getByRole('heading', { name: '使用 MiniMax-H3 前请阅读许可' }).waitFor()
+    const confirmButton = licenseDialog.getByRole('button', { name: '确认并继续下载' })
+    if (await confirmButton.isDisabled()) throw new Error('许可弹窗应可直接点击确认，不应再要求勾选')
+    await licenseDialog.getByText('点击确认即表示你已阅读该许可。', { exact: true }).waitFor()
+    check('下载前许可提示与一次点击确认')
     await licenseDialog.getByRole('button', { name: '取消', exact: true }).click()
     await page.keyboard.press('Escape')
     await page.getByRole('dialog').waitFor({ state: 'detached' })

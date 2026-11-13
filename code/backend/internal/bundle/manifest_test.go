@@ -16,13 +16,25 @@ func mustDefault(t *testing.T) *Manifest {
 }
 
 // reparse 序列化后重新解析，用于构造非法清单。
-func reparse(t *testing.T, manifest *Manifest) error {
+func reparseManifest(t *testing.T, manifest *Manifest) (*Manifest, error) {
 	t.Helper()
-	raw, err := json.Marshal(manifest)
+	// 内存里的 License 是 attachLicenses 挂上去的，源 JSON 并没有该字段；
+	// 序列化前清掉，才能真实模拟“清单未配置某模型许可”。
+	clone := *manifest
+	clone.Bundles = append([]Bundle(nil), manifest.Bundles...)
+	for index := range clone.Bundles {
+		clone.Bundles[index].License = License{}
+	}
+	raw, err := json.Marshal(&clone)
 	if err != nil {
 		t.Fatalf("序列化失败：%v", err)
 	}
-	_, err = Parse(raw)
+	return Parse(raw)
+}
+
+func reparse(t *testing.T, manifest *Manifest) error {
+	t.Helper()
+	_, err := reparseManifest(t, manifest)
 	return err
 }
 
@@ -216,12 +228,35 @@ func TestLicenseSnapshotTamperRejected(t *testing.T) {
 	}
 }
 
-// TestBundleWithoutLicenseRejected 未配置许可的模型必须拒绝加载。
-func TestBundleWithoutLicenseRejected(t *testing.T) {
+// TestUnlicensedModelNeedsNoConfirmation 未配置许可的模型允许加载，
+// 预检直接通过；配置了许可的模型仍然要求确认。
+func TestUnlicensedModelNeedsNoConfirmation(t *testing.T) {
 	manifest := mustDefault(t)
 	delete(manifest.Licenses, "MiniMax-H3")
-	if err := reparse(t, manifest); err == nil {
-		t.Fatal("缺少模型许可时应拒绝解析")
+	reparsed, err := reparseManifest(t, manifest)
+	if err != nil {
+		t.Fatalf("未配置许可应允许加载：%v", err)
+	}
+	s3, ok := reparsed.FindBundle("h3-av-base")
+	if !ok {
+		t.Fatal("S3 缺失")
+	}
+	if s3.License.Configured() {
+		t.Fatal("未配置许可的模型不应被标记为需要确认")
+	}
+	check := LicenseCheck(s3, false)
+	if check.Status != CheckPass {
+		t.Fatalf("未配置许可时预检应通过，实际 %s：%s", check.Status, check.Detail)
+	}
+	s1, _ := reparsed.FindBundle("h3-image-base")
+	if !s1.License.Configured() {
+		t.Fatal("H3-Image 配置了许可，应要求确认")
+	}
+	if LicenseCheck(s1, false).Status != CheckBlock {
+		t.Fatal("已配置许可且未确认时应阻断")
+	}
+	if LicenseCheck(s1, true).Status != CheckPass {
+		t.Fatal("已确认后许可项应通过")
 	}
 }
 

@@ -282,7 +282,7 @@ func (s *Service) CreateInstall(ctx context.Context, id string, request CreateIn
 	if err != nil {
 		return Install{}, err
 	}
-	if !confirmed {
+	if !confirmed && b.License.Configured() {
 		return Install{}, ErrLicenseNotConfirmed
 	}
 	result, err := s.Preflight(ctx, id, request.Variant, request.SelectedOptions, operator)
@@ -373,6 +373,9 @@ func (s *Service) ConfirmLicense(ctx context.Context, id, deliveryMethod, operat
 	b, ok := s.Manifest.FindBundle(id)
 	if !ok {
 		return LicenseConfirmation{}, &ValidationError{BundleID: id, Field: "id", Message: "套装不存在"}
+	}
+	if !b.License.Configured() {
+		return LicenseConfirmation{}, &ValidationError{BundleID: b.ID, Field: "license", Message: "该模型未配置许可，无需确认"}
 	}
 	confirmation := LicenseConfirmation{
 		ID:             fmt.Sprintf("lic-%d", s.now().UnixNano()),

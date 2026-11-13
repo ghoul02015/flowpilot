@@ -2,6 +2,8 @@
 // 状态计算、预检与安装编排。所有类型与 HTTP 无关，便于单测。
 package bundle
 
+import "strings"
+
 // Manifest 是随二进制发布的首版套装清单。
 type Manifest struct {
 	ManifestVersion string           `json:"manifestVersion"`
@@ -92,6 +94,12 @@ type WorkflowRef struct {
 	OfficialURL      string `json:"officialURL"`
 	TemplateStatus   string `json:"templateStatus"`
 	AcceptancePreset string `json:"acceptancePreset"`
+}
+
+// Configured 表示该模型是否需要人工确认许可。
+// 未配置许可的模型不提示、不阻断安装。
+func (l License) Configured() bool {
+	return strings.TrimSpace(l.Name) != "" && strings.TrimSpace(l.ModelName) != ""
 }
 
 // License 是模型级许可快照。套装只按 ModelName 引用它。

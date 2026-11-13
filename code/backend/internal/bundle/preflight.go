@@ -216,17 +216,23 @@ func DiskCheck(b *Bundle, snapshot RepoSnapshot, availableBytes int64) (Check, i
 // LicenseCheck 依据后端记录判断，不信任前端声明。
 func LicenseCheck(b *Bundle, confirmed bool) Check {
 	check := Check{Code: "license", Title: "许可确认", CheckedAt: time.Now().UTC()}
+	if !b.License.Configured() {
+		check.Status = CheckPass
+		check.Observed = "该模型未配置额外许可"
+		check.Detail = "无需确认，可直接下载"
+		return check
+	}
 	check.Required = b.License.Name + "（版本 " + b.License.Version + "）"
 	if confirmed {
 		check.Status = CheckPass
-		check.Observed = b.License.ModelName + " 许可文本已确认"
-		check.Detail = "许可确认仅表示已阅读，不代表平台授予商业授权或完成法务审核"
+		check.Observed = b.License.ModelName + " 许可已确认"
+		check.Detail = "确认仅表示你已阅读该许可"
 		return check
 	}
 	check.Status = CheckBlock
-	check.Observed = b.License.ModelName + " 许可文本待确认"
-	check.Detail = "需要先阅读并确认 " + b.License.ModelName + " 的当前许可版本"
-	check.Remediation = "点击“确认许可并继续”，勾选确认后自动继续安装"
+	check.Observed = b.License.ModelName + " 许可待确认"
+	check.Detail = "下载前需要先阅读并确认 " + b.License.ModelName + " 的许可"
+	check.Remediation = "点击“确认并继续下载”即可继续"
 	return check
 }
 

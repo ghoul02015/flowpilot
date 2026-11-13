@@ -52,9 +52,12 @@ func Parse(raw []byte) (*Manifest, error) {
 func (m *Manifest) attachLicenses() error {
 	for index := range m.Bundles {
 		b := &m.Bundles[index]
+		// 未配置许可的模型不提示、不阻断；只有配置了才挂载并校验快照。
 		license, ok := m.Licenses[b.ModelName]
 		if !ok {
-			return fmt.Errorf("套装 %s 使用的模型 %s 未配置许可", b.ID, b.ModelName)
+			// 清掉可能残留的内嵌许可，确保“未配置”语义唯一。
+			b.License = License{}
+			continue
 		}
 		if license.ModelName == "" {
 			license.ModelName = b.ModelName

@@ -259,3 +259,37 @@ func (p *progressDownloader) Delete(context.Context, string) error { return nil 
 func (p *progressDownloader) FindByTarget(context.Context, string, string) (DownloadState, bool) {
 	return DownloadState{}, false
 }
+
+// TestCreateInstallSkipsLicenseForUnlicensedModel 未配置许可的模型无需确认即可安装。
+func TestCreateInstallSkipsLicenseForUnlicensedModel(t *testing.T) {
+	manifest := mustDefault(t)
+	delete(manifest.Licenses, "MiniMax-H3")
+	reparsed, err := reparseManifest(t, manifest)
+	if err != nil {
+		t.Fatalf("未配置许可应允许加载：%v", err)
+	}
+	store := openStore(t)
+	installer := NewInstaller(store, reparsed, newFakeDownloader(), func() (RepoSnapshot, int64, error) {
+		return NewRepoSnapshot("models", nil), 1 << 40, nil
+	})
+	installer.SetPollInterval(2 * time.Millisecond)
+	service := &Service{
+		Manifest: reparsed, Store: store, Installer: installer,
+		ScanRepo: func() (RepoSnapshot, int64, error) { return NewRepoSnapshot("models", nil), 1 << 40, nil },
+		Hardware: func() HardwareSummary {
+			return HardwareSummary{GPUs: []GPUInfo{{Index: 0, Name: "NVIDIA GB10"}}, UnifiedMemory: true}
+		},
+		ImageMeta: func() (string, string) { return "0.45.0", "0.11.200" },
+	}
+	if _, err := service.CreateInstall(context.Background(), "h3-av-base", CreateInstallRequest{Variant: "default"}, "admin"); err != nil {
+		t.Fatalf("未配置许可的模型应可直接安装：%v", err)
+	}
+	// 已配置许可且未确认的模型仍然拒绝。
+	if _, err := service.CreateInstall(context.Background(), "h3-image-base", CreateInstallRequest{Variant: "default"}, "admin"); !errors.Is(err, ErrLicenseNotConfirmed) {
+		t.Fatalf("未确认许可应返回 ErrLicenseNotConfirmed，实际 %v", err)
+	}
+	// 未配置许可的模型不接受确认记录，避免产生无意义的空版本记录。
+	if _, err := service.ConfirmLicense(context.Background(), "h3-av-base", "online", "admin"); err == nil {
+		t.Fatal("未配置许可的模型不应允许写入确认记录")
+	}
+}
