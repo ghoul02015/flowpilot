@@ -6,6 +6,9 @@ dist/
 build/
 *.tsbuildinfo
 
+# Local deliverables and marketing assets (not versioned)
+deliverables/
+
 # Local runtime and test artifacts
 .playwright/
 playwright-report/
