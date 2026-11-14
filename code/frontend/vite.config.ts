@@ -5,7 +5,8 @@ import { inspectAttr } from 'kimi-plugin-inspect-react'
 
 // https://vite.dev/config/
 export default defineConfig({
-  base: './',
+  // 绝对资源路径：前端使用 History 路由，深链接刷新时相对路径会解析到子路径。
+  base: '/',
   plugins: [inspectAttr(), react()],
   server: {
     port: 3000,

@@ -612,3 +612,117 @@ func TestTaskSummaryCounts(t *testing.T) {
 		t.Fatal("摘要不应包含任务 ID 明细")
 	}
 }
+
+// newStaticTestHandler 使用真实静态目录，覆盖 0.1.0.8 的 SPA 深链接回退。
+func newStaticTestHandler(t *testing.T, staticDir string) http.Handler {
+	t.Helper()
+	return New(staticDir, docker.NewClient("/unused/docker.sock"),
+		hardware.NewCollector(hardware.Config{ProcRoot: t.TempDir(), HostRoot: t.TempDir(), DataDir: t.TempDir(), NvidiaSMIBin: ""}),
+		nil, nil, nil, nil, "", catalog.NewManager(""), nil, nil, "", nil, true, nil, "", nil, nil, nil, nil)
+}
+
+// TestSPAFallbackForDeepLinks：前端路由地址刷新时返回 index.html，不返回 404。
+func TestSPAFallbackForDeepLinks(t *testing.T) {
+	staticDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(staticDir, "index.html"), []byte("<!doctype html><div id=app>spa-marker</div>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	handler := newStaticTestHandler(t, staticDir)
+	for _, target := range []string{"/dashboard", "/instances/demo", "/models?tab=online", "/tasks/demo", "/system/security", "/login", "/unknown-route"} {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s 期望 200，实际 %d", target, response.Code)
+		}
+		if !strings.Contains(response.Body.String(), "spa-marker") {
+			t.Fatalf("%s 未返回 index.html 内容", target)
+		}
+	}
+}
+
+// TestSPAPrefersStaticAsset：真实存在的静态资源直接返回，不被 index.html 覆盖。
+func TestSPAPrefersStaticAsset(t *testing.T) {
+	staticDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(staticDir, "index.html"), []byte("spa-marker"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(staticDir, "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staticDir, "assets", "app.js"), []byte("console.log('asset')"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	handler := newStaticTestHandler(t, staticDir)
+	request := httptest.NewRequest(http.MethodGet, "/assets/app.js", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "asset") {
+		t.Fatalf("静态资源未正确返回：%d %q", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "spa-marker") {
+		t.Fatal("静态资源不应回退为 index.html")
+	}
+}
+
+// TestSPARejectsNonGet：非 GET/HEAD 的静态路径保持方法限制，不吞成页面。
+func TestSPARejectsNonGet(t *testing.T) {
+	staticDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(staticDir, "index.html"), []byte("spa-marker"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	handler := newStaticTestHandler(t, staticDir)
+	request := httptest.NewRequest(http.MethodPost, "/dashboard", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("期望 405，实际 %d", response.Code)
+	}
+	if contentType := response.Header().Get("Content-Type"); !strings.Contains(contentType, "application/json") {
+		t.Fatalf("期望 JSON 错误，实际 %q", contentType)
+	}
+}
+
+// TestSPAPathTraversalNoLeak：目录穿越不会读到静态目录之外的文件。
+func TestSPAPathTraversalNoLeak(t *testing.T) {
+	root := t.TempDir()
+	staticDir := filepath.Join(root, "web")
+	if err := os.MkdirAll(staticDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staticDir, "index.html"), []byte("spa-marker"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "secret.txt"), []byte("top-secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	handler := newStaticTestHandler(t, staticDir)
+	for _, target := range []string{"/../secret.txt", "/..%2fsecret.txt", "/assets/../../secret.txt"} {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if strings.Contains(response.Body.String(), "top-secret") {
+			t.Fatalf("%s 泄露了静态目录外的文件", target)
+		}
+	}
+}
+
+// TestUnknownAPIStaysJSON：API 前缀未匹配路径始终返回 JSON 404，不回退 index.html。
+func TestUnknownAPIStaysJSON(t *testing.T) {
+	staticDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(staticDir, "index.html"), []byte("spa-marker"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	handler := newStaticTestHandler(t, staticDir)
+	for _, target := range []string{"/api/v1/models/bundles/missing", "/api/v1/tasks/unknown", "/api/v1/"} {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if contentType := response.Header().Get("Content-Type"); !strings.Contains(contentType, "application/json") {
+			t.Fatalf("%s 期望 JSON，实际 %q", target, contentType)
+		}
+		if strings.Contains(response.Body.String(), "spa-marker") {
+			t.Fatalf("%s 回退成了 HTML 页面", target)
+		}
+	}
+}

@@ -80,7 +80,7 @@ function SourceDot({ status }: { status?: SourceStatus }) {
     title={status.reachable ? `${status.home} 连接正常 · ${status.latencyMs}ms` : `${status.home} 当前不可达`} />
 }
 
-function MarketPanel({ onMarketDownload, onOnlineDownload, existingPaths }: { onMarketDownload: Props['onMarketDownload']; onOnlineDownload: Props['onOnlineDownload']; existingPaths: string[] }) {
+export function MarketPanel({ onMarketDownload, onOnlineDownload, existingPaths }: { onMarketDownload: Props['onMarketDownload']; onOnlineDownload: Props['onOnlineDownload']; existingPaths: string[] }) {
   const [source, setSource] = useState<MarketSource>('curated')
   const [statuses, setStatuses] = useState<SourceStatus[]>([])
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null)

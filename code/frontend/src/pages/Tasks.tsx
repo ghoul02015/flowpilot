@@ -1,53 +1,21 @@
+// Tasks 统一任务中心：筛选、状态与页码写入查询参数，详情走独立路由。
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router'
 import { usePolling } from '@/hooks/use-polling'
 import { Ban, CheckCircle2, ChevronLeft, ChevronRight, FileText, Loader2, Pause, Play, RefreshCw, RotateCcw, Search, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
-import { cancelImageTask, cleanupFinishedTasks, deleteUnifiedTask, downloadActionApi, getImageTaskLogs, getUnifiedTasks, type UnifiedTaskView } from '@/api'
+import { cancelImageTask, cleanupFinishedTasks, deleteUnifiedTask, downloadActionApi, getUnifiedTasks, type UnifiedTaskView } from '@/api'
 import { EmptyState, PageHeader, Panel, ProgressBar } from '@/components/common'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { formatTaskTime, isActiveStatus, isDownloadType, statusMeta, taskStatuses, taskTypes, typeMeta } from '@/lib/task-meta'
 
 const PAGE_SIZE = 20
-
-// 统一任务状态徽章（0.0.9.9 协议）。
-const statusMeta: Record<string, { label: string; className: string }> = {
-  queued: { label: '排队中', className: 'border-slate-200 bg-slate-50 text-slate-600' },
-  running: { label: '运行中', className: 'border-teal-200 bg-teal-50 text-teal-700' },
-  paused: { label: '已暂停', className: 'border-amber-200 bg-amber-50 text-amber-700' },
-  succeeded: { label: '已完成', className: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
-  failed: { label: '失败', className: 'border-rose-200 bg-rose-50 text-rose-700' },
-  cancelled: { label: '已取消', className: 'border-slate-200 bg-slate-50 text-slate-500' },
-  partial: { label: '部分完成', className: 'border-orange-200 bg-orange-50 text-orange-700' },
-}
-
-const typeMeta: Record<string, string> = {
-  download: '模型下载',
-  import: '模型导入',
-  'image-pull': '镜像拉取',
-  'image-build': '镜像构建',
-  migration: '数据迁移',
-  backup: '平台备份',
-}
 
 interface ConfirmRequest {
   title: string
   description: string
   confirmLabel: string
   action: () => Promise<void>
-}
-
-function isActive(status: string): boolean {
-  return ['queued', 'running', 'paused'].includes(status)
-}
-
-function isDownloadType(type: string): boolean {
-  return type === 'download' || type === 'import'
-}
-
-function formatTime(value?: string): string {
-  if (!value) return '—'
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return value
-  return parsed.toLocaleString('zh-CN', { hour12: false })
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -80,7 +48,7 @@ function TaskActions({ task, onAction, onDelete, onDetail }: {
   onDelete: (task: UnifiedTaskView) => void
   onDetail: (task: UnifiedTaskView) => void
 }) {
-  const active = isActive(task.status)
+  const active = isActiveStatus(task.status)
   const download = isDownloadType(task.type)
   return <div className="flex flex-wrap items-center justify-end gap-0.5">
     <button type="button" className="btn-quiet px-2 text-xs" onClick={() => onDetail(task)}><FileText className="size-3.5" />详情</button>
@@ -92,35 +60,46 @@ function TaskActions({ task, onAction, onDelete, onDetail }: {
   </div>
 }
 
-// Tasks 统一任务中心：活跃任务优先，终态任务保留可审计记录，可按类型/状态/关键词筛选。
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')
 }
 
 export function Tasks() {
+  const navigate = useNavigate()
+  const [params, setParams] = useSearchParams()
+  const type = taskTypes.includes(params.get('type') ?? '') ? params.get('type')! : 'all'
+  const status = taskStatuses.includes(params.get('status') ?? '') ? params.get('status')! : 'all'
+  const query = (params.get('q') ?? '').trim()
+  const pageParam = Number.parseInt(params.get('page') ?? '1', 10)
+  const page = Number.isFinite(pageParam) && pageParam > 0 ? pageParam - 1 : 0
+
   const [tasks, setTasks] = useState<UnifiedTaskView[] | null>(null)
   const [total, setTotal] = useState(0)
-  const [status, setStatus] = useState('all')
-  const [type, setType] = useState('all')
-  const [search, setSearch] = useState('')
-  const [query, setQuery] = useState('')
-  const [page, setPage] = useState(0)
+  const [search, setSearch] = useState(query)
   const [loading, setLoading] = useState(true)
   const [refreshKey, setRefreshKey] = useState(0)
-  const [detailTask, setDetailTask] = useState<UnifiedTaskView | null>(null)
-  const [detailLogs, setDetailLogs] = useState<string[]>([])
-  const [logsLoading, setLogsLoading] = useState(false)
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null)
   const [confirmBusy, setConfirmBusy] = useState(false)
 
-  // 搜索防抖，避免每输入一个字都请求后端。
+  // 外部（前进后退）改变查询参数时同步搜索框。
+  useEffect(() => { setSearch(query) }, [query])
+
+  // 搜索防抖：只在内容真正变化时写回 URL，避免历史记录被污染。
   useEffect(() => {
+    const trimmed = search.trim()
+    if (trimmed === query) return
     const timer = window.setTimeout(() => {
-      setQuery(search.trim())
-      setPage(0)
+      updateParams((next) => { if (trimmed) next.set('q', trimmed); else next.delete('q'); next.delete('page') })
     }, 300)
     return () => window.clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search])
+
+  function updateParams(mutate: (next: URLSearchParams) => void) {
+    const next = new URLSearchParams(params)
+    mutate(next)
+    setParams(next, { replace: true })
+  }
 
   const activeRef = useRef(false)
   const initializedRef = useRef(false)
@@ -137,7 +116,7 @@ export function Tasks() {
       }, signal)
       setTasks(result.tasks)
       setTotal(result.total)
-      activeRef.current = result.tasks.some((task) => ['queued', 'running', 'paused'].includes(task.status))
+      activeRef.current = result.tasks.some((task) => isActiveStatus(task.status))
     } catch (error) {
       if (!isAbortError(error) && !initializedRef.current) setTasks(null)
     } finally {
@@ -151,32 +130,24 @@ export function Tasks() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [type, status, query, page, refreshKey])
 
-  useEffect(() => {
-    if (!detailTask || !detailTask.type.startsWith('image-')) {
-      setDetailLogs([])
-      return
-    }
-    let cancelled = false
-    setLogsLoading(true)
-    getImageTaskLogs(detailTask.id)
-      .then((logs) => { if (!cancelled) setDetailLogs(logs) })
-      .catch(() => { if (!cancelled) setDetailLogs([]) })
-      .finally(() => { if (!cancelled) setLogsLoading(false) })
-    return () => { cancelled = true }
-  }, [detailTask])
-
-  const activeCount = useMemo(() => (tasks ?? []).filter((task) => isActive(task.status)).length, [tasks])
+  const activeCount = useMemo(() => (tasks ?? []).filter((task) => isActiveStatus(task.status)).length, [tasks])
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
+
+  // 页码越界时回退到最后一页，避免空白列表。
+  useEffect(() => {
+    if (page + 1 > pageCount && pageCount >= 1) {
+      updateParams((next) => { if (pageCount > 1) next.set('page', String(pageCount)); else next.delete('page') })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageCount, page])
 
   function refresh() {
     setRefreshKey((value) => value + 1)
   }
 
   function resetFilters() {
-    setType('all')
-    setStatus('all')
     setSearch('')
-    setPage(0)
+    setParams(new URLSearchParams(), { replace: true })
   }
 
   async function runAction(task: UnifiedTaskView, action: 'pause' | 'resume' | 'cancel' | 'retry') {
@@ -205,7 +176,6 @@ export function Tasks() {
         try {
           await deleteUnifiedTask(task.id)
           toast.success('任务记录已删除', { description: task.name })
-          if (detailTask?.id === task.id) setDetailTask(null)
           refresh()
         } catch (error) {
           toast.error('删除任务记录失败', { description: error instanceof Error ? error.message : '请稍后重试' })
@@ -223,7 +193,7 @@ export function Tasks() {
         try {
           const result = await cleanupFinishedTasks(type === 'all' ? undefined : type)
           toast.success('任务记录已清理', { description: `删除 ${result.deleted} 条${result.failed > 0 ? `，${result.failed} 条未能删除` : ''}` })
-          setPage(0)
+          setParams(new URLSearchParams(), { replace: true })
           refresh()
         } catch (error) {
           toast.error('清理任务记录失败', { description: error instanceof Error ? error.message : '请稍后重试' })
@@ -243,9 +213,7 @@ export function Tasks() {
     }
   }
 
-  function openDetail(task: UnifiedTaskView) {
-    setDetailTask(task)
-  }
+  const filtersActive = Boolean(query) || type !== 'all' || status !== 'all'
 
   return <>
     <PageHeader eyebrow="TASK CENTER" title="任务中心" description="统一跟踪模型下载、导入、镜像构建/拉取、数据迁移与平台备份；活跃任务优先展示，历史记录可按需清理。" />
@@ -257,19 +225,19 @@ export function Tasks() {
           <button type="button" className="btn-quiet px-1.5 text-xs" title="刷新任务" aria-label="刷新任务" onClick={refresh}><RefreshCw className={`size-3.5 ${loading ? 'animate-spin' : ''}`} /></button>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <label className="relative">
+          <label className="relative w-full sm:w-auto">
             <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-slate-400" />
-            <input className="field-input h-9 w-52 pl-8 text-sm" aria-label="搜索任务" placeholder="搜索任务或关联对象" value={search} onChange={(event) => setSearch(event.target.value)} />
+            <input className="field-input h-9 w-full pl-8 text-sm sm:w-52" aria-label="搜索任务" placeholder="搜索任务或关联对象" value={search} onChange={(event) => setSearch(event.target.value)} />
           </label>
-          <select className="field-input h-9 w-36 text-sm" aria-label="按任务类型筛选" value={type} onChange={(event) => { setType(event.target.value); setPage(0) }} data-testid="task-type-filter">
+          <select className="field-input h-9 w-full text-sm sm:w-36" aria-label="按任务类型筛选" value={type} onChange={(event) => updateParams((next) => { if (event.target.value === 'all') next.delete('type'); else next.set('type', event.target.value); next.delete('page') })} data-testid="task-type-filter">
             <option value="all">全部类型</option>
-            {Object.entries(typeMeta).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+            {taskTypes.map((key) => <option key={key} value={key}>{typeMeta[key]}</option>)}
           </select>
-          <select className="field-input h-9 w-32 text-sm" aria-label="按任务状态筛选" value={status} onChange={(event) => { setStatus(event.target.value); setPage(0) }}>
+          <select className="field-input h-9 w-full text-sm sm:w-32" aria-label="按任务状态筛选" value={status} onChange={(event) => updateParams((next) => { if (event.target.value === 'all') next.delete('status'); else next.set('status', event.target.value); next.delete('page') })}>
             <option value="all">全部状态</option>
-            {Object.entries(statusMeta).map(([key, item]) => <option key={key} value={key}>{item.label}</option>)}
+            {taskStatuses.map((key) => <option key={key} value={key}>{statusMeta[key].label}</option>)}
           </select>
-          {(search || type !== 'all' || status !== 'all') && <button type="button" className="btn-quiet h-9 px-2 text-xs" onClick={resetFilters}>重置筛选</button>}
+          {filtersActive && <button type="button" className="btn-quiet h-9 px-2 text-xs" onClick={resetFilters}>重置筛选</button>}
           <button type="button" className="btn-secondary h-9 px-3 text-xs" onClick={requestCleanup}><Trash2 className="size-3.5" />清理已结束</button>
         </div>
       </div>
@@ -289,8 +257,8 @@ export function Tasks() {
                     <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-slate-500">{task.objectRef && <><span className="max-w-[280px] truncate" title={task.objectRef}>{task.objectRef}</span><span>·</span></>}<span className="truncate" title={task.message}>{task.error || task.message || '—'}</span></div>
                   </td>
                   <td className="px-3 py-3"><TaskProgress task={task} /></td>
-                  <td className="px-3 py-3 text-xs text-slate-500">{formatTime(task.createdAt)}</td>
-                  <td className="px-4 py-3"><TaskActions task={task} onAction={(item, action) => void runAction(item, action)} onDelete={requestDelete} onDetail={openDetail} /></td>
+                  <td className="px-3 py-3 text-xs text-slate-500">{formatTaskTime(task.createdAt)}</td>
+                  <td className="px-4 py-3"><TaskActions task={task} onAction={(item, action) => void runAction(item, action)} onDelete={requestDelete} onDetail={(item) => navigate(`/tasks/${encodeURIComponent(item.id)}`)} /></td>
                 </tr>)}
               </tbody>
             </table>
@@ -298,53 +266,25 @@ export function Tasks() {
           <div className="divide-y divide-slate-100 lg:hidden">
             {tasks.map((task) => <div key={task.id} className="p-4">
               <div className="flex flex-wrap items-center gap-2"><span className="min-w-0 flex-1 truncate font-medium text-slate-900">{task.name}</span><StatusBadge status={task.status} /><span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600" data-testid={`task-type-badge-${task.type}`}>{typeMeta[task.type] ?? task.type}</span></div>
-              <div className="mt-1.5 text-xs text-slate-500">{task.objectRef && <>对象 {task.objectRef} · </>}{formatTime(task.createdAt)}</div>
-              <p className={`mt-2 text-sm leading-5 ${task.error ? 'text-rose-700' : 'text-slate-600'}`}>{task.error || task.message || '—'}</p>
+              <div className="mt-1.5 text-xs break-all text-slate-500">{task.objectRef && <>对象 {task.objectRef} · </>}{formatTaskTime(task.createdAt)}</div>
+              <p className={`mt-2 text-sm leading-5 break-all ${task.error ? 'text-rose-700' : 'text-slate-600'}`}>{task.error || task.message || '—'}</p>
               <div className="mt-2"><TaskProgress task={task} /></div>
-              <div className="mt-2 border-t border-slate-100 pt-2"><TaskActions task={task} onAction={(item, action) => void runAction(item, action)} onDelete={requestDelete} onDetail={openDetail} /></div>
+              <div className="mt-2 border-t border-slate-100 pt-2"><TaskActions task={task} onAction={(item, action) => void runAction(item, action)} onDelete={requestDelete} onDetail={(item) => navigate(`/tasks/${encodeURIComponent(item.id)}`)} /></div>
             </div>)}
           </div>
         </>}
-        {!loading && tasks !== null && tasks.length === 0 && <EmptyState title={query || type !== 'all' || status !== 'all' ? '当前筛选下没有任务' : '暂无任务记录'} description={query || type !== 'all' || status !== 'all' ? '调整关键词、类型或状态筛选。' : '模型下载、镜像构建、数据迁移和备份任务会在这里留下记录。'} />}
+        {!loading && tasks !== null && tasks.length === 0 && <EmptyState title={filtersActive ? '当前筛选下没有任务' : '暂无任务记录'} description={filtersActive ? '调整关键词、类型或状态筛选。' : '模型下载、镜像构建、数据迁移和备份任务会在这里留下记录。'} />}
         {tasks === null && !loading && <EmptyState title="任务接口不可用" description="请确认管理服务已连接。" />}
       </div>
 
-      {total > PAGE_SIZE && <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3 text-xs text-slate-500">
+      {total > PAGE_SIZE && <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-4 py-3 text-xs text-slate-500">
         <span>第 {page + 1} / {pageCount} 页 · 每页 {PAGE_SIZE} 条</span>
         <div className="flex gap-1">
-          <button type="button" className="btn-quiet px-2 text-xs" disabled={page === 0} onClick={() => setPage((value) => Math.max(0, value - 1))}><ChevronLeft className="size-3.5" />上一页</button>
-          <button type="button" className="btn-quiet px-2 text-xs" disabled={page + 1 >= pageCount} onClick={() => setPage((value) => value + 1)}>下一页<ChevronRight className="size-3.5" /></button>
+          <button type="button" className="btn-quiet px-2 text-xs" disabled={page === 0} onClick={() => updateParams((next) => { if (page <= 1) next.delete('page'); else next.set('page', String(page)) })}><ChevronLeft className="size-3.5" />上一页</button>
+          <button type="button" className="btn-quiet px-2 text-xs" disabled={page + 1 >= pageCount} onClick={() => updateParams((next) => next.set('page', String(page + 2)))}>下一页<ChevronRight className="size-3.5" /></button>
         </div>
       </div>}
     </Panel>
-
-    <Dialog open={Boolean(detailTask)} onOpenChange={(open) => !open && setDetailTask(null)}>
-      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-3xl">
-        {detailTask && <>
-          <DialogHeader>
-            <DialogTitle>{detailTask.name}</DialogTitle>
-            <DialogDescription>{typeMeta[detailTask.type] ?? detailTask.type} · {detailTask.id}</DialogDescription>
-          </DialogHeader>
-          <dl className="grid gap-3 rounded-lg border border-slate-200 p-4 text-sm">
-            {[
-              ['当前状态', statusMeta[detailTask.status]?.label ?? detailTask.status],
-              ['关联对象', detailTask.objectRef || '—'],
-              ['进度', detailTask.progress >= 0 ? `${detailTask.progress}%` : '不可估计'],
-              ['创建时间', formatTime(detailTask.createdAt)],
-              ['开始时间', formatTime(detailTask.startedAt)],
-              ['结束时间', formatTime(detailTask.finishedAt)],
-              ['最新信息', detailTask.message || '—'],
-            ].map(([term, value]) => <div key={term} className="grid grid-cols-[88px_1fr] gap-3"><dt className="text-slate-500">{term}</dt><dd className="break-all font-medium text-slate-800">{value}</dd></div>)}
-          </dl>
-          {detailTask.error && <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm leading-6 text-rose-800"><strong className="mr-1">失败原因</strong>{detailTask.error}</div>}
-          {detailTask.type.startsWith('image-') && <div className="mt-4">
-            <div className="mb-2 text-sm font-medium text-slate-700">运行日志</div>
-            {logsLoading ? <div className="rounded-lg bg-slate-950 p-4 text-xs text-slate-300">正在读取日志…</div> : <pre className="max-h-72 overflow-auto rounded-lg bg-slate-950 p-4 font-mono text-xs leading-5 whitespace-pre-wrap text-slate-100">{detailLogs.length > 0 ? detailLogs.join('\n') : '暂无日志；任务可能仍在排队或记录已清理。'}</pre>}
-          </div>}
-          <DialogFooter><button type="button" className="btn-primary" onClick={() => setDetailTask(null)}>关闭</button></DialogFooter>
-        </>}
-      </DialogContent>
-    </Dialog>
 
     <Dialog open={Boolean(confirmRequest)} onOpenChange={(open) => { if (!open && !confirmBusy) setConfirmRequest(null) }}>
       <DialogContent>

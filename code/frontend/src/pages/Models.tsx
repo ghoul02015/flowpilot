@@ -1,10 +1,14 @@
 import { useMemo, useState } from 'react'
 import { ChevronDown, Download, HardDriveDownload, Pause, Play, Plus, Search, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
+import type { CatalogEntry, OnlineFile } from '@/api'
 import { EmptyState, PageHeader, Panel, ProgressBar, StatusBadge } from '@/components/common'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { ModelItem } from '@/types'
 import ModelBundles from '@/components/ModelBundles'
+import { MarketPanel } from '@/components/AddModelDialog'
+
+type ModelTabKey = 'local' | 'online' | 'bundles'
 
 interface Props {
   models: ModelItem[]
@@ -15,12 +19,19 @@ interface Props {
   network?: { root: string; available: boolean }
   /** 运行中实例名称列表，删除保护提示用。 */
   runningInstanceNames: string[]
+  /** 当前页签来自 URL（?tab=local|online|bundles）。 */
+  tab: ModelTabKey
+  onTabChange: (tab: ModelTabKey) => void
   onAdd: () => void
   onPause: (id: string) => void
   onDelete: (id: string) => void
   onLocalize: (id: string) => void
   onBatchDelete: (ids: string[]) => void
   onBatchLocalize: (ids: string[]) => void
+  /** 在线获取页签的下载入口，与添加模型弹窗共用同一业务动作。 */
+  onMarketDownload: (entry: CatalogEntry, useFallback: boolean) => void
+  onOnlineDownload: (file: OnlineFile) => void
+  existingPaths: string[]
 }
 
 // 僵尸模型阈值：超过 30 天未更新且大于 1 GB 的本地模型标记为「疑似闲置」。
@@ -88,8 +99,7 @@ function ModelRow({ item, duplicateCount, selected, onToggleSelect, onPause, onD
   </tr>
 }
 
-export function Models({ models, realMode, modelsRoot, totalBytes, network, runningInstanceNames, onAdd, onPause, onDelete, onLocalize, onBatchDelete, onBatchLocalize }: Props) {
-  const [tab, setTab] = useState<'local' | 'bundles'>('local')
+export function Models({ models, realMode, modelsRoot, totalBytes, network, runningInstanceNames, tab, onTabChange, onAdd, onPause, onDelete, onLocalize, onBatchDelete, onBatchLocalize, onMarketDownload, onOnlineDownload, existingPaths }: Props) {
   const [query, setQuery] = useState('')
   const [type, setType] = useState('all')
   const [sort, setSort] = useState<'default' | 'size' | 'time'>('default')
@@ -187,7 +197,7 @@ export function Models({ models, realMode, modelsRoot, totalBytes, network, runn
       { label: '本地仓库', value: `${localFiles.length} 个 · ${formatTotal(totalBytes ?? 0)}`, note: modelsRoot ?? '' },
       { label: '网络存储（NAS）', value: network ? (network.available ? `${networkFiles.length} 个 · ${formatTotal(networkBytes)}` : '已配置 · 暂不可达') : '未配置', note: network ? network.root : '系统管理 → 网络存储 中配置' },
       { label: '模型类别', value: `${groups.filter((group) => group.name !== '进行中的任务').length} 类`, note: '按 ComfyUI 目录约定分组' },
-      { label: '数据来源', value: '实时扫描', note: '每 3 秒自动刷新' },
+      { label: '数据来源', value: '实时扫描', note: '60 秒缓存 · 写后即时刷新' },
     ]
     : [
       { label: '本地仓库', value: '—', note: '仓库接口不可用' },
@@ -197,12 +207,15 @@ export function Models({ models, realMode, modelsRoot, totalBytes, network, runn
     ]
 
   return <>
-    <PageHeader eyebrow="MODEL STORE" title="模型中心" description="本地仓库负责文件与下载；组合套装按场景整组部署和验收，不随发布包附带权重。" action={tab === 'local' ? <button type="button" className="btn-primary" onClick={onAdd}><Plus className="size-4" />添加模型</button> : undefined} />
-    <div className="mb-4 flex gap-1 rounded-lg bg-slate-100 p-1 text-sm" role="tablist">
-      <button type="button" role="tab" aria-selected={tab === 'local'} className={`rounded-md px-4 py-1.5 font-medium transition ${tab === 'local' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`} onClick={() => setTab('local')}>本地仓库</button>
-      <button type="button" role="tab" aria-selected={tab === 'bundles'} className={`rounded-md px-4 py-1.5 font-medium transition ${tab === 'bundles' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`} onClick={() => setTab('bundles')}>组合套装</button>
+    <PageHeader eyebrow="MODEL STORE" title="模型中心" description="本地仓库负责文件与下载，在线获取对接 ModelScope／HF 镜像，组合套装按场景整组部署和验收。" action={tab === 'local' ? <button type="button" className="btn-primary" onClick={onAdd}><Plus className="size-4" />添加模型</button> : undefined} />
+    <div className="mb-4 flex gap-1 overflow-x-auto rounded-lg bg-slate-100 p-1 text-sm" role="tablist" aria-label="模型中心页签">
+      {([['local', '本地仓库'], ['online', '在线获取'], ['bundles', '组合套装']] as [ModelTabKey, string][]).map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={tab === key} aria-controls={`model-panel-${key}`} className={`min-h-9 rounded-md px-4 py-1.5 font-medium whitespace-nowrap transition ${tab === key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`} onClick={() => onTabChange(key)}>{label}</button>)}
     </div>
-    {tab === 'bundles' ? <ModelBundles /> : <>
+    {tab === 'online' && <div id="model-panel-online" role="tabpanel" aria-label="在线获取">
+      <Panel className="p-5"><MarketPanel onMarketDownload={onMarketDownload} onOnlineDownload={onOnlineDownload} existingPaths={existingPaths} /></Panel>
+    </div>}
+    {tab === 'bundles' && <div id="model-panel-bundles" role="tabpanel" aria-label="组合套装"><ModelBundles /></div>}
+    {tab === 'local' && <div id="model-panel-local" role="tabpanel" aria-label="本地仓库">
     <div className="mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
       {stats.map((item) => <Panel key={item.label} className="p-5"><div className="text-sm text-slate-500">{item.label}</div><div className="mt-2 text-xl font-bold text-slate-900">{item.value}</div><div className="mt-1 truncate text-xs text-slate-500" title={item.note}>{item.note}</div></Panel>)}
     </div>
@@ -237,6 +250,6 @@ export function Models({ models, realMode, modelsRoot, totalBytes, network, runn
     </div>
     <Dialog open={Boolean(deleting)} onOpenChange={(open) => !open && setDeleteId(null)}><DialogContent>{deleting && <><DialogHeader><DialogTitle>{deleting.id.startsWith('dl-') ? '移除下载任务' : '删除模型文件'}</DialogTitle><DialogDescription>{deleting.id.startsWith('dl-') ? `将取消并移除 ${deleting.name} 的下载任务，已下载的临时分片会一并清理。` : `将从本地共享仓库物理删除 ${deleting.name}，实例工作流和输出不受影响。`}</DialogDescription></DialogHeader><div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{deleting.id.startsWith('dl-') ? '任务记录移除后不可恢复，已入库的模型文件不受影响。' : `此操作不可撤销，将永久删除本地仓库中的文件 ${deleting.rawPath ?? deleting.id}。`}</div><DialogFooter><button type="button" className="btn-secondary" onClick={() => setDeleteId(null)}>取消</button><button type="button" className="btn-danger" onClick={() => { onDelete(deleting.id); setDeleteId(null) }}><Trash2 className="size-4" />确认删除</button></DialogFooter></>}</DialogContent></Dialog>
     <Dialog open={batchDeleteOpen} onOpenChange={setBatchDeleteOpen}><DialogContent><DialogHeader><DialogTitle>批量删除模型文件</DialogTitle><DialogDescription>将从本地共享仓库物理删除选中的 {selectedLocal.length} 个模型文件，实例工作流和输出不受影响。</DialogDescription></DialogHeader><div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">此操作不可撤销；网络存储（只读）和下载任务不在批量删除范围内，已自动排除。</div><DialogFooter><button type="button" className="btn-secondary" onClick={() => setBatchDeleteOpen(false)}>取消</button><button type="button" className="btn-danger" onClick={() => { onBatchDelete(selectedLocal); setSelected([]); setBatchDeleteOpen(false) }}><Trash2 className="size-4" />确认删除 {selectedLocal.length} 个</button></DialogFooter></DialogContent></Dialog>
-    </>}
+    </div>}
   </>
 }

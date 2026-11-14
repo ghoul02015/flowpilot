@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { usePolling } from '@/hooks/use-polling'
-import { Ban, CloudDownload, Cpu, Download, FileText, Hammer, Layers, LoaderCircle, RefreshCw, ScrollText, Tag, Trash2, Upload, XCircle } from 'lucide-react'
+import { Ban, ChevronDown, ChevronLeft, ChevronRight, CloudDownload, Cpu, Download, FileText, Hammer, Layers, LoaderCircle, RefreshCw, ScrollText, Search, Tag, Trash2, Upload, XCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { buildScriptURL, cancelImageTask, deleteImageTask, deleteLocalImageApi, exportLocalImageURL, formatBytes, getImageCatalog, getImageDiskUsage, getImageTasks, getLocalImages, imageBuildSummary, importLocalImageApi, isComfyImage, pruneImageBuildCache, startImageBuild, startImagePull, tagLocalImageApi, type ComfyVersion, type ImageBuildSpec, type ImageDiskUsage, type ImageRecipe, type ImageTask, type LocalImage } from '@/api'
 import { ComfyVersionPicker } from '@/components/ComfyVersionPicker'
 import { EmptyState, Panel, PanelHeader } from '@/components/common'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+
+const IMAGE_PAGE_SIZE = 8
 
 interface ImageTagRow {
   tag: string
@@ -72,6 +74,9 @@ export function ImageManager() {
   const [diskUsage, setDiskUsage] = useState<ImageDiskUsage | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [imageQuery, setImageQuery] = useState('')
+  const [imagePage, setImagePage] = useState(0)
+  const [otherOpen, setOtherOpen] = useState(false)
   const [pruning, setPruning] = useState(false)
   const [pullImage, setPullImage] = useState('')
   const [recipeId, setRecipeId] = useState('nvidia-cu130')
@@ -144,6 +149,14 @@ export function ImageManager() {
   const virtualRows: ImageTagRow[] = [...activeBuildByImage.values()].filter((task) => !comfyRowsBase.some((item) => item.tag === task.image)).map((task) => ({ tag: task.image, task, virtual: true }))
   const comfyRows = comfyRowsBase.map((row) => ({ ...row, task: activeBuildByImage.get(row.tag) }))
   const comfyRowsWithVirtual = [...virtualRows, ...comfyRows]
+  // 客户端搜索与分页：仅作用于展示，操作对象始终取当前行自身的标签。
+  const imageFilter = imageQuery.trim().toLowerCase()
+  const matchImage = (row: ImageTagRow) => !imageFilter || row.tag.toLowerCase().includes(imageFilter) || (row.image?.Id ?? '').toLowerCase().includes(imageFilter)
+  const comfyFiltered = comfyRowsWithVirtual.filter(matchImage)
+  const otherFiltered = otherRows.filter(matchImage)
+  const pageCount = Math.max(1, Math.ceil(comfyFiltered.length / IMAGE_PAGE_SIZE))
+  const safePage = Math.min(imagePage, pageCount - 1)
+  const comfyPaged = comfyFiltered.slice(safePage * IMAGE_PAGE_SIZE, (safePage + 1) * IMAGE_PAGE_SIZE)
   const selectedRecipe = recipes.find((item) => item.id === recipeId)
   const selectedPlatform = platformOptions.find((item) => item.value === platform) ?? platformOptions[0]
   const logsTask = tasks.find((task) => task.id === logsTaskId) ?? (logsSnapshot?.id === logsTaskId ? logsSnapshot : null)
@@ -354,10 +367,14 @@ export function ImageManager() {
     })
   }
 
-  function renderImageTable(title: string, description: string, rows: ImageTagRow[], emptyTitle: string) {
+  function renderImageTable(title: string, description: string, rows: ImageTagRow[], emptyTitle: string, options?: { collapsible?: boolean; collapsed?: boolean; onToggle?: () => void; footer?: ReactNode }) {
     const groups = groupTagRows(rows)
     return <Panel>
-      <PanelHeader title={title} description={description} action={<button type="button" className="btn-secondary" onClick={refresh} disabled={loading}><RefreshCw className={`size-4 ${loading ? 'animate-spin' : ''}`} />刷新</button>} />
+      <PanelHeader title={title} description={description} action={<div className="flex items-center gap-2">
+        {options?.collapsible && <button type="button" className="btn-quiet px-2 text-xs" aria-expanded={!options.collapsed} onClick={options.onToggle}>{options.collapsed ? <ChevronRight className="size-4" /> : <ChevronDown className="size-4" />}{options.collapsed ? '展开' : '收起'}</button>}
+        <button type="button" className="btn-secondary" onClick={refresh} disabled={loading}><RefreshCw className={`size-4 ${loading ? 'animate-spin' : ''}`} />刷新</button>
+      </div>} />
+      {!options?.collapsed && <>
       <div className="overflow-x-auto"><table className="data-table min-w-[1080px]"><thead><tr><th>镜像标签</th><th>镜像简述参数</th><th>构建进度</th><th>镜像 ID</th><th>大小</th><th>创建时间</th><th>操作</th></tr></thead><tbody>
         {groups.map((group) => {
           const task = group.task
@@ -388,6 +405,8 @@ export function ImageManager() {
         })}
       </tbody></table></div>
       {rows.length === 0 && <EmptyState title={emptyTitle} description="可通过导入 tar、在线拉取或手动构建来准备镜像。" />}
+      {options?.footer}
+      </>}
     </Panel>
   }
 
@@ -508,8 +527,26 @@ export function ImageManager() {
         <button type="button" className="btn-quiet px-2 text-xs" disabled={pruning} onClick={() => void pruneCache()}>{pruning ? <LoaderCircle className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}清理构建缓存</button>
       </div>}
     </Panel>
-    {renderImageTable('ComfyUI 镜像', '仅此分类会出现在新建实例的镜像选择框中；构建任务会以虚拟行进入清单，展示百分比、参数简述、日志与停止入口。', comfyRowsWithVirtual, '暂无 ComfyUI 镜像')}
-    {renderImageTable('机器其他镜像', '用于环境排查和维护，不会作为 ComfyUI 实例候选。', otherRows, '暂无其他镜像')}
+    <Panel className="p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <label className="relative flex-1">
+          <span className="sr-only">搜索镜像</span>
+          <Search className="absolute top-3.5 left-3 size-4 text-slate-400" />
+          <input className="field-input pl-9" placeholder="搜索镜像名、标签或镜像 ID" value={imageQuery} onChange={(event) => { setImageQuery(event.target.value); setImagePage(0) }} />
+        </label>
+        <span className="text-xs text-slate-500">ComfyUI 镜像 {comfyFiltered.length} 个 · 其他镜像 {otherFiltered.length} 个</span>
+      </div>
+    </Panel>
+    {renderImageTable('ComfyUI 镜像', '仅此分类会出现在新建实例的镜像选择框中；构建任务会以虚拟行进入清单，展示百分比、参数简述、日志与停止入口。', comfyPaged, imageFilter ? '没有匹配的 ComfyUI 镜像' : '暂无 ComfyUI 镜像', {
+      footer: comfyFiltered.length > IMAGE_PAGE_SIZE ? <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-4 py-3 text-xs text-slate-500">
+        <span>第 {safePage + 1} / {pageCount} 页 · 共 {comfyFiltered.length} 个标签</span>
+        <div className="flex gap-1">
+          <button type="button" className="btn-quiet px-2 text-xs" disabled={safePage === 0} onClick={() => setImagePage(Math.max(0, safePage - 1))}><ChevronLeft className="size-3.5" />上一页</button>
+          <button type="button" className="btn-quiet px-2 text-xs" disabled={safePage + 1 >= pageCount} onClick={() => setImagePage(Math.min(pageCount - 1, safePage + 1))}>下一页<ChevronRight className="size-3.5" /></button>
+        </div>
+      </div> : undefined,
+    })}
+    {renderImageTable('机器其他镜像', '用于环境排查和维护，不会作为 ComfyUI 实例候选。', otherFiltered, imageFilter ? '没有匹配的其他镜像' : '暂无其他镜像', { collapsible: true, collapsed: !otherOpen, onToggle: () => setOtherOpen((value) => !value) })}
     {taskPanel}
     {dialogs}
   </div>
