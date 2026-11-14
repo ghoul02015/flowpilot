@@ -4,7 +4,7 @@ import { Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from
 import { LoaderCircle } from 'lucide-react'
 import { ConsoleLayout } from '@/layouts/ConsoleLayout'
 import { formatBytes } from '@/api'
-import { isModelTab, isSystemSection, pagePath, pagePaths } from '@/lib/routes'
+import { isModelTab, pagePath, pagePaths } from '@/lib/routes'
 import { useAppData } from '@/state/app-data'
 import type { PageKey } from '@/types'
 
@@ -118,7 +118,7 @@ function SystemRoute() {
   const { section } = useParams()
   const data = useAppData()
   return <Lazy><SystemPage
-    section={isSystemSection(section) ? section : undefined}
+    section={section}
     instances={data.displayInstances}
     models={data.displayModels}
     tasks={data.displayTasks}

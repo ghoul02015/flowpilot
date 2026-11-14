@@ -10,7 +10,7 @@ import { SecurityPanel } from '@/components/SecurityPanel'
 import { AuditPanel } from '@/components/AuditPanel'
 import { MigrationPanel } from '@/components/MigrationPanel'
 import { BackupPanel } from '@/components/BackupPanel'
-import { type SystemSection } from '@/lib/routes'
+import { isSystemSection, type SystemSection } from '@/lib/routes'
 import type { Instance, ModelItem, TaskItem } from '@/types'
 
 type RuntimeView = { status: 'loading' | 'connected' | 'fallback'; snapshot?: RuntimeSnapshot; error?: string }
@@ -21,8 +21,8 @@ interface Props {
   tasks: TaskItem[]
   version: string
   onLoggedOut: () => void
-  /** 当前系统分组来自 /system/:section；非法值回退到环境检测。 */
-  section?: SystemSection
+  /** 当前系统分区来自 /system/:section；非法值回退到环境检测并提示。 */
+  section?: string
 }
 
 // 四组信息架构：环境与兼容性／存储与数据／安全与审计／维护与支持。
@@ -35,7 +35,7 @@ const sectionGroups: { key: string; label: string; sections: { key: SystemSectio
 
 export function System({ instances, models, tasks, version, onLoggedOut, section }: Props) {
   const navigate = useNavigate()
-  const active: SystemSection = section ?? 'environment'
+  const active: SystemSection = isSystemSection(section) ? section : 'environment'
   const group = sectionGroups.find((item) => item.sections.some((entry) => entry.key === active)) ?? sectionGroups[0]
   const [checking, setChecking] = useState(false)
   const [lastCheck, setLastCheck] = useState('尚未检测')

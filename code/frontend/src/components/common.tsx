@@ -8,9 +8,9 @@ export function PageHeader({ eyebrow, title, description, action }: { eyebrow?: 
       <div>
         {eyebrow && <div className="mb-1 text-xs font-semibold tracking-[0.14em] text-teal-700 uppercase">{eyebrow}</div>}
         <h1 className="text-2xl font-bold tracking-tight text-slate-900 md:text-[28px]">{title}</h1>
-        <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">{description}</p>
+        <p className="mt-2 max-w-3xl text-sm leading-6 break-words text-slate-600">{description}</p>
       </div>
-      {action && <div className="shrink-0">{action}</div>}
+      {action && <div className="shrink-0 self-start sm:self-auto">{action}</div>}
     </div>
   )
 }
@@ -26,7 +26,7 @@ export function PanelHeader({ title, description, action }: { title: string; des
         <h2 className="text-base font-semibold text-slate-900">{title}</h2>
         {description && <p className="mt-1 text-xs leading-5 text-slate-500">{description}</p>}
       </div>
-      {action}
+      {action && <div className="shrink-0 self-start sm:self-auto">{action}</div>}
     </div>
   )
 }
@@ -43,7 +43,7 @@ export function StatusBadge({ status }: { status: InstanceStatus | ModelStatus |
   const paused = ['paused', 'stopped', 'cancelled'].includes(status)
   const Icon = success ? CheckCircle2 : warning ? LoaderCircle : danger ? CircleAlert : paused ? PauseCircle : Clock3
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${success ? 'bg-emerald-50 text-emerald-700' : warning ? 'bg-teal-50 text-teal-700' : danger ? 'bg-rose-50 text-rose-700' : 'bg-slate-100 text-slate-600'}`}>
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium whitespace-nowrap ${success ? 'bg-emerald-50 text-emerald-700' : warning ? 'bg-teal-50 text-teal-700' : danger ? 'bg-rose-50 text-rose-700' : 'bg-slate-100 text-slate-600'}`}>
       <Icon className={`size-3.5 ${['creating', 'starting', 'stopping', 'restarting', 'downloading'].includes(status) ? 'animate-spin' : ''}`} />
       {statusText[status]}
     </span>

@@ -375,7 +375,7 @@ export function ImageManager() {
         <button type="button" className="btn-secondary" onClick={refresh} disabled={loading}><RefreshCw className={`size-4 ${loading ? 'animate-spin' : ''}`} />刷新</button>
       </div>} />
       {!options?.collapsed && <>
-      <div className="overflow-x-auto"><table className="data-table min-w-[1080px]"><thead><tr><th>镜像标签</th><th>镜像简述参数</th><th>构建进度</th><th>镜像 ID</th><th>大小</th><th>创建时间</th><th>操作</th></tr></thead><tbody>
+      <div className="overflow-x-auto"><table className="data-table min-w-[1080px]"><colgroup><col className="w-[210px]" /><col className="w-[210px]" /><col className="w-[110px]" /><col className="w-[190px]" /><col className="w-[90px]" /><col className="w-[150px]" /><col className="w-[160px]" /></colgroup><thead><tr className="whitespace-nowrap"><th>镜像标签</th><th>镜像简述参数</th><th>构建进度</th><th>镜像 ID</th><th>大小</th><th>创建时间</th><th>操作</th></tr></thead><tbody>
         {groups.map((group) => {
           const task = group.task
           const active = task ? isActiveTask(task) : false
@@ -384,7 +384,7 @@ export function ImageManager() {
           return <tr key={group.key}>
             <td>
               <div className="flex flex-wrap items-center gap-1.5">
-                {group.tags.map((tag) => <span key={tag} className="rounded-md bg-slate-100 px-2 py-1 font-mono text-xs text-slate-800">{tag}</span>)}
+                {group.tags.map((tag) => <span key={tag} className="rounded-md bg-slate-100 px-2 py-1 font-mono text-xs whitespace-nowrap text-slate-800">{tag}</span>)}
                 {group.virtual && task && <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${task.state === 'queued' ? 'bg-amber-100 text-amber-800' : 'bg-teal-100 text-teal-800'}`}>{task.state === 'queued' ? '排队中' : '构建中'}</span>}
               </div>
               {group.tags.length > 1 && <div className="mt-1.5 text-[11px] text-slate-500">同一镜像 · {group.tags.length} 个标签，不重复占用磁盘</div>}
@@ -537,7 +537,7 @@ export function ImageManager() {
         <span className="text-xs text-slate-500">ComfyUI 镜像 {comfyFiltered.length} 个 · 其他镜像 {otherFiltered.length} 个</span>
       </div>
     </Panel>
-    {renderImageTable('ComfyUI 镜像', '仅此分类会出现在新建实例的镜像选择框中；构建任务会以虚拟行进入清单，展示百分比、参数简述、日志与停止入口。', comfyPaged, imageFilter ? '没有匹配的 ComfyUI 镜像' : '暂无 ComfyUI 镜像', {
+    {(comfyFiltered.length > 0 || !imageFilter) && renderImageTable('ComfyUI 镜像', '仅此分类会出现在新建实例的镜像选择框中；构建任务会以虚拟行进入清单，展示百分比、参数简述、日志与停止入口。', comfyPaged, imageFilter ? '没有匹配的 ComfyUI 镜像' : '暂无 ComfyUI 镜像', {
       footer: comfyFiltered.length > IMAGE_PAGE_SIZE ? <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-4 py-3 text-xs text-slate-500">
         <span>第 {safePage + 1} / {pageCount} 页 · 共 {comfyFiltered.length} 个标签</span>
         <div className="flex gap-1">
@@ -546,7 +546,7 @@ export function ImageManager() {
         </div>
       </div> : undefined,
     })}
-    {renderImageTable('机器其他镜像', '用于环境排查和维护，不会作为 ComfyUI 实例候选。', otherFiltered, imageFilter ? '没有匹配的其他镜像' : '暂无其他镜像', { collapsible: true, collapsed: !otherOpen, onToggle: () => setOtherOpen((value) => !value) })}
+    {(otherFiltered.length > 0 || !imageFilter) && renderImageTable('机器其他镜像', '用于环境排查和维护，不会作为 ComfyUI 实例候选。', otherFiltered, imageFilter ? '没有匹配的其他镜像' : '暂无其他镜像', { collapsible: !imageFilter, collapsed: !otherOpen && !imageFilter, onToggle: () => setOtherOpen((value) => !value) })}
     {taskPanel}
     {dialogs}
   </div>

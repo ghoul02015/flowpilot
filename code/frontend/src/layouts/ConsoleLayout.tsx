@@ -31,6 +31,17 @@ export function ConsoleLayout() {
   } = useAppData()
   const [mobileOpen, setMobileOpen] = useState(false)
 
+  // 详情页在面包屑追加对象名，避免所有详情都显示同一个一级标题。
+  const segments = location.pathname.split('/').filter(Boolean)
+  let detailName = ''
+  if ((segments[0] === 'instances' || segments[0] === 'tasks') && segments.length > 1) {
+    try {
+      detailName = decodeURIComponent(segments[1])
+    } catch {
+      detailName = segments[1]
+    }
+  }
+
   // 页面标题跟随后续路由，浏览器标签与历史记录保持一致。
   useEffect(() => {
     document.title = documentTitle(page)
@@ -77,7 +88,7 @@ export function ConsoleLayout() {
             <Server className="size-4 shrink-0" />
             <span className="max-w-40 truncate">{hostInfo.name}</span>
             <ChevronRight className="size-3.5 shrink-0" />
-            <span className="truncate text-slate-800">{location.pathname === '/dashboard' ? pageTitles[page] : pageLabels[page]}</span>
+            <span className="max-w-52 truncate text-slate-800" title={detailName || pageLabels[page]}>{detailName ? `${pageLabels[page]} / ${detailName}` : location.pathname === '/dashboard' ? pageTitles[page] : pageLabels[page]}</span>
           </div>
           <div className="ml-auto flex items-center gap-2">
             <span className={`hidden rounded-full border px-3 py-1.5 text-xs font-medium sm:inline ${backendOnline ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-rose-200 bg-rose-50 text-rose-800'}`}>{backendOnline ? '后端已连接' : '后端连接失败'}</span>

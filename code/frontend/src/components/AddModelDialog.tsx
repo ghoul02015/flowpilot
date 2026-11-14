@@ -219,8 +219,8 @@ export function MarketPanel({ onMarketDownload, onOnlineDownload, existingPaths 
               const taken = occupied.has(`${entry.category}/${entry.fileName}`) || (entry.category === 'other' && occupied.has(entry.fileName))
               return <div key={entry.id} className="rounded-lg border border-slate-200 px-3 py-2.5" data-testid={`market-entry-${entry.id}`}>
                 {/* 单行信息层级：名称＋类型徽章＋大小＋可达性一眼扫读；描述默认收起一行 */}
-                <div className="flex items-center gap-2">
-                  <span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-900" title={entry.name}>{entry.name}</span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="w-full min-w-0 truncate text-sm font-semibold text-slate-900 sm:w-auto sm:flex-1" title={entry.name}>{entry.name}</span>
                   <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">{entry.typeLabel}</span>
                   <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${entry.reachable ? 'bg-teal-50 text-teal-700' : 'bg-amber-100 text-amber-800'}`}>{formatBytes(entry.sizeBytes)} · {entry.reachable ? '可达' : '暂不可达'}</span>
                   {taken

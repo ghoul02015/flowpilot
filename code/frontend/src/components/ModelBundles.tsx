@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router'
 import { usePolling } from '@/hooks/use-polling'
 import { AlertTriangle, ArrowRight, CheckCircle2, Cpu, Download, ExternalLink, FileText, Layers, LoaderCircle, Pause, Play, RefreshCw, ShieldAlert, XCircle } from 'lucide-react'
 import { toast } from 'sonner'
@@ -87,7 +88,9 @@ export default function ModelBundles() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
-  const [detailId, setDetailId] = useState<string | null>(null)
+  // 套装详情支持 ?bundle= 深链接：刷新或分享后仍能打开同一套装。
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [detailId, setDetailId] = useState<string | null>(() => searchParams.get('bundle'))
   const [detail, setDetail] = useState<BundleDetail | null>(null)
   const [detailError, setDetailError] = useState('')
   const [detailTab, setDetailTab] = useState<'overview' | 'files' | 'hardware' | 'license' | 'acceptance'>('overview')
@@ -148,8 +151,30 @@ export default function ModelBundles() {
     })
   }, [cards, filter])
 
+  function syncBundleParam(id: string | null) {
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous)
+      if (id) next.set('bundle', id)
+      else next.delete('bundle')
+      return next
+    }, { replace: true })
+  }
+
+  // 浏览器前进后退或手动改地址时，详情抽屉跟随 URL。
+  useEffect(() => {
+    const id = searchParams.get('bundle')
+    if (!id) {
+      if (detailId) { setDetailId(null); setDetail(null) }
+      return
+    }
+    if (id === detailId && detail) return
+    void openDetail(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
+
   async function openDetail(id: string) {
     setDetailId(id)
+    syncBundleParam(id)
     setDetail(null)
     setDetailError('')
     setDetailTab('overview')
@@ -236,7 +261,7 @@ export default function ModelBundles() {
 
             <div className="mt-auto flex items-center gap-2 pt-3">
               <button type="button" className="btn-secondary h-9 px-3 text-xs" onClick={() => void openDetail(card.id)}>查看</button>
-              <button type="button" className="btn-primary h-9 px-3 text-xs" onClick={() => { setDetailId(card.id); setWizardOpen(true) }}>
+              <button type="button" className="btn-primary h-9 px-3 text-xs" onClick={() => { void openDetail(card.id); setWizardOpen(true) }}>
                 {active && ['queued', 'installing'].includes(active.status) ? '查看进度' : card.state.state === 'partial' ? '继续安装' : '预检安装'}
               </button>
             </div>
@@ -246,7 +271,7 @@ export default function ModelBundles() {
       {!loading && filtered.length === 0 && <EmptyState title="没有符合条件的套装" description="调整筛选，或刷新以重新读取清单。" />}
     </Panel>
 
-    <Dialog open={Boolean(detailId) && !wizardOpen && !acceptanceOpen} onOpenChange={(open) => { if (!open) { setDetailId(null); setDetail(null) } }}>
+    <Dialog open={Boolean(detailId) && !wizardOpen && !acceptanceOpen} onOpenChange={(open) => { if (!open) { setDetailId(null); setDetail(null); syncBundleParam(null) } }}>
       <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Layers className="size-5 text-teal-700" />{detail?.card.name ?? '套装详情'}</DialogTitle>
@@ -377,7 +402,7 @@ export default function ModelBundles() {
         setWizardOpen(false)
         // 从卡片直接进入向导时没有加载详情，关闭后必须清掉 detailId，
         // 否则详情抽屉会被残留 ID 重新打开成“正在读取…”。
-        if (!detail) setDetailId(null)
+        if (!detail) { setDetailId(null); syncBundleParam(null) }
         void load()
       }}
     />}

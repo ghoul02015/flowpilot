@@ -135,7 +135,8 @@ export function Models({ models, realMode, modelsRoot, totalBytes, network, runn
 
   // 分组：进行中下载任务归入「进行中任务」组置顶，仓库文件按类别分组。
   const groups = useMemo(() => {
-    const active = filtered.filter((item) => ['downloading', 'paused', 'failed', 'cancelled', 'waiting'].includes(item.status))
+    const running = filtered.filter((item) => ['downloading', 'paused', 'waiting'].includes(item.status))
+    const interrupted = filtered.filter((item) => ['failed', 'cancelled'].includes(item.status))
     const ready = filtered.filter((item) => item.status === 'ready')
     const sorter = (a: ModelItem, b: ModelItem) => sort === 'size' ? parseSize(b.size) - parseSize(a.size) : sort === 'time' ? b.createdAt.localeCompare(a.createdAt) : a.name.localeCompare(b.name)
     const byType = new Map<string, ModelItem[]>()
@@ -149,7 +150,8 @@ export function Models({ models, realMode, modelsRoot, totalBytes, network, runn
       const items = byType.get(name)!.sort(sorter)
       return { name, items, bytes: items.reduce((sum, item) => sum + parseSize(item.size), 0) }
     })
-    if (active.length > 0) sections.unshift({ name: '进行中的任务', items: active, bytes: 0 })
+    if (interrupted.length > 0) sections.push({ name: '未完成的下载', items: interrupted.sort(sorter), bytes: 0 })
+    if (running.length > 0) sections.unshift({ name: '进行中的任务', items: running.sort(sorter), bytes: 0 })
     return sections
   }, [filtered, sort])
 

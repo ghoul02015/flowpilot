@@ -1,6 +1,6 @@
 // Tasks 统一任务中心：筛选、状态与页码写入查询参数，详情走独立路由。
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router'
+import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { usePolling } from '@/hooks/use-polling'
 import { Ban, CheckCircle2, ChevronLeft, ChevronRight, FileText, Loader2, Pause, Play, RefreshCw, RotateCcw, Search, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -66,6 +66,7 @@ function isAbortError(error: unknown): boolean {
 
 export function Tasks() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [params, setParams] = useSearchParams()
   const type = taskTypes.includes(params.get('type') ?? '') ? params.get('type')! : 'all'
   const status = taskStatuses.includes(params.get('status') ?? '') ? params.get('status')! : 'all'
@@ -258,7 +259,7 @@ export function Tasks() {
                   </td>
                   <td className="px-3 py-3"><TaskProgress task={task} /></td>
                   <td className="px-3 py-3 text-xs text-slate-500">{formatTaskTime(task.createdAt)}</td>
-                  <td className="px-4 py-3"><TaskActions task={task} onAction={(item, action) => void runAction(item, action)} onDelete={requestDelete} onDetail={(item) => navigate(`/tasks/${encodeURIComponent(item.id)}`)} /></td>
+                  <td className="px-4 py-3"><TaskActions task={task} onAction={(item, action) => void runAction(item, action)} onDelete={requestDelete} onDetail={(item) => navigate(`/tasks/${encodeURIComponent(item.id)}`, { state: { from: `${location.pathname}${location.search}` } })} /></td>
                 </tr>)}
               </tbody>
             </table>
@@ -266,10 +267,10 @@ export function Tasks() {
           <div className="divide-y divide-slate-100 lg:hidden">
             {tasks.map((task) => <div key={task.id} className="p-4">
               <div className="flex flex-wrap items-center gap-2"><span className="min-w-0 flex-1 truncate font-medium text-slate-900">{task.name}</span><StatusBadge status={task.status} /><span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-medium text-slate-600" data-testid={`task-type-badge-${task.type}`}>{typeMeta[task.type] ?? task.type}</span></div>
-              <div className="mt-1.5 text-xs break-all text-slate-500">{task.objectRef && <>对象 {task.objectRef} · </>}{formatTaskTime(task.createdAt)}</div>
-              <p className={`mt-2 text-sm leading-5 break-all ${task.error ? 'text-rose-700' : 'text-slate-600'}`}>{task.error || task.message || '—'}</p>
+              <div className="mt-1.5 text-xs text-slate-500">{task.objectRef && <>对象 <span className="break-all">{task.objectRef}</span> · </>}{formatTaskTime(task.createdAt)}</div>
+              <p className={`mt-2 text-sm leading-5 break-words ${task.error ? 'text-rose-700' : 'text-slate-600'}`}>{task.error || task.message || '—'}</p>
               <div className="mt-2"><TaskProgress task={task} /></div>
-              <div className="mt-2 border-t border-slate-100 pt-2"><TaskActions task={task} onAction={(item, action) => void runAction(item, action)} onDelete={requestDelete} onDetail={(item) => navigate(`/tasks/${encodeURIComponent(item.id)}`)} /></div>
+              <div className="mt-2 border-t border-slate-100 pt-2"><TaskActions task={task} onAction={(item, action) => void runAction(item, action)} onDelete={requestDelete} onDetail={(item) => navigate(`/tasks/${encodeURIComponent(item.id)}`, { state: { from: `${location.pathname}${location.search}` } })} /></div>
             </div>)}
           </div>
         </>}

@@ -137,6 +137,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const summaryActiveRef = useRef(0)
   const downloadsActiveRef = useRef(false)
   const completedTasksRef = useRef<Set<string>>(new Set())
+  const downloadsInitializedRef = useRef(false)
 
   // 导航摘要：3 秒活跃 / 30 秒空闲，不再拉全量任务列表。
   const summaryPoll = usePolling(async (signal) => {
@@ -191,8 +192,13 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       const tasks = await getDownloads(signal)
       const nextActive = tasks.some((task) => ['running', 'paused'].includes(task.status))
       const completedIds = tasks.filter((task) => task.status === 'completed').map((task) => task.id)
-      const hasNewCompleted = completedIds.some((id) => !completedTasksRef.current.has(id))
-      if (hasNewCompleted) emitRefresh('models', 'task-summary')
+      // 首次轮询只建立基线：历史完成任务不代表本次会话有新文件，避免多打一次模型扫描。
+      if (downloadsInitializedRef.current) {
+        const hasNewCompleted = completedIds.some((id) => !completedTasksRef.current.has(id))
+        if (hasNewCompleted) emitRefresh('models', 'task-summary')
+      } else {
+        downloadsInitializedRef.current = true
+      }
       completedTasksRef.current = new Set(completedIds)
       downloadsActiveRef.current = nextActive
       setRealDownloads(tasks)

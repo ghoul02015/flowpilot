@@ -1,7 +1,7 @@
 // 任务详情页：字段、进度、失败原因、镜像日志与允许的操作。
 // 独立路由可直接刷新与分享；只轮询当前任务，不复制列表轮询。
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useLocation, useNavigate } from 'react-router'
 import { Ban, ChevronLeft, Loader2, Pause, Play, RotateCcw, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cancelImageTask, deleteUnifiedTask, downloadActionApi, getImageTaskLogs, getUnifiedTask, type UnifiedTaskView } from '@/api'
@@ -13,6 +13,8 @@ import { usePolling } from '@/hooks/use-polling'
 
 export function TaskDetail({ id }: { id: string }) {
   const navigate = useNavigate()
+  const location = useLocation()
+  const from = typeof (location.state as { from?: unknown } | null)?.from === 'string' && String((location.state as { from?: string }).from).startsWith('/tasks') ? String((location.state as { from?: string }).from) : pagePaths.tasks
   const [task, setTask] = useState<UnifiedTaskView | null>(null)
   const [missing, setMissing] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -105,7 +107,8 @@ export function TaskDetail({ id }: { id: string }) {
 
   const download = isDownloadType(task.type)
   const meta = statusMeta[task.status] ?? { label: task.status, className: 'border-slate-200 bg-slate-50 text-slate-500' }
-  const fields: [string, string][] = [
+  const failure = task.error || (['failed', 'cancelled'].includes(task.status) ? task.message : '')
+  const fields = ([
     ['当前状态', meta.label],
     ['任务类型', typeMeta[task.type] ?? task.type],
     ['关联对象', task.objectRef || '—'],
@@ -114,7 +117,8 @@ export function TaskDetail({ id }: { id: string }) {
     ['开始时间', formatTaskTime(task.startedAt)],
     ['结束时间', formatTaskTime(task.finishedAt)],
     ['最新信息', task.message || '—'],
-  ]
+    // 失败原因已单独高亮时，不再重复同一段文本。
+  ] as [string, string][]).filter(([term, value]) => !(term === '最新信息' && failure && value === failure))
 
   return <>
     <PageHeader
@@ -122,7 +126,7 @@ export function TaskDetail({ id }: { id: string }) {
       title={task.name}
       description={`${typeMeta[task.type] ?? task.type} · ${task.id}`}
       action={<div className="flex flex-wrap gap-2">
-        <Link to={pagePaths.tasks} className="btn-secondary"><ChevronLeft className="size-4" />返回任务中心</Link>
+        <Link to={from} className="btn-secondary"><ChevronLeft className="size-4" />返回任务中心</Link>
         {download && task.status === 'running' && <button type="button" className="btn-secondary" onClick={() => void runAction('pause')}><Pause className="size-4" />暂停</button>}
         {download && task.status === 'paused' && <button type="button" className="btn-secondary" onClick={() => void runAction('resume')}><Play className="size-4" />继续</button>}
         {download && ['failed', 'cancelled'].includes(task.status) && <button type="button" className="btn-secondary" onClick={() => void runAction('retry')}><RotateCcw className="size-4" />重试</button>}
@@ -131,8 +135,8 @@ export function TaskDetail({ id }: { id: string }) {
       </div>}
     />
 
-    <div className="grid gap-5 lg:grid-cols-3">
-      <Panel className="lg:col-span-2">
+    <div className={task.type.startsWith('image-') ? 'grid gap-5 lg:grid-cols-3' : 'grid gap-5'}>
+      <Panel className={task.type.startsWith('image-') ? 'lg:col-span-2' : undefined}>
         <PanelHeader title="任务信息" description="字段来自统一任务视图，进度与状态随轮询更新" action={<span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${meta.className}`}>{meta.label}</span>} />
         <dl className="grid gap-4 p-5 text-sm sm:grid-cols-2">
           {fields.map(([term, value]) => <div key={term} className={term === '最新信息' ? 'sm:col-span-2' : ''}>
@@ -144,7 +148,7 @@ export function TaskDetail({ id }: { id: string }) {
           <div className="mb-2 flex items-center justify-between text-xs text-slate-500"><span>进度</span><span>{task.progress}%</span></div>
           <ProgressBar value={task.progress} />
         </div>}
-        {task.error && <div className="border-t border-rose-200 bg-rose-50 p-5 text-sm leading-6 text-rose-800"><strong className="mr-1">失败原因</strong>{task.error}</div>}
+        {failure && <div className="border-t border-rose-200 bg-rose-50 p-5 text-sm leading-6 break-words text-rose-800"><strong className="mr-1">失败原因</strong>{failure}</div>}
       </Panel>
 
       {task.type.startsWith('image-') && <Panel>

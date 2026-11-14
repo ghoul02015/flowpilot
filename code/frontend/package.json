@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test:demo": "node scripts/verify-demo.mjs",
     "test": "vitest run",
-    "test:ui": "node scripts/e2e-smoke.mjs"
+    "test:ui": "node scripts/e2e-smoke.mjs",
+    "test:audit": "node scripts/e2e-audit.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
