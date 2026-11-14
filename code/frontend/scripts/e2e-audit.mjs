@@ -89,8 +89,28 @@ async function main() {
     if (request.url().includes('/api/v1/')) requests.push(request.url())
   })
 
+  // 从接口读取当前环境真实数据，断言不依赖特定种子。
+  async function apiJson(path) {
+    try {
+      const response = await page.request.get(base + path)
+      if (!response.ok()) return null
+      return await response.json()
+    } catch {
+      return null
+    }
+  }
+
   console.log(`\n[1] 登录与认证跳转（${base}）`)
   await login(page)
+  const instancesJson = await apiJson('/api/v1/instances')
+  const instanceName = instancesJson?.instances?.[0]?.name ?? ''
+  const modelsJson = await apiJson('/api/v1/models')
+  const modelKeyword = modelsJson?.files?.find((file) => file.origin === 'local')?.name ?? ''
+  const tasksJson = await apiJson('/api/v1/tasks?limit=50')
+  const taskTypes = new Set((tasksJson?.tasks ?? []).map((task) => task.type))
+  const hasImport = taskTypes.has('import')
+  const hasFailed = (tasksJson?.tasks ?? []).some((task) => task.status === 'failed')
+  notes.push(`环境数据：实例 ${instanceName || '无'}，模型 ${modelsJson?.files?.length ?? 0} 个，任务 ${tasksJson?.total ?? 0} 条`)
   check('登录进入管理台', (await page.locator('[data-testid="login-page"]').count()) === 0)
   await page.click('[data-testid="logout-button"]')
   await page.locator('[data-testid="login-page"]').waitFor({ state: 'visible', timeout: 15000 })
@@ -118,26 +138,26 @@ async function main() {
   await shot(page, '01-dashboard')
 
   // 首页实例名 → 详情深链接
-  const instanceLink = page.locator('main button', { hasText: 'audit-demo' }).first()
-  if (await instanceLink.count()) {
+  const instanceLink = instanceName ? page.locator('main button', { hasText: instanceName }).first() : null
+  if (instanceLink && await instanceLink.count()) {
     await instanceLink.click()
     await page.waitForTimeout(1200)
-    check('首页实例名跳转详情', page.url().endsWith('/instances/audit-demo'), page.url())
+    check('首页实例名跳转详情', page.url().endsWith(`/instances/${encodeURIComponent(instanceName)}`), page.url())
   } else {
-    notes.push('首页未出现 audit-demo 实例行（可能被折叠或数据为空）')
+    notes.push('首页未出现实例行（实例为空或不在概览中）')
   }
 
   console.log('\n[3] 实例列表与详情')
   await page.goto(base + '/instances', { waitUntil: 'networkidle' })
   check('实例列表可达', await heading(page, '实例管理'))
   await shot(page, '02-instances')
-  const row = page.locator('[data-testid="instance-row-audit-demo"]')
-  check('实例行展示', (await row.count()) > 0)
-  if (await row.count()) {
-    await row.locator('button', { hasText: 'audit-demo' }).first().click()
+  const row = instanceName ? page.locator(`[data-testid="instance-row-${instanceName}"]`) : null
+  check('实例行展示', Boolean(row && (await row.count()) > 0), instanceName || '无实例')
+  if (row && await row.count()) {
+    await row.locator('button', { hasText: instanceName }).first().click()
     await page.waitForTimeout(1500)
-    check('点击实例名进入详情', page.url().endsWith('/instances/audit-demo'))
-    check('详情页标题为实例名', await heading(page, 'audit-demo'))
+    check('点击实例名进入详情', page.url().endsWith(`/instances/${encodeURIComponent(instanceName)}`))
+    check('详情页标题为实例名', await heading(page, instanceName))
     check('应用健康区块存在', (await page.locator('[data-testid="detail-app-health"]').count()) > 0)
     check('事件时间线存在', (await page.locator('[data-testid="detail-events"]').count()) > 0)
     await shot(page, '03-instance-detail')
@@ -166,7 +186,7 @@ async function main() {
     check('删除按钮在未输入名称时禁用', await page.getByRole('button', { name: '确认删除' }).isDisabled())
     await page.getByRole('button', { name: '取消' }).click()
     await page.waitForTimeout(400)
-    check('取消删除回到详情', (await page.getByRole('dialog').count()) === 0 && page.url().includes('/instances/audit-demo'))
+    check('取消删除回到详情', (await page.getByRole('dialog').count()) === 0 && page.url().includes(`/instances/${encodeURIComponent(instanceName)}`))
     // 返回列表
     await page.getByRole('button', { name: '返回列表' }).click()
     await page.waitForTimeout(800)
@@ -220,10 +240,15 @@ async function main() {
   check('模型分组可见（LoRA 等）', /LoRA|Checkpoints|VAE/.test(modelsText), modelsText.slice(0, 80))
   await shot(page, '06-models-local')
   // 搜索与筛选
-  await page.getByPlaceholder('搜索模型文件').fill('audit-lora-a')
-  await page.waitForTimeout(500)
-  const filteredModels = await page.locator('main').innerText()
-  check('模型搜索生效', filteredModels.includes('audit-lora-a') && !filteredModels.includes('audit-ckpt-c'))
+  if (modelKeyword) {
+    const keyword = modelKeyword.replace(/\.(safetensors|ckpt|pt|bin)$/i, '')
+    await page.getByPlaceholder('搜索模型文件').fill(keyword)
+    await page.waitForTimeout(600)
+    const filteredModels = await page.locator('main').innerText()
+    check('模型搜索生效', filteredModels.includes(keyword), keyword)
+  } else {
+    notes.push('没有本地模型文件，跳过模型搜索检查')
+  }
   await page.getByPlaceholder('搜索模型文件').fill('')
   await page.waitForTimeout(300)
   // 折叠分组
@@ -272,16 +297,26 @@ async function main() {
   const taskRows = await page.locator('[data-testid="unified-task-list"] tbody tr').count()
   check('任务表格有数据', taskRows > 0, `rows=${taskRows}`)
   await shot(page, '09-tasks')
-  await page.locator('[data-testid="task-type-filter"]').selectOption('import')
-  await page.waitForTimeout(800)
-  check('类型筛选写入 URL', page.url().includes('type=import'), page.url())
-  const typeBadges = await page.locator('[data-testid="task-type-badge-import"]').count()
-  check('筛选结果均为导入', typeBadges > 0)
-  await page.goto(base + '/tasks?status=failed', { waitUntil: 'networkidle' })
-  await page.waitForTimeout(1200)
-  const failedText = await page.locator('[data-testid="unified-task-list"]').innerText()
-  check('状态筛选展示失败任务', failedText.includes('失败'))
+  const filterType = hasImport ? 'import' : (taskTypes.values().next().value ?? '')
+  if (filterType) {
+    await page.locator('[data-testid="task-type-filter"]').selectOption(filterType)
+    await page.waitForTimeout(900)
+    check('类型筛选写入 URL', page.url().includes(`type=${filterType}`), page.url())
+    const typeBadges = await page.locator(`[data-testid="task-type-badge-${filterType}"]`).count()
+    check('筛选结果与类型一致', typeBadges > 0, filterType)
+  } else {
+    notes.push('没有任务可用于类型筛选检查')
+  }
+  if (hasFailed) {
+    await page.goto(base + '/tasks?status=failed', { waitUntil: 'networkidle' })
+    await page.waitForTimeout(1200)
+    const failedText = await page.locator('[data-testid="unified-task-list"]').innerText()
+    check('状态筛选展示失败任务', failedText.includes('失败'))
+  } else {
+    notes.push('没有失败任务，跳过失败筛选检查')
+  }
   // 任务详情
+  const listSearch = new URL(page.url()).search
   const detailButton = page.getByRole('button', { name: '详情' }).first()
   if (await detailButton.count()) {
     await detailButton.click()
@@ -292,7 +327,7 @@ async function main() {
     await shot(page, '10-task-detail')
     await page.getByRole('link', { name: '返回任务中心' }).click()
     await page.waitForTimeout(800)
-    check('返回任务中心保留筛选', page.url().includes('status=failed'), page.url())
+    check('返回任务中心保留筛选', page.url().endsWith(`/tasks${listSearch}`), `${page.url()} vs /tasks${listSearch}`)
   }
   // 分页
   await page.goto(base + '/tasks', { waitUntil: 'networkidle' })
@@ -385,7 +420,7 @@ async function main() {
   for (const [path, name] of [
     ['/dashboard', '13-mobile-dashboard'],
     ['/instances', '14-mobile-instances'],
-    ['/instances/audit-demo', '15-mobile-instance-detail'],
+    ...(instanceName ? [[`/instances/${encodeURIComponent(instanceName)}`, '15-mobile-instance-detail']] : []),
     ['/images', '16-mobile-images'],
     ['/models?tab=local', '17-mobile-models'],
     ['/models?tab=online', '18-mobile-online'],
@@ -433,10 +468,14 @@ async function main() {
   check('任务摘要周期合理（12s ≤5 次）', summaryCalls <= 5, `summary×${summaryCalls}`)
 
   // 面包屑与失败原因
-  await page.goto(base + '/instances/audit-demo', { waitUntil: 'networkidle' })
-  await page.waitForTimeout(1000)
-  const crumb = await page.locator('header').innerText()
-  check('详情面包屑含对象名', crumb.includes('audit-demo'), crumb.replace(/\n/g, ' '))
+  if (instanceName) {
+    await page.goto(base + `/instances/${encodeURIComponent(instanceName)}`, { waitUntil: 'networkidle' })
+    await page.waitForTimeout(1000)
+    const crumb = await page.locator('header').innerText()
+    check('详情面包屑含对象名', crumb.includes(instanceName), crumb.replace(/\n/g, ' '))
+  } else {
+    notes.push('没有实例，跳过面包屑检查')
+  }
   await page.goto(base + '/tasks?status=failed', { waitUntil: 'networkidle' })
   await page.waitForTimeout(1200)
   const failDetailButton = page.getByRole('button', { name: '详情' }).first()

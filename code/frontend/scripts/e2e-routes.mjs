@@ -83,6 +83,8 @@ async function main() {
 
   console.log('\n[3] 浏览器前进后退')
   await page.goto(base + '/dashboard', { waitUntil: 'networkidle' })
+  await page.getByRole('link', { name: /模型中心/ }).first().waitFor({ state: 'visible', timeout: 10000 })
+  await page.getByRole('link', { name: /模型中心/ }).first().waitFor({ state: 'visible', timeout: 10000 })
   await page.getByRole('link', { name: /模型中心/ }).first().click()
   await page.waitForTimeout(800)
   check('导航到模型中心', (await page.getByRole('heading', { name: '模型中心' }).count()) > 0)

@@ -69,13 +69,20 @@ async function waitForHeading(page, text, timeout = 15000) {
 }
 
 async function navTo(page, label) {
-  const link = page.getByRole('link', { name: label, exact: false })
-  if (await link.count()) {
-    await link.first().click()
-  } else {
-    await page.getByRole('button', { name: label, exact: false }).first().click()
+  // 导航是路由链接；慢机器上可能因懒加载重渲染导致元素被替换，点击失败时重试链接本身。
+  const link = page.getByRole('link', { name: label, exact: false }).first()
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await link.waitFor({ state: 'visible', timeout: 8000 })
+      await link.click({ timeout: 8000 })
+      await page.waitForTimeout(500)
+      return
+    } catch {
+      await page.waitForTimeout(500)
+    }
   }
-  await page.waitForTimeout(600)
+  await page.getByRole('button', { name: label, exact: false }).first().click({ timeout: 5000 })
+  await page.waitForTimeout(500)
 }
 
 async function main() {
