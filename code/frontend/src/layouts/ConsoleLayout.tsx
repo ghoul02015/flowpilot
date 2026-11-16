@@ -28,7 +28,7 @@ export function ConsoleLayout() {
     adminUser, backendOnline, backendVersion, hostInfo, activeTasks, logout,
     displayInstances, displayModels, instanceDefaults, gpuNames,
     createOpen, setCreateOpen, addModelOpen, setAddModelOpen,
-    createInstance, addModel, marketDownload, onlineDownload, existingModelPaths,
+    createInstance, addModel,
   } = useAppData()
   const [mobileOpen, setMobileOpen] = useState(false)
 
@@ -130,9 +130,6 @@ export function ConsoleLayout() {
         open={addModelOpen}
         onOpenChange={setAddModelOpen}
         onSubmit={addModel}
-        onMarketDownload={marketDownload}
-        onOnlineDownload={onlineDownload}
-        existingPaths={existingModelPaths}
       />
     </div>
   )

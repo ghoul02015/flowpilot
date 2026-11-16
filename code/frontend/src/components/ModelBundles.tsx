@@ -187,7 +187,9 @@ export default function ModelBundles() {
       if (detailId) { setDetailId(null); setDetail(null) }
       return
     }
-    if (id === detailId && detail) return
+    // id 与当前打开的一致时直接跳过（含详情仍在加载中的情形）：
+    // 重复 openDetail 会把页签重置回概览，冲掉 openLicense 同步选中的许可页。
+    if (id === detailId) return
     void openDetail(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])

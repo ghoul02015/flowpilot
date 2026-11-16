@@ -33,7 +33,7 @@ async function screenshot(name) {
 try {
   const healthResponse = await page.request.get(`${baseURL}/api/v1/health`)
   const health = await healthResponse.json()
-  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.1.0.13') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
+  if (!healthResponse.ok() || health.status !== 'ok' || health.version !== '0.1.0.14') throw new Error(`后端健康检查异常：${JSON.stringify(health)}`)
   check('Go 后端健康接口与版本')
 
   // 认证（0.0.9.6）：未登录先看到登录页 → 初始化 → 登录 → 会话恢复。
@@ -159,7 +159,7 @@ try {
   }
   check('界面无演示数据标识')
 
-  await page.getByRole('button', { name: 'ComfyUI 实例', exact: true }).click()
+  await page.getByRole('link', { name: 'ComfyUI 实例', exact: true }).first().click()
   await page.getByRole('heading', { name: '实例管理' }).waitFor()
   check('实例导航')
 
@@ -168,16 +168,14 @@ try {
   const preInstances = preInstancesBody.ok() ? ((await preInstancesBody.json()).instances ?? []) : []
   if (preInstances.length > 0) {
     const focusName = preInstances[0].name
-    await page.getByRole('button', { name: '首页看板', exact: true }).click()
+    await page.getByRole('link', { name: '首页看板', exact: true }).first().click()
     await page.getByRole('heading', { name: /凌晨好|上午好|下午好|晚上好/ }).waitFor()
     await page.getByRole('button', { name: focusName, exact: true }).first().click()
-    // 详情弹窗是 Radix 模态：打开时其余界面被标记 aria-hidden，因此先断言弹窗再断言页面标题。
-    const focusDialog = page.getByRole('dialog')
-    await focusDialog.waitFor()
-    await focusDialog.getByText(focusName, { exact: true }).first().waitFor()
-    check('首页点击实例名跳转实例管理并打开详情')
-    await focusDialog.getByRole('button', { name: '完成' }).click()
-    await focusDialog.waitFor({ state: 'detached' })
+    // 0.1.x 起首页实例名直达实例详情页（/instances/:name），不再是详情弹窗。
+    await page.waitForURL(`**/instances/${encodeURIComponent(focusName)}`, { timeout: 15000 })
+    await page.getByRole('heading', { name: focusName, exact: true }).waitFor()
+    check('首页点击实例名直达实例详情页')
+    await page.getByRole('button', { name: '返回列表', exact: true }).click()
     await page.getByRole('heading', { name: '实例管理', exact: true }).waitFor()
     await page.getByTestId(`instance-row-${focusName}`).waitFor()
 
@@ -225,6 +223,12 @@ try {
     const linksDialog = page.getByRole('dialog')
     await linksDialog.waitFor()
     await linksDialog.getByText(`模型关联 - ${focusName}`, { exact: false }).waitFor()
+    // 弹窗的 supported 由异步接口回填，先等终态元素出现再比对，避免读到初始 loading 态。
+    if (linksApi.supported) {
+      await linksDialog.getByPlaceholder('搜索已下载模型').waitFor()
+    } else {
+      await linksDialog.getByText('该实例由旧版本创建', { exact: false }).waitFor()
+    }
     const linksDialogText = await linksDialog.innerText()
     const legacyNotice = linksDialogText.includes('该实例由旧版本创建')
     if (legacyNotice === linksApi.supported) throw new Error(`模型关联弹窗与接口状态不一致：supported=${linksApi.supported}`)
@@ -309,7 +313,7 @@ try {
     if (!scriptResponse.ok() || !scriptText.startsWith('#!/usr/bin/env bash') || !scriptText.includes('nvidia-cu130') || !scriptText.includes('amd-rocm') || !scriptText.includes(resolvedRelease.commit) || !scriptText.includes('flowpilot.kind="comfyui"')) throw new Error('安装脚本生成接口异常')
     if (scriptText.includes('modelscope download') || scriptText.includes('hf download')) throw new Error('安装脚本不应包含模型下载逻辑')
     check('一键安装脚本生成接口（固定 commit＋认证标签）')
-    await page.getByRole('button', { name: '镜像中心', exact: true }).click()
+    await page.getByRole('link', { name: '镜像中心', exact: true }).first().click()
     await page.getByRole('heading', { name: '镜像中心' }).waitFor()
     await page.getByRole('heading', { name: 'ComfyUI 镜像' }).waitFor()
     await page.getByRole('heading', { name: '机器其他镜像' }).waitFor()
@@ -338,7 +342,7 @@ try {
     await page.keyboard.press('Escape')
     await pullDialog.waitFor({ state: 'detached' })
     check('构建与拉取双弹窗（镜像中心入口）')
-    await page.getByRole('button', { name: 'ComfyUI 实例', exact: true }).click()
+    await page.getByRole('link', { name: 'ComfyUI 实例', exact: true }).first().click()
     await page.getByRole('button', { name: '新建实例', exact: true }).click()
     await createDialog.waitFor()
     await createDialog.getByLabel('实例名称').fill(instanceName)
@@ -427,7 +431,7 @@ try {
     if (renameResponse.status() !== 409) throw new Error(`被实例引用的源标签重命名应返回 409，实际 ${renameResponse.status()}`)
     check('镜像重命名实例引用保护（409）')
 
-    await page.getByRole('button', { name: '镜像中心', exact: true }).click()
+    await page.getByRole('link', { name: '镜像中心', exact: true }).first().click()
     await page.getByRole('heading', { name: '镜像中心' }).waitFor()
     const aliasRow = page.getByRole('row').filter({ hasText: aliasTag }).first()
     await aliasRow.getByRole('button', { name: /管理标签/ }).click()
@@ -444,7 +448,7 @@ try {
     const imagesAfterAliasDelete = await (await page.request.get(`${baseURL}/api/v1/images/local`)).json()
     if (!imagesAfterAliasDelete.images?.some((item) => (item.RepoTags ?? []).includes(regressionImage))) throw new Error('删除别名后源标签应保留')
     check('删除镜像别名不影响源标签')
-    await page.getByRole('button', { name: 'ComfyUI 实例', exact: true }).click()
+    await page.getByRole('link', { name: 'ComfyUI 实例', exact: true }).first().click()
 
     await page.getByRole('button', { name: `停止 ${instanceName}`, exact: true }).click()
     await page.getByRole('button', { name: `启动 ${instanceName}`, exact: true }).waitFor({ timeout: 20000 })
@@ -559,8 +563,11 @@ try {
     await comfyDialog.getByLabel('实例名称').fill(comfyName)
     await comfyDialog.getByLabel('容器镜像（本机已有）').selectOption(comfyImage)
     await comfyDialog.getByText('将使用本机镜像', { exact: false }).waitFor({ timeout: 8000 })
+    // GPU 选项来自硬件轮询（非看板页 60 秒一轮）：必须等选项注入后再选择，
+    // 否则对话框挂载瞬间空列表会把 gpu 锁定为 -1（仅 CPU），ComfyUI 因无 GPU 崩溃循环。
     const comfyGpuSelect = comfyDialog.getByLabel('分配 GPU')
-    if (await comfyGpuSelect.locator('option[value="0"]').count() > 0) await comfyGpuSelect.selectOption('0')
+    await comfyGpuSelect.locator('option[value="0"]').waitFor({ state: 'attached', timeout: 70000 })
+    await comfyGpuSelect.selectOption('0')
     await comfyDialog.getByLabel('访问端口').fill('18189')
     await comfyDialog.getByRole('button', { name: /高级设置/ }).click()
     await comfyDialog.getByLabel('容器端口').fill('8188')
@@ -647,7 +654,7 @@ try {
   const modelsApiResponse = await page.request.get(`${baseURL}/api/v1/models`)
   const realModelsAvailable = modelsApiResponse.ok()
 
-  await page.getByRole('button', { name: '模型中心', exact: true }).click()
+  await page.getByRole('link', { name: '模型中心', exact: true }).first().click()
   await page.getByRole('heading', { name: '模型中心' }).waitFor()
 
   const modelsReport = realModelsAvailable ? await modelsApiResponse.json() : null
@@ -656,7 +663,7 @@ try {
   if (realModelsAvailable) {
     check('真实模型仓库扫描接口')
     await page.getByText('本地仓库', { exact: true }).first().waitFor()
-    await page.getByText('每 3 秒自动刷新', { exact: true }).waitFor()
+    await page.getByText('实时扫描', { exact: true }).first().waitFor()
     check('模型中心分组统计条')
 
     // 组合套装（0.1.0.4）：清单、详情、许可闸门与四项预检。
@@ -727,6 +734,9 @@ try {
     await licenseDialog.getByText('点击确认即表示你已阅读该许可。', { exact: true }).waitFor()
     check('下载前许可提示与一次点击确认')
     await licenseDialog.getByRole('button', { name: '取消', exact: true }).click()
+    // 取消链路是三层互斥弹窗：许可确认 → 安装向导 → 套装详情；逐层 Escape 后才真正无弹窗。
+    await page.keyboard.press('Escape')
+    await page.getByRole('dialog').getByRole('heading', { name: /S3 H3 音视频基础包/ }).waitFor()
     await page.keyboard.press('Escape')
     await page.getByRole('dialog').waitFor({ state: 'detached' })
     await page.getByRole('tab', { name: '本地仓库' }).click()
@@ -823,9 +833,9 @@ try {
     if (!habitBody || !Array.isArray(habitBody.results) || habitBody.results.length === 0 || !Array.isArray(habitBody.attempts) || habitBody.attempts[0] !== 'nvfp4') throw new Error(`搜索习惯接口异常：${JSON.stringify(habitBody)?.slice(0, 300)}`)
     check('短关键词搜索命中＋attempts 透明化（nvfp4）')
 
-    await page.getByRole('button', { name: '添加模型', exact: true }).click()
-    const marketDialog = page.getByRole('dialog')
-    await marketDialog.waitFor()
+    // 0.1.0.14 起模型市场收敛到「在线获取」页签（弹窗只保留 URL 下载／本地导入）。
+    await page.getByRole('tab', { name: '在线获取' }).click()
+    const marketDialog = page.locator('#model-panel-online')
     await marketDialog.getByPlaceholder('搜索模型名称、文件或描述').waitFor({ timeout: 10000 })
 
     // 推荐目录内置 MiniMax H3 条目（ComfyUI 官方模板命名）。
@@ -844,8 +854,8 @@ try {
     await marketDialog.getByTestId('online-repo-Comfy-Org/MiniMax-H3').getByRole('button').first().click()
     await marketDialog.getByText('minimax_h3_fl2va_pruned_w6a8.safetensors').waitFor({ timeout: 30000 })
     const dialogMetrics = await marketDialog.evaluate((el) => ({ clientWidth: el.clientWidth, scrollWidth: el.scrollWidth }))
-    if (dialogMetrics.scrollWidth > dialogMetrics.clientWidth + 1) throw new Error(`弹窗横向溢出：scrollWidth=${dialogMetrics.scrollWidth} > clientWidth=${dialogMetrics.clientWidth}`)
-    check('弹窗无横向溢出')
+    if (dialogMetrics.scrollWidth > dialogMetrics.clientWidth + 1) throw new Error(`在线面板横向溢出：scrollWidth=${dialogMetrics.scrollWidth} > clientWidth=${dialogMetrics.clientWidth}`)
+    check('在线面板无横向溢出')
     await marketDialog.getByPlaceholder(/在 ModelScope 搜索模型仓库/).fill('MiniMax-H3')
     await marketDialog.getByRole('button', { name: '在线搜索' }).click()
     const minimaxRepo = marketDialog.getByTestId('online-repo-Comfy-Org/MiniMax-H3')
@@ -885,7 +895,8 @@ try {
     }
     if (!loraDone) throw new Error('模型市场 LoRA 下载 180 秒内未完成入库')
     check(loraClicked ? '模型市场选择即下载（ModelScope 真实链路）' : '模型市场已入库状态识别')
-    await marketDialog.getByRole('button', { name: 'Close' }).click().catch(() => page.keyboard.press('Escape'))
+    // 回到本地仓库页签，继续后续 URL 下载／删除链路。
+    await page.getByRole('tab', { name: '本地仓库' }).click()
 
     // 界面列表每 3 秒刷新，可能滞后于 API：等待下载任务行消失、仅剩仓库文件行，
     // 避免误点同名 dl- 任务行的删除（那只会取消任务，不删文件）。
@@ -1022,15 +1033,15 @@ try {
     check('镜像后台拉取链路（Docker API 任务制）')
   }
 
-  await page.getByRole('button', { name: /^任务中心/ }).first().click()
+  await page.getByRole('link', { name: /^任务中心/ }).first().click()
   await page.getByRole('heading', { name: '任务中心' }).waitFor()
   await page.getByText('index.html', { exact: true }).first().waitFor()
   await page.getByTestId('task-type-badge-download').first().waitFor()
-  await page.getByText('已写入共享仓库', { exact: false }).first().waitFor()
+  await page.getByRole('row').filter({ hasText: 'index.html' }).first().getByText('已完成', { exact: true }).first().waitFor()
   check('任务中心展示真实下载任务')
   await screenshot('04-tasks')
 
-  await page.getByRole('button', { name: '系统管理', exact: true }).click()
+  await page.getByRole('link', { name: '系统管理', exact: true }).first().click()
   await page.getByRole('heading', { name: '系统管理' }).waitFor()
   await page.getByText('管理服务已连接', { exact: true }).waitFor()
   check('系统页管理服务与 Docker 联调')
@@ -1039,7 +1050,9 @@ try {
   check('环境重新检测')
   await screenshot('05-system')
 
-  await page.getByRole('tab', { name: '诊断与关于' }).click()
+  // 维护与支持是单分区组（不渲染二级页签行），点击组页签即直达诊断与关于。
+  await page.getByRole('tab', { name: '维护与支持', exact: true }).click()
+  await page.getByRole('button', { name: '导出诊断包' }).waitFor()
   const downloadPromise = page.waitForEvent('download')
   await page.getByRole('button', { name: '导出诊断包' }).click()
   const download = await downloadPromise
@@ -1051,7 +1064,8 @@ try {
   const databaseStatus = await databaseResponse.json()
   if (!databaseResponse.ok() || databaseStatus.schemaVersion !== 6 || !databaseStatus.integrity.ok) throw new Error(`数据底座状态异常：${JSON.stringify(databaseStatus)}`)
   check('数据底座状态接口（schema v6 · integrity ok）')
-  await page.getByRole('tab', { name: '数据底座' }).click()
+  await page.getByRole('tab', { name: '存储与数据', exact: true }).click()
+  await page.getByRole('tab', { name: '数据底座', exact: true }).click()
   await page.getByTestId('database-panel').waitFor()
   await page.getByText('integrity_check 通过', { exact: true }).waitFor()
   check('数据底座状态卡渲染')
@@ -1067,7 +1081,8 @@ try {
   await screenshot('05-system-database')
 
   // 安全与会话（0.0.9.6）：修改密码与活跃会话。
-  await page.getByRole('tab', { name: '安全与会话' }).click()
+  await page.getByRole('tab', { name: '安全与审计', exact: true }).click()
+  await page.getByRole('tab', { name: '安全与会话', exact: true }).click()
   await page.getByTestId('security-panel').waitFor()
   await page.getByTestId('auth-session-current').waitFor()
   check('安全与会话面板（当前会话标识）')
@@ -1083,7 +1098,8 @@ try {
   await screenshot('05-system-audit')
 
   // 数据迁移（0.0.9.7）：扫描与面板渲染。
-  await page.getByRole('tab', { name: '数据迁移' }).click()
+  await page.getByRole('tab', { name: '存储与数据', exact: true }).click()
+  await page.getByRole('tab', { name: '数据迁移', exact: true }).click()
   await page.getByTestId('migration-panel').waitFor()
   await page.getByRole('button', { name: '扫描共享目录' }).click()
   await page.getByTestId('migration-scan').waitFor({ timeout: 15000 })
@@ -1095,7 +1111,7 @@ try {
   if (!unifiedTasksResponse.ok() || !Array.isArray(unifiedTasks.tasks)) throw new Error(`统一任务接口异常：${JSON.stringify(unifiedTasks)}`)
   const downloadInUnified = unifiedTasks.tasks.some((task) => task.type === 'download' || task.type === 'import')
   check(`统一任务列表（含下载任务：${downloadInUnified}）`)
-  await page.getByRole('button', { name: '任务中心', exact: true }).click()
+  await page.getByRole('link', { name: '任务中心', exact: true }).first().click()
   await page.getByTestId('unified-task-list').waitFor({ timeout: 15000 })
   await page.getByTestId('task-type-filter').selectOption('download')
   await page.waitForTimeout(600)
@@ -1106,14 +1122,15 @@ try {
   await page.getByText('index.html', { exact: true }).first().waitFor()
   check('任务中心紧凑视图、搜索与批量清理入口')
   await page.getByLabel('搜索任务').fill('')
-  await page.getByRole('button', { name: '系统管理', exact: true }).click()
+  await page.getByRole('link', { name: '系统管理', exact: true }).first().click()
 
   // 备份（0.0.9.12）：创建任务 → 列表可见。
   const backupTask = await page.request.post(`${baseURL}/api/v1/backups`, { headers: { 'X-FlowPilot-CSRF': csrfToken } })
   const backupBody = await backupTask.json()
   if (!backupTask.ok() || !backupBody.taskId) throw new Error(`创建备份任务失败：${JSON.stringify(backupBody)}`)
   check('平台备份任务创建')
-  await page.getByRole('tab', { name: '存储与备份' }).click()
+  await page.getByRole('tab', { name: '存储与数据', exact: true }).click()
+  await page.getByRole('tab', { name: '存储与备份', exact: true }).click()
   await page.getByTestId('backup-panel').waitFor()
   await page.waitForTimeout(4000)
   await page.getByRole('button', { name: '刷新' }).click()
@@ -1136,7 +1153,7 @@ try {
   const backupTasksBody = await backupTasksResponse.json()
   if (!backupTasksResponse.ok() || !backupTasksBody.tasks?.some((task) => task.id === backupBody.taskId)) throw new Error(`统一任务应聚合平台备份：${JSON.stringify(backupTasksBody)}`)
   check('统一任务聚合平台备份')
-  await page.getByRole('button', { name: '任务中心', exact: true }).click()
+  await page.getByRole('link', { name: '任务中心', exact: true }).first().click()
   await page.getByRole('heading', { name: '任务中心' }).waitFor()
   await page.getByTestId('task-type-filter').selectOption('backup')
   const backupTaskRow = page.getByRole('row').filter({ hasText: '平台备份' }).first()
@@ -1147,11 +1164,12 @@ try {
   const backupAfterDeleteBody = await backupAfterDelete.json()
   if (!backupAfterDelete.ok() || backupAfterDeleteBody.tasks?.some((task) => task.id === backupBody.taskId)) throw new Error('任务记录删除后不应再出现在统一列表')
   check('任务记录删除仅清理记录')
-  await page.getByRole('button', { name: '系统管理', exact: true }).click()
+  await page.getByRole('link', { name: '系统管理', exact: true }).first().click()
   await page.getByRole('heading', { name: '系统管理' }).waitFor()
 
   // 退出登录：回到登录页，业务 API 再次 401。
-  await page.getByRole('tab', { name: '安全与会话' }).click()
+  await page.getByRole('tab', { name: '安全与审计', exact: true }).click()
+  await page.getByRole('tab', { name: '安全与会话', exact: true }).click()
   await page.getByTestId('security-panel').getByRole('button', { name: '退出登录' }).click()
   await page.getByTestId('login-page').waitFor({ timeout: 10000 })
   const afterLogout = await page.request.get(`${baseURL}/api/v1/instances`)
@@ -1160,11 +1178,11 @@ try {
   await page.request.post(`${baseURL}/api/v1/auth/login`, { data: { username: 'admin', password: 'FlowPilot2026' } })
   // 重新登录后刷新页面恢复业务界面（移动端视口断言需要主布局）。
   await page.goto(baseURL, { waitUntil: 'domcontentloaded' })
-  await page.getByRole('button', { name: '首页看板', exact: true }).first().waitFor({ timeout: 15000 })
+  await page.getByRole('link', { name: '首页看板', exact: true }).first().waitFor({ timeout: 15000 })
 
   await page.setViewportSize({ width: 375, height: 812 })
   await page.getByRole('button', { name: '打开菜单' }).click()
-  await page.getByRole('button', { name: '首页看板', exact: true }).click()
+  await page.getByRole('link', { name: '首页看板', exact: true }).first().click()
   await page.waitForTimeout(300)
   await screenshot('06-mobile-dashboard')
   const overflow = await page.evaluate(() => ({

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Check, ChevronDown, ChevronRight, CircleAlert, CloudDownload, Download, HardDrive, Link2, LoaderCircle, RefreshCw, Search, Store } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, CircleAlert, CloudDownload, Download, HardDrive, Link2, LoaderCircle, RefreshCw, Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatBytes, getModelCatalog, getOnlineRepoFiles, getSourcesStatus, refreshModelCatalog, searchOnlineModels, type CatalogEntry, type ModelCatalog, type OnlineFile, type OnlineRepo, type SourceStatus } from '@/api'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -9,15 +9,13 @@ interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSubmit: (input: AddModelInput) => Promise<boolean>
-  // 模型市场：选中目录条目直接下载（useFallback=true 时走 HF 镜像备选地址）。
-  onMarketDownload: (entry: CatalogEntry, useFallback: boolean) => void
-  // 在线源：选中仓库权重文件直接下载（地址与类别由后端推断）。
-  onOnlineDownload: (file: OnlineFile) => void
-  // 共享仓库与进行中任务已占用的目标路径（category/fileName），用于标注已入库。
-  existingPaths: string[]
 }
 
-type SourceTab = 'market' | 'url' | 'import'
+// 模型市场下载/在线源下载的回调类型（MarketPanel 使用，挂在模型中心「在线获取」页签）。
+export type MarketDownloadHandler = (entry: CatalogEntry, useFallback: boolean) => void
+export type OnlineDownloadHandler = (file: OnlineFile) => void
+
+type SourceTab = 'url' | 'import'
 type MarketSource = 'curated' | 'modelscope' | 'hf'
 
 const typeFilters = ['全部类型', 'Checkpoints', 'LoRA', 'VAE', 'ControlNet', 'Text Encoders', 'Diffusion Models', 'Upscale Models', 'Embeddings']
@@ -80,7 +78,7 @@ function SourceDot({ status }: { status?: SourceStatus }) {
     title={status.reachable ? `${status.home} 连接正常 · ${status.latencyMs}ms` : `${status.home} 当前不可达`} />
 }
 
-export function MarketPanel({ onMarketDownload, onOnlineDownload, existingPaths }: { onMarketDownload: Props['onMarketDownload']; onOnlineDownload: Props['onOnlineDownload']; existingPaths: string[] }) {
+export function MarketPanel({ onMarketDownload, onOnlineDownload, existingPaths }: { onMarketDownload: MarketDownloadHandler; onOnlineDownload: OnlineDownloadHandler; existingPaths: string[] }) {
   const [source, setSource] = useState<MarketSource>('curated')
   const [statuses, setStatuses] = useState<SourceStatus[]>([])
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null)
@@ -217,11 +215,11 @@ export function MarketPanel({ onMarketDownload, onOnlineDownload, existingPaths 
           <div className="max-h-[58vh] space-y-3 overflow-y-auto pr-1 xl:grid xl:grid-cols-2 xl:gap-3 xl:space-y-0">
             {filtered.map((entry) => {
               const taken = occupied.has(`${entry.category}/${entry.fileName}`) || (entry.category === 'other' && occupied.has(entry.fileName))
-              return <div key={entry.id} className="flex flex-col gap-2 rounded-lg border border-slate-200 px-4 py-3 transition-colors hover:border-slate-300" data-testid={`market-entry-${entry.id}`}>
+              return <div key={entry.id} className="flex flex-col gap-2.5 rounded-lg border border-slate-200 px-5 py-4 transition-colors hover:border-slate-300" data-testid={`market-entry-${entry.id}`}>
                 {/* 头部：完整名称＋文件名居左，操作居右；名称不截断，一眼定位模型 */}
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-[15px] font-semibold leading-snug text-slate-900" title={entry.name}>{entry.name}</div>
+                    <div className="text-base font-semibold leading-snug text-slate-900" title={entry.name}>{entry.name}</div>
                     {/* 显示名与 ComfyUI 官方模板引用的文件名保持一致 */}
                     <div className="mt-0.5 truncate font-mono text-[11px] text-slate-500" title={`${entry.repo} · ${entry.filePath}`}>{entry.fileName}</div>
                   </div>
@@ -294,8 +292,10 @@ export function MarketPanel({ onMarketDownload, onOnlineDownload, existingPaths 
   </div>
 }
 
-export function AddModelDialog({ open, onOpenChange, onSubmit, onMarketDownload, onOnlineDownload, existingPaths }: Props) {
-  const [tab, setTab] = useState<SourceTab>('market')
+// 0.1.0.14 起弹窗瘦身：只承担「URL 下载／本地导入」两个手动添加动作；
+// 模型市场统一收敛到模型中心「在线获取」页签（MarketPanel），消除双入口重叠。
+export function AddModelDialog({ open, onOpenChange, onSubmit }: Props) {
+  const [tab, setTab] = useState<SourceTab>('url')
   const [name, setName] = useState('')
   const [type, setType] = useState('Checkpoints')
   const [source, setSource] = useState('')
@@ -328,8 +328,7 @@ export function AddModelDialog({ open, onOpenChange, onSubmit, onMarketDownload,
     }
   }
 
-  const tabs: { key: SourceTab; label: string; icon: typeof Store }[] = [
-    { key: 'market', label: '模型市场', icon: Store },
+  const tabs: { key: SourceTab; label: string; icon: typeof Link2 }[] = [
     { key: 'url', label: 'URL 下载', icon: Link2 },
     { key: 'import', label: '本地导入', icon: HardDrive },
   ]
@@ -337,12 +336,11 @@ export function AddModelDialog({ open, onOpenChange, onSubmit, onMarketDownload,
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl">
-        <DialogHeader><DialogTitle>添加模型</DialogTitle><DialogDescription>从模型市场选择主流模型直接下载，或通过 URL／本地文件添加；校验完成后写入全局共享仓库。</DialogDescription></DialogHeader>
-        <div className="grid grid-cols-3 gap-2 rounded-lg bg-slate-100 p-1">
+        <DialogHeader><DialogTitle>添加模型</DialogTitle><DialogDescription>通过 URL 下载或服务器本地文件导入模型；浏览模型市场与在线搜索请前往「模型中心 → 在线获取」。校验完成后写入全局共享仓库。</DialogDescription></DialogHeader>
+        <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-100 p-1">
           {tabs.map(({ key, label, icon: Icon }) => <button type="button" key={key} className={`min-h-11 cursor-pointer rounded-md text-sm font-medium transition-colors ${tab === key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`} onClick={() => changeTab(key)}><Icon className="mr-1.5 inline size-4" />{label}</button>)}
         </div>
-        {tab === 'market' && <MarketPanel onMarketDownload={onMarketDownload} onOnlineDownload={onOnlineDownload} existingPaths={existingPaths} />}
-        {tab !== 'market' && <div className="grid gap-4 py-2">
+        <div className="grid gap-4 py-2">
           <label className="field-label">模型名称<span className="ml-1 font-normal text-slate-400">（留空则从地址推导）</span><input className="field-input" value={name} onChange={(event) => setName(event.target.value)} autoComplete="off" /></label>
           <label className="field-label">模型类型<select className="field-input" value={type} onChange={(event) => setType(event.target.value)}>{['Checkpoints', 'LoRA', 'VAE', 'ControlNet', 'Text Encoders', 'Diffusion Models', 'Embeddings', 'Upscale Models', 'CLIP Vision', 'Model Patches', '其他'].map((item) => <option key={item}>{item}</option>)}</select></label>
           <label className="field-label">{tab === 'url' ? '下载地址' : '服务器文件路径'}<input className="field-input font-mono text-xs" value={source} onChange={(event) => setSource(event.target.value)} placeholder={tab === 'url' ? 'https://…/model.safetensors' : '/data/import/model.safetensors'} autoComplete="off" /></label>
@@ -350,8 +348,8 @@ export function AddModelDialog({ open, onOpenChange, onSubmit, onMarketDownload,
             ? '将从该地址下载并写入共享仓库，支持暂停、断点续传与失败重试；任务进度可在模型中心与任务中心查看。'
             : '将从 /data/import 目录（宿主机安装目录下的 import 文件夹）复制文件并写入共享仓库，支持暂停与校验；任务进度在模型中心与任务中心实时可见。'}</div>
           {error && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
-        </div>}
-        <DialogFooter>{tab !== 'market' && <><button type="button" className="btn-secondary" disabled={submitting} onClick={() => onOpenChange(false)}>取消</button><button type="button" className="btn-primary" disabled={submitting} onClick={() => void submit()}><Download className="size-4" />{submitting ? '正在创建任务' : tab === 'url' ? '开始下载' : '开始导入'}</button></>}</DialogFooter>
+        </div>
+        <DialogFooter><button type="button" className="btn-secondary" disabled={submitting} onClick={() => onOpenChange(false)}>取消</button><button type="button" className="btn-primary" disabled={submitting} onClick={() => void submit()}><Download className="size-4" />{submitting ? '正在创建任务' : tab === 'url' ? '开始下载' : '开始导入'}</button></DialogFooter>
       </DialogContent>
     </Dialog>
   )

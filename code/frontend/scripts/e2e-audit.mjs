@@ -275,12 +275,12 @@ async function main() {
   check('未完成下载提供重试入口', retryButtons > 0, `retry=${retryButtons}`)
   const copyButtons = await page.getByRole('button', { name: /复制 .* 路径/ }).count()
   check('就绪模型提供复制路径', copyButtons > 0, `copy=${copyButtons}`)
-  // 添加模型弹窗
+  // 添加模型弹窗（0.1.0.14 起瘦身：仅 URL 下载／本地导入，模型市场在「在线获取」页签）
   await page.getByRole('button', { name: '添加模型' }).click()
   await page.waitForTimeout(1500)
   check('添加模型弹窗打开', (await page.getByRole('dialog').count()) > 0)
   const addDialog = await page.getByRole('dialog').innerText().catch(() => '')
-  check('模型市场加载推荐目录/在线源', /模型市场|推荐目录|ModelScope/.test(addDialog), addDialog.slice(0, 60))
+  check('弹窗提供 URL 下载与本地导入', addDialog.includes('URL 下载') && addDialog.includes('本地导入'), addDialog.slice(0, 60))
   await page.getByRole('button', { name: 'URL 下载' }).click()
   await page.waitForTimeout(400)
   await page.getByRole('button', { name: '开始下载' }).click()

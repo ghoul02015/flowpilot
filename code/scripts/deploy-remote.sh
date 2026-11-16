@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 usage() {
   printf '用法：%s <user@host> <发布包路径> [端口]\n' "$0"
-  printf '示例：%s user@<服务器IP> .tmp/release/flowpilot-0.1.0.13-arm64.tar.gz 18080\n' "$0"
+  printf '示例：%s user@<服务器IP> .tmp/release/flowpilot-0.1.0.14-arm64.tar.gz 18080\n' "$0"
 }
 
 [ "$#" -ge 2 ] || { usage; exit 1; }
