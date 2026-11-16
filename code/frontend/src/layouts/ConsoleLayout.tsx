@@ -49,13 +49,14 @@ export function ConsoleLayout() {
   }, [page])
 
   return (
-    <div className="min-h-dvh bg-[oklch(0.975_0.007_340)] text-slate-800">
+    <div className="min-h-dvh bg-slate-50 text-slate-800">
       <Toaster position="top-right" richColors closeButton />
       {mobileOpen && <button type="button" aria-label="关闭导航" className="fixed inset-0 z-30 cursor-pointer bg-slate-950/45 md:hidden" onClick={() => setMobileOpen(false)} />}
       <aside className={`fixed inset-y-0 left-0 z-40 flex w-[248px] flex-col border-r border-slate-200 bg-white text-slate-600 transition-transform duration-200 md:translate-x-0 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="flex h-20 items-center gap-3 border-b border-slate-100 px-5">
-          <NavLink to={pagePaths.dashboard} aria-label="返回主页面" title="返回主页面" className="flex min-w-0 flex-1 items-center rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600" onClick={() => setMobileOpen(false)}>
-            <img src={logoFull} alt="慧浪智算 FlowPilot" className="h-10 w-auto max-w-full object-contain object-left" />
+          <NavLink to={pagePaths.dashboard} aria-label="返回主页面" title="返回主页面" className="flex min-w-0 flex-1 flex-col justify-center gap-1 rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600" onClick={() => setMobileOpen(false)}>
+            <img src={logoFull} alt="慧浪智算" className="h-8 w-auto max-w-full object-contain object-left" />
+            <span className="text-[11px] font-medium tracking-wide text-slate-400">FlowPilot · ComfyUI 一体化管理平台</span>
           </NavLink>
           <button type="button" className="ml-auto cursor-pointer rounded-md p-2 text-slate-400 hover:bg-slate-100 md:hidden" aria-label="关闭菜单" onClick={() => setMobileOpen(false)}><X className="size-5" /></button>
         </div>
@@ -84,7 +85,7 @@ export function ConsoleLayout() {
       </aside>
 
       <div className="min-h-dvh md:pl-[248px]">
-        <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-slate-200 bg-[oklch(0.995_0.003_340)]/95 px-4 backdrop-blur md:px-8">
+        <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-slate-200 bg-white/95 px-4 backdrop-blur md:px-8">
           <button type="button" className="icon-button md:hidden" aria-label="打开菜单" onClick={() => setMobileOpen(true)}><Menu className="size-5" /></button>
           <div className="hidden min-w-0 items-center gap-2 text-sm text-slate-500 sm:flex">
             <Server className="size-4 shrink-0" />

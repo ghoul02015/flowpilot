@@ -1,6 +1,6 @@
 # FlowPilot 后端
 
-当前版本：`0.1.0.11`。
+当前版本：`0.1.0.12`。
 
 轻量 Go 服务同时提供前端静态页面和 Docker API。仅使用 Go 标准库，通过 `/var/run/docker.sock` 访问 Docker Engine，不引入第三方 Docker SDK。
 
