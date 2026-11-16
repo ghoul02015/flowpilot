@@ -242,6 +242,46 @@ func TestCollectCoalescesConcurrent(t *testing.T) {
 	}
 }
 
+// TestNewCollectorCachesByDefault 生产构造应默认启用短时缓存（此前漏设导致每次刷新全量采集）。
+func TestNewCollectorCachesByDefault(t *testing.T) {
+	collector, _ := newFixtureCollector(t, dgxSparkSMI)
+	collector.Collect(context.Background())
+	collector.Collect(context.Background())
+	collector.mu.Lock()
+	collects := collector.collects
+	collector.mu.Unlock()
+	if collects != 1 {
+		t.Fatalf("默认应启用 2 秒缓存，实际采集 %d 次", collects)
+	}
+}
+
+// TestCollectWaiterGetsRealReportWhenCacheDisabled 关闭缓存时，并发等待者仍应拿到真实报告。
+func TestCollectWaiterGetsRealReportWhenCacheDisabled(t *testing.T) {
+	collector, _ := newFixtureCollector(t, dgxSparkSMI)
+	collector.SetCacheTTL(0)
+	collector.queryGPU = func(context.Context) (string, error) {
+		time.Sleep(50 * time.Millisecond)
+		return dgxSparkSMI, nil
+	}
+	const callers = 6
+	results := make(chan Report, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results <- collector.Collect(context.Background())
+		}()
+	}
+	wg.Wait()
+	close(results)
+	for report := range results {
+		if !report.GPUAvailable || len(report.GPUs) != 1 {
+			t.Fatalf("等待者拿到空报告：available=%v gpus=%d error=%q", report.GPUAvailable, len(report.GPUs), report.GPUError)
+		}
+	}
+}
+
 // TestGPUCommandMissingNegativeCache nvidia-smi 不存在时 60 秒内不重复调用。
 func TestGPUCommandMissingNegativeCache(t *testing.T) {
 	collector, _ := newFixtureCollector(t, "")

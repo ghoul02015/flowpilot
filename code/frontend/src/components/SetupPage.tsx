@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import logoFull from '@/assets/logo-hl.png'
 import { KeyRound, Loader2, ShieldCheck } from 'lucide-react'
 import { toast } from 'sonner'
 import { completeSetup, login } from '@/api'
@@ -9,6 +10,7 @@ interface Props {
 
 // SetupPage 平台初始化：一次性令牌＋管理员密码，完成后自动登录。
 export function SetupPage({ onReady }: Props) {
+  useEffect(() => { document.title = '初始化 · 慧浪智算 · FlowPilot' }, [])
   const [token, setToken] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -45,8 +47,10 @@ export function SetupPage({ onReady }: Props) {
       <div className="grid w-full max-w-4xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:grid-cols-2">
         <div className="hidden flex-col justify-between bg-teal-800 p-10 text-white lg:flex">
           <div>
-            <div className="text-lg font-semibold">慧浪智算 · FlowPilot</div>
-            <div className="mt-1 text-sm text-teal-100">ComfyUI 一体化部署与管理平台</div>
+            <div className="inline-flex rounded-xl bg-white px-3 py-2">
+              <img src={logoFull} alt="慧浪智算 · FlowPilot" className="h-9 w-auto" />
+            </div>
+            <div className="mt-3 text-sm text-teal-100">ComfyUI 一体化部署与管理平台</div>
           </div>
           <div className="space-y-4 text-sm leading-6 text-teal-50">
             <div className="flex items-start gap-3"><ShieldCheck className="mt-0.5 size-5 shrink-0" /><div>首次使用需要初始化管理员账户，完成后初始化令牌立即失效。</div></div>

@@ -88,6 +88,8 @@ type Collector struct {
 	// 短时缓存与单飞：并发请求共享同一次采集，避免重复执行 nvidia-smi。
 	cache      *Report
 	cacheAt    time.Time
+	last       Report
+	hasLast    bool
 	collecting bool
 	wait       chan struct{}
 	// nvidia-smi 不存在等持续性错误使用负缓存，避免每次刷新都重复失败。
@@ -104,6 +106,8 @@ func NewCollector(config Config) *Collector {
 		hostRoot:     orDefault(config.HostRoot, "/host"),
 		dataDir:      orDefault(config.DataDir, "/data/flowpilot"),
 		nvidiaSMIBin: orDefault(config.NvidiaSMIBin, "nvidia-smi"),
+		// 生产默认开启 2 秒合并缓存；此前漏设导致并发请求退化为每次全量采集。
+		cacheTTL: collectCacheTTL,
 	}
 	collector.queryGPU = collector.execNvidiaSMI
 	collector.queryVersions = collector.execNvidiaSMIHeader
@@ -136,12 +140,15 @@ func (c *Collector) Collect(ctx context.Context) Report {
 		c.mu.Unlock()
 		<-wait
 		c.mu.Lock()
-		var report Report
-		if c.cache != nil {
-			report = *c.cache
-		}
+		// 等待者必须拿到刚完成的报告：cacheTTL 为 0 时 cache 不会写入，
+		// 早期实现会返回零值报告，界面因此出现“未检测到 GPU”的假告警。
+		report, ok := c.last, c.hasLast
 		c.mu.Unlock()
-		return report
+		if ok {
+			return report
+		}
+		// 极端情况下（采集 goroutine 异常退出）自行补采一次，保证有真实数据。
+		return c.Collect(ctx)
 	}
 	c.collecting = true
 	wait := make(chan struct{})
@@ -151,6 +158,8 @@ func (c *Collector) Collect(ctx context.Context) Report {
 	report := c.collectOnce(ctx)
 
 	c.mu.Lock()
+	c.last = report
+	c.hasLast = true
 	if c.cacheTTL > 0 {
 		c.cache = &report
 		c.cacheAt = time.Now()
@@ -170,6 +179,8 @@ func (c *Collector) SetCacheTTL(ttl time.Duration) {
 	c.cacheTTL = ttl
 	c.cache = nil
 	c.cacheAt = time.Time{}
+	c.last = Report{}
+	c.hasLast = false
 }
 
 // collectOnce 是实际执行采集的路径。

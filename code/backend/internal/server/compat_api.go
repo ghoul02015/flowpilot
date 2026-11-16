@@ -63,6 +63,9 @@ func (h *Handler) hardwareCompat(w http.ResponseWriter, r *http.Request) {
 		if report.GPUMemoryMode == "unified" {
 			add("gpu-memory", "GPU 显存模式", "pass", "统一内存架构（系统内存共享，非独立显存）", "容量评估请按统一内存口径")
 		}
+	} else if report.GPUError != "" {
+		// 有错误时明确区分“采集失败”与“确实没有 GPU”，避免误导排障。
+		add("nvidia", "NVIDIA GPU", "warn", "GPU 采集失败："+report.GPUError, "检查 nvidia-smi 是否可执行；GPU 服务器需安装驱动并挂载 NVIDIA runtime")
 	} else {
 		add("nvidia", "NVIDIA GPU", "warn", "未检测到 GPU", "实例将以 CPU 模式运行；GPU 服务器请检查驱动")
 	}

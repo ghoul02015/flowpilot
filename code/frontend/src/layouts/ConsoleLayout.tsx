@@ -2,10 +2,11 @@
 // 布局只承载导航与全局状态，页面数据仍由各页面按需订阅。
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router'
-import { Activity, Box, ChevronRight, Cpu, Database, Images, LayoutDashboard, LogOut, Menu, Server, Settings, Waves, X } from 'lucide-react'
+import { Activity, Box, ChevronRight, Cpu, Database, Images, LayoutDashboard, LogOut, Menu, Server, Settings, X } from 'lucide-react'
 import { Toaster } from 'sonner'
 import { AddModelDialog } from '@/components/AddModelDialog'
 import { CreateInstanceDialog } from '@/components/CreateInstanceDialog'
+import logoMark from '@/assets/logo-mark.png'
 import { documentTitle, pageFromPath, pageLabels, pagePaths, pageTitles } from '@/lib/routes'
 import { useAppData } from '@/state/app-data'
 import type { PageKey } from '@/types'
@@ -48,12 +49,12 @@ export function ConsoleLayout() {
   }, [page])
 
   return (
-    <div className="min-h-dvh bg-[oklch(0.975_0.006_220)] text-slate-800">
+    <div className="min-h-dvh bg-[oklch(0.975_0.007_340)] text-slate-800">
       <Toaster position="top-right" richColors closeButton />
       {mobileOpen && <button type="button" aria-label="关闭导航" className="fixed inset-0 z-30 cursor-pointer bg-slate-950/45 md:hidden" onClick={() => setMobileOpen(false)} />}
-      <aside className={`fixed inset-y-0 left-0 z-40 flex w-[248px] flex-col bg-[oklch(0.22_0.03_240)] text-slate-300 transition-transform duration-200 md:translate-x-0 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+      <aside className={`fixed inset-y-0 left-0 z-40 flex w-[248px] flex-col bg-[oklch(0.20_0.028_340)] text-slate-300 transition-transform duration-200 md:translate-x-0 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="flex h-20 items-center gap-3 border-b border-white/8 px-5">
-          <div className="flex size-10 items-center justify-center rounded-lg bg-teal-500 text-slate-950"><Waves className="size-6" /></div>
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-white p-1.5 shadow-sm"><img src={logoMark} alt="慧浪智算" className="h-full w-full object-contain" /></div>
           <div><div className="font-bold tracking-wide text-white">慧浪智算</div><div className="mt-0.5 text-xs font-medium tracking-[0.16em] text-teal-300">FLOWPILOT</div></div>
           <button type="button" className="ml-auto cursor-pointer rounded-md p-2 text-slate-300 hover:bg-white/10 md:hidden" aria-label="关闭菜单" onClick={() => setMobileOpen(false)}><X className="size-5" /></button>
         </div>
@@ -82,7 +83,7 @@ export function ConsoleLayout() {
       </aside>
 
       <div className="min-h-dvh md:pl-[248px]">
-        <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-slate-200 bg-[oklch(0.995_0.003_220)]/95 px-4 backdrop-blur md:px-8">
+        <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-slate-200 bg-[oklch(0.995_0.003_340)]/95 px-4 backdrop-blur md:px-8">
           <button type="button" className="icon-button md:hidden" aria-label="打开菜单" onClick={() => setMobileOpen(true)}><Menu className="size-5" /></button>
           <div className="hidden min-w-0 items-center gap-2 text-sm text-slate-500 sm:flex">
             <Server className="size-4 shrink-0" />

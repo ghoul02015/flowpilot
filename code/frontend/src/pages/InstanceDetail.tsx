@@ -27,6 +27,8 @@ export function InstanceDetail({ name }: { name: string }) {
 
   useEffect(() => {
     document.title = documentTitle(undefined, detail ? detail.name : '实例详情')
+    // 返回列表时恢复一级页面标题，避免浏览器标签停留在实例名。
+    return () => { document.title = documentTitle('instances') }
   }, [detail])
 
   // 详情健康 5 秒、事件 15 秒；路由离开后自动停止。

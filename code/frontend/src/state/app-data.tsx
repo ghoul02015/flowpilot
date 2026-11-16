@@ -87,7 +87,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const [comfyStatuses, setComfyStatuses] = useState<Record<string, ComfyStatus>>({})
   const [busyIds, setBusyIds] = useState<string[]>([])
   const busyRef = useRef<Set<string>>(new Set())
-  const [backendVersion, setBackendVersion] = useState('0.1.0.9')
+  const [backendVersion, setBackendVersion] = useState('0.1.0.10')
   const [taskSummary, setTaskSummary] = useState({ active: 0, total: 0 })
 
   // 认证引导：先查初始化状态，再尝试恢复会话；401 全局跳登录。

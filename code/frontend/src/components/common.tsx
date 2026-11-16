@@ -16,7 +16,7 @@ export function PageHeader({ eyebrow, title, description, action }: { eyebrow?: 
 }
 
 export function Panel({ children, className = '', ...rest }: { children: ReactNode; className?: string } & Record<string, unknown>) {
-  return <section className={`min-w-0 rounded-xl border border-slate-200 bg-[oklch(0.995_0.003_220)] shadow-[0_1px_2px_rgba(15,23,42,0.03)] ${className}`} {...rest}>{children}</section>
+  return <section className={`min-w-0 rounded-xl border border-slate-200 bg-[oklch(0.995_0.003_340)] shadow-[0_1px_2px_rgba(15,23,42,0.03)] ${className}`} {...rest}>{children}</section>
 }
 
 export function PanelHeader({ title, description, action }: { title: string; description?: string; action?: ReactNode }) {

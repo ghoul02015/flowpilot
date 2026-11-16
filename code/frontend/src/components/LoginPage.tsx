@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import { Loader2, LogIn, ShieldCheck } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import logoFull from '@/assets/logo-hl.png'
+import { Loader2, LogIn } from 'lucide-react'
 import { toast } from 'sonner'
 import { login } from '@/api'
 
@@ -10,6 +11,7 @@ interface Props {
 
 // LoginPage 管理员登录页。
 export function LoginPage({ version, onLoggedIn }: Props) {
+  useEffect(() => { document.title = '登录 · 慧浪智算 · FlowPilot' }, [])
   const [username, setUsername] = useState('admin')
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -30,12 +32,9 @@ export function LoginPage({ version, onLoggedIn }: Props) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-100 p-6" data-testid="login-page">
       <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-10 shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="flex size-11 items-center justify-center rounded-xl bg-teal-700 text-white"><ShieldCheck className="size-6" /></div>
-          <div>
-            <div className="font-semibold text-slate-900">慧浪智算 · FlowPilot</div>
-            <div className="text-xs text-slate-500">ComfyUI 一体化管理平台 · v{version}</div>
-          </div>
+        <div>
+          <img src={logoFull} alt="慧浪智算 · FlowPilot" className="h-14 w-auto max-w-full" />
+          <div className="mt-3 text-xs text-slate-500">ComfyUI 一体化管理平台 · v{version}</div>
         </div>
         <div className="mt-8 space-y-5">
           <div>

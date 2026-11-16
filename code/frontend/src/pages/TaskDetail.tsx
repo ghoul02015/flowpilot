@@ -26,6 +26,8 @@ export function TaskDetail({ id }: { id: string }) {
 
   useEffect(() => {
     document.title = documentTitle(undefined, task ? task.name : '任务详情')
+    // 返回列表时恢复一级页面标题，避免浏览器标签停留在任务名。
+    return () => { document.title = documentTitle('tasks') }
   }, [task])
 
   // 活跃任务 2 秒、终态 15 秒；页面级轮询随路由卸载停止。
