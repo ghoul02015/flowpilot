@@ -482,3 +482,20 @@ func TestUnlabeledImageRejected(t *testing.T) {
 		t.Fatalf("逃生阀开启后应放行：%v", err)
 	}
 }
+
+func TestDefaultsAllowUnlabeledImages(t *testing.T) {
+	dockerClient := &fakeDocker{images: map[string]bool{}, imageLabels: map[string]string{}}
+	hostShared := t.TempDir()
+	manager := NewManager(dockerClient, func() int { return 1 }, hostShared, "img:latest", 8188, "/data/models", "/data/outputs", "/data/workflows")
+	if manager.Defaults().AllowUnlabeledImages {
+		t.Fatal("默认应关闭未认证镜像放行")
+	}
+	manager.SetAllowUnlabeledImages(true)
+	if !manager.Defaults().AllowUnlabeledImages {
+		t.Fatal("开启逃生阀后 Defaults 应透传 true")
+	}
+	manager.SetAllowUnlabeledImages(false)
+	if manager.Defaults().AllowUnlabeledImages {
+		t.Fatal("关闭逃生阀后 Defaults 应透传 false")
+	}
+}

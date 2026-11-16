@@ -41,9 +41,11 @@ interface Props {
   defaultModelsTarget?: string
   defaultOutputsTarget?: string
   defaultWorkflowsTarget?: string
+  /** 为 true 表示平台放行无 flowpilot.kind 标签的镜像（受控环境逃生阀）。 */
+  allowUnlabeledImages?: boolean
 }
 
-export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, instances, gpuNames, defaultImage, defaultContainerPort, dataDir, defaultModelsTarget, defaultOutputsTarget, defaultWorkflowsTarget }: Props) {
+export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, instances, gpuNames, defaultImage, defaultContainerPort, dataDir, defaultModelsTarget, defaultOutputsTarget, defaultWorkflowsTarget, allowUnlabeledImages }: Props) {
   const [step, setStep] = useState(1)
   const [name, setName] = useState(() => suggestName(instances))
   // 新建实例只允许选择本机 ComfyUI 镜像；构建、拉取和导入在实例页「镜像中心」完成。
@@ -69,10 +71,11 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
     getLocalImages()
       .then((images) => {
         setLocalImages(images)
-        const tags = images.flatMap((item) => item.RepoTags.map((tag) => ({ tag, image: item }))).filter((item) => item.tag && item.tag !== '<none>:<none>' && isComfyImage(item.tag, item.image)).map((item) => item.tag)
-        if (tags.length > 0) {
-          const preferred = defaultImage && tags.includes(defaultImage) ? defaultImage : tags[0]
-          setLocalTag((current) => current && tags.includes(current) ? current : preferred)
+        // 仅自动选择可用来创建的镜像：已认证，或平台放行未认证镜像。
+        const selectable = images.flatMap((item) => item.RepoTags.map((tag) => ({ tag, image: item }))).filter((item) => item.tag && item.tag !== '<none>:<none>' && isComfyImage(item.tag, item.image)).filter((item) => allowUnlabeledImages || item.image.Labels?.['flowpilot.kind'] === 'comfyui').map((item) => item.tag)
+        if (selectable.length > 0) {
+          const preferred = defaultImage && selectable.includes(defaultImage) ? defaultImage : selectable[0]
+          setLocalTag((current) => current && selectable.includes(current) ? current : preferred)
         } else {
           setLocalTag('')
         }
@@ -82,7 +85,7 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
         setLocalTag('')
       })
       .finally(() => setLoadingImages(false))
-  }, [defaultImage])
+  }, [defaultImage, allowUnlabeledImages])
 
   // 打开向导时加载本机镜像列表。
   useEffect(() => {
@@ -90,7 +93,10 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
     loadImages()
   }, [open, loadImages])
 
-  const localTags = useMemo(() => (localImages ?? []).flatMap((item) => item.RepoTags.map((tag) => ({ tag, image: item }))).filter((item) => item.tag && item.tag !== '<none>:<none>' && isComfyImage(item.tag, item.image)).map((item) => item.tag), [localImages])
+  // 候选镜像条目；trusted 表示带有 flowpilot.kind=comfyui 可信标签（与后端创建校验一致）。
+  const localTags = useMemo(() => (localImages ?? []).flatMap((item) => item.RepoTags.map((tag) => ({ tag, image: item }))).filter((item) => item.tag && item.tag !== '<none>:<none>' && isComfyImage(item.tag, item.image)).map((item) => ({ tag: item.tag, size: item.image.Size, trusted: item.image.Labels?.['flowpilot.kind'] === 'comfyui' })), [localImages])
+  // 未认证镜像仅在平台放行（FLOWPILOT_IMAGE_ALLOW_UNLABELED=1）时可选。
+  const enabledTags = useMemo(() => localTags.filter((item) => allowUnlabeledImages || item.trusted), [localTags, allowUnlabeledImages])
   const image = localTag
 
   function next() {
@@ -104,6 +110,11 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
     }
     if (!image.trim()) {
       setError('请选择一个本机已有镜像；如暂无镜像，请先到「镜像中心」构建、拉取或导入镜像。')
+      return
+    }
+    const chosen = localTags.find((item) => item.tag === image.trim())
+    if (chosen && !chosen.trusted && !allowUnlabeledImages) {
+      setError('该镜像未通过可信认证（缺少 flowpilot.kind=comfyui 标签），不能用于创建实例；请先在「镜像中心」一键构建官方镜像。')
       return
     }
     if (instances.some((item) => item.name === name.trim())) {
@@ -160,15 +171,12 @@ export function CreateInstanceDialog({ open, onOpenChange, onSubmit, models, ins
 
         {step === 1 && <div className="grid gap-4 py-2">
           <label className="field-label">容器镜像（本机已有）
-            <select className="field-input font-mono text-sm" value={localTag} disabled={loadingImages || localTags.length === 0} onChange={(event) => setLocalTag(event.target.value)}>
-              {localTags.map((tag) => {
-                const meta = (localImages ?? []).find((item) => item.RepoTags.includes(tag))
-                return <option key={tag} value={tag}>{tag}{meta ? `（${formatBytes(meta.Size)}）` : ''}</option>
-              })}
+            <select className="field-input font-mono text-sm" value={localTag} disabled={loadingImages || enabledTags.length === 0} onChange={(event) => setLocalTag(event.target.value)}>
+              {localTags.map((item) => <option key={item.tag} value={item.tag} disabled={!allowUnlabeledImages && !item.trusted}>{item.tag}（{formatBytes(item.size)}）{item.trusted ? '' : allowUnlabeledImages ? ' · 未认证' : ' · 未认证，不可用'}</option>)}
             </select>
           </label>
-          <div className={`rounded-lg border p-3 text-sm leading-6 ${localTags.length > 0 ? 'border-teal-200 bg-teal-50 text-teal-950' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
-            {loadingImages ? '正在读取本机镜像列表…' : localTags.length > 0 ? <>将使用本机镜像 <span className="font-mono">{image}</span> 创建实例。</> : '当前本机暂无可选镜像；请先在「镜像中心」构建、拉取或导入镜像。'}
+          <div className={`rounded-lg border p-3 text-sm leading-6 ${enabledTags.length > 0 ? 'border-teal-200 bg-teal-50 text-teal-950' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
+            {loadingImages ? '正在读取本机镜像列表…' : enabledTags.length > 0 ? <>将使用本机镜像 <span className="font-mono">{image}</span> 创建实例。</> : localTags.length > 0 ? <>本机 {localTags.length} 个候选镜像均未通过可信认证（缺少 <span className="font-mono">flowpilot.kind=comfyui</span> 标签），不能用于创建实例。请先在「镜像中心」一键构建官方镜像；受控环境可由管理员设置 <span className="font-mono">FLOWPILOT_IMAGE_ALLOW_UNLABELED=1</span> 后刷新。</> : '当前本机暂无可选镜像；请先在「镜像中心」构建、拉取或导入镜像。'}
             <button type="button" className="btn-secondary mt-2 w-full" onClick={loadImages} disabled={loadingImages}>刷新本机镜像列表</button>
           </div>
           {gpuNames.length === 0 && <p className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-6 text-amber-900"><CircleAlert className="mt-0.5 size-4 shrink-0" />未检测到 GPU（硬件采集接口可能尚未就绪），当前将以「仅 CPU」创建；如需 GPU 实例请先返回首页确认硬件监控正常。</p>}

@@ -120,6 +120,8 @@ export interface InstanceDefaults {
   modelsTarget?: string
   outputsTarget?: string
   workflowsTarget?: string
+  /** 为 true 表示平台放行无 flowpilot.kind 标签的镜像（受控环境逃生阀）。 */
+  allowUnlabeledImages?: boolean
 }
 
 export interface InstanceListResponse {

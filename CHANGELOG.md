@@ -2,6 +2,26 @@
 
 所有重要变更均记录于此。详细内容见 `context/changes/`。
 
+## 0.1.0.15 — 2026-11-16（新建实例镜像信任标注：错误前置到表单）
+
+### 修复
+
+- **「能选不能建」口径不一致**：新建实例对话框的候选镜像来自名称/标签宽松过滤（`isComfyImage`），而 0.0.9.10 起后端创建实例强制 `flowpilot.kind=comfyui` 可信标签校验——无标签镜像（如历史构建、在线拉取）能被选中、提交后却被 400 拒绝。现在对话框与后端同一口径：逐候选读取镜像 Labels 计算可信状态，未认证镜像选项 **禁用并标注「未认证，不可用」**，表单内不再能走到提交才被拒。
+
+### 新增
+
+- **逃生阀状态透传**：`GET /api/v1/instances` 的 `defaults` 新增 `allowUnlabeledImages` 字段；平台以 `FLOWPILOT_IMAGE_ALLOW_UNLABELED=1` 放行时，未认证镜像可选但仍标注「未认证」。
+- **全不可选指引**：候选镜像均未通过认证时，下拉下方给出明确指引（去「镜像中心」一键构建官方镜像，或由管理员设置逃生阀），替代过去选中后报错的路径。
+- 自动选择逻辑同步收紧：默认镜像/首个候选只在「可用来创建」的集合里挑选。
+
+### 验证
+
+- 后端 `gofmt`/`go vet`/`go test` 全绿（新增 `TestDefaultsAllowUnlabeledImages` 覆盖逃生阀透传三态）。
+- 前端 `npm run lint && npm run build` 通过。
+- Spark 实体机：`/api/v1/health` 版本 0.1.0.15、`/api/v1/instances` 确认 `defaults.allowUnlabeledImages=false`；新增探针 `probe-image-trust.mjs` 18 项全过（7 个候选中 4 个可信可选、3 个未认证禁用且标注、自动选中回退到可信镜像）；`e2e-smoke` 与 `e2e-audit` 101 项全过。
+
+详细记录：[0.1.0.15](context/changes/0.1.0.15.md)
+
 ## 0.1.0.14 — 2026-11-16（模型获取结构收敛＋按钮色档与卡片密度调整）
 
 ### 调整

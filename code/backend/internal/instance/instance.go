@@ -95,6 +95,9 @@ type Defaults struct {
 	ModelsTarget    string `json:"modelsTarget"`
 	OutputsTarget   string `json:"outputsTarget"`
 	WorkflowsTarget string `json:"workflowsTarget"`
+	// AllowUnlabeledImages 为 true 表示平台放行无 flowpilot.kind 标签的镜像
+	// （FLOWPILOT_IMAGE_ALLOW_UNLABELED=1 逃生阀）；前端据此决定未认证镜像候选是否可选。
+	AllowUnlabeledImages bool `json:"allowUnlabeledImages"`
 }
 
 // DockerAPI 是实例管理依赖的 Docker 操作子集，便于测试替换。
@@ -253,7 +256,7 @@ func (m *Manager) SetRecorder(onCreate func(spec Spec, created Instance), onDele
 
 // Defaults 返回创建表单的推荐默认值。
 func (m *Manager) Defaults() Defaults {
-	return Defaults{Image: m.defaultImage, ContainerPort: m.containerPort, DataDir: m.hostDataDir, ModelsTarget: m.modelsTarget, OutputsTarget: m.outputsTarget, WorkflowsTarget: m.workflowsTarget}
+	return Defaults{Image: m.defaultImage, ContainerPort: m.containerPort, DataDir: m.hostDataDir, ModelsTarget: m.modelsTarget, OutputsTarget: m.outputsTarget, WorkflowsTarget: m.workflowsTarget, AllowUnlabeledImages: m.allowUnlabeledImage}
 }
 
 // List 返回全部实例，按创建时间倒序。

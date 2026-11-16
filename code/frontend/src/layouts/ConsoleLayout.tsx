@@ -124,6 +124,7 @@ export function ConsoleLayout() {
         defaultModelsTarget={instanceDefaults?.modelsTarget}
         defaultOutputsTarget={instanceDefaults?.outputsTarget}
         defaultWorkflowsTarget={instanceDefaults?.workflowsTarget}
+        allowUnlabeledImages={instanceDefaults?.allowUnlabeledImages}
       />
       <AddModelDialog
         key={addModelOpen ? 'model-open' : 'model-closed'}
