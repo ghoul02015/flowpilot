@@ -48,7 +48,7 @@ export function SetupPage({ onReady }: Props) {
         <div className="hidden flex-col justify-between bg-teal-800 p-10 text-white lg:flex">
           <div>
             <div className="inline-flex rounded-xl bg-white px-3 py-2">
-              <img src={logoFull} alt="慧浪智算 · FlowPilot" className="h-9 w-auto" />
+              <img src={logoFull} alt="慧浪智算 · FlowPilot" className="h-12 w-auto" />
             </div>
             <div className="mt-3 text-sm text-teal-100">ComfyUI 一体化部署与管理平台</div>
           </div>

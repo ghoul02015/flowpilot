@@ -32,7 +32,7 @@ import (
 	"github.com/ghoul02015/flowpilot/internal/tasks"
 )
 
-const Version = "0.1.0.12"
+const Version = "0.1.0.13"
 
 type Handler struct {
 	docker        *docker.Client

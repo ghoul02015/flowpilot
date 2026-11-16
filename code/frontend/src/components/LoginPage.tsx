@@ -33,7 +33,7 @@ export function LoginPage({ version, onLoggedIn }: Props) {
     <div className="flex min-h-screen items-center justify-center bg-slate-100 p-6" data-testid="login-page">
       <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-10 shadow-sm">
         <div>
-          <img src={logoFull} alt="慧浪智算 · FlowPilot" className="h-14 w-auto max-w-full" />
+          <img src={logoFull} alt="慧浪智算 · FlowPilot" className="h-20 w-auto max-w-full" />
           <div className="mt-3 text-xs text-slate-500">ComfyUI 一体化管理平台 · v{version}</div>
         </div>
         <div className="mt-8 space-y-5">

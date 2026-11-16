@@ -55,7 +55,7 @@ export function ConsoleLayout() {
       <aside className={`fixed inset-y-0 left-0 z-40 flex w-[248px] flex-col border-r border-slate-200 bg-white text-slate-600 transition-transform duration-200 md:translate-x-0 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="flex h-20 items-center gap-3 border-b border-slate-100 px-5">
           <NavLink to={pagePaths.dashboard} aria-label="返回主页面" title="返回主页面" className="flex min-w-0 flex-1 flex-col justify-center gap-1 rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600" onClick={() => setMobileOpen(false)}>
-            <img src={logoFull} alt="慧浪智算" className="h-8 w-auto max-w-full object-contain object-left" />
+            <img src={logoFull} alt="慧浪智算" className="h-11 w-auto max-w-full object-contain object-left" />
             <span className="text-[11px] font-medium tracking-wide text-slate-400">FlowPilot · ComfyUI 一体化管理平台</span>
           </NavLink>
           <button type="button" className="ml-auto cursor-pointer rounded-md p-2 text-slate-400 hover:bg-slate-100 md:hidden" aria-label="关闭菜单" onClick={() => setMobileOpen(false)}><X className="size-5" /></button>

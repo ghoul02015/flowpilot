@@ -217,20 +217,25 @@ export function MarketPanel({ onMarketDownload, onOnlineDownload, existingPaths 
           <div className="max-h-[58vh] space-y-3 overflow-y-auto pr-1 xl:grid xl:grid-cols-2 xl:gap-3 xl:space-y-0">
             {filtered.map((entry) => {
               const taken = occupied.has(`${entry.category}/${entry.fileName}`) || (entry.category === 'other' && occupied.has(entry.fileName))
-              return <div key={entry.id} className="rounded-lg border border-slate-200 px-4 py-3 transition-colors hover:border-slate-300" data-testid={`market-entry-${entry.id}`}>
-                {/* 单行信息层级：名称＋类型徽章＋大小＋可达性一眼扫读；描述默认收起一行 */}
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="w-full min-w-0 truncate text-[15px] font-semibold text-slate-900 sm:w-auto sm:flex-1" title={entry.name}>{entry.name}</span>
-                  <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{entry.typeLabel}</span>
-                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${entry.reachable ? 'bg-teal-50 text-teal-700' : 'bg-amber-100 text-amber-800'}`}>{formatBytes(entry.sizeBytes)} · {entry.reachable ? '可达' : '暂不可达'}</span>
+              return <div key={entry.id} className="flex flex-col gap-2 rounded-lg border border-slate-200 px-4 py-3 transition-colors hover:border-slate-300" data-testid={`market-entry-${entry.id}`}>
+                {/* 头部：完整名称＋文件名居左，操作居右；名称不截断，一眼定位模型 */}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[15px] font-semibold leading-snug text-slate-900" title={entry.name}>{entry.name}</div>
+                    {/* 显示名与 ComfyUI 官方模板引用的文件名保持一致 */}
+                    <div className="mt-0.5 truncate font-mono text-[11px] text-slate-500" title={`${entry.repo} · ${entry.filePath}`}>{entry.fileName}</div>
+                  </div>
                   {taken
                     ? <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700"><Check className="size-3.5" />已入库</span>
-                    : <button type="button" className="btn-primary shrink-0 px-3.5 py-2 text-sm" aria-label={`下载 ${entry.name}`} onClick={() => onMarketDownload(entry, false)}><CloudDownload className="size-4" />下载</button>}
+                    : <button type="button" className="btn-secondary shrink-0 px-3 py-1.5 text-xs" aria-label={`下载 ${entry.name}`} onClick={() => onMarketDownload(entry, false)}><CloudDownload className="size-3.5" />下载</button>}
                 </div>
-                {/* 显示名与 ComfyUI 官方模板引用的文件名保持一致 */}
-                <p className="mt-1 truncate font-mono text-[11px] text-slate-500" title={`${entry.repo} · ${entry.filePath}`}>{entry.fileName}</p>
-                <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500" title={entry.description}>{entry.description}</p>
-                {!taken && entry.fallbackUrl && <button type="button" className="mt-1 text-[11px] text-slate-500 underline decoration-dotted hover:text-teal-700" aria-label={`使用 HF 镜像下载 ${entry.name}`} onClick={() => onMarketDownload(entry, true)}>HF 镜像备选{entry.fallbackGated ? '（需授权）' : ''}</button>}
+                {/* 属性行：类型／大小·可达性／备选源，小徽章弱呈现 */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{entry.typeLabel}</span>
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${entry.reachable ? 'bg-teal-50 text-teal-700' : 'bg-amber-100 text-amber-800'}`}>{formatBytes(entry.sizeBytes)} · {entry.reachable ? '可达' : '暂不可达'}</span>
+                  {!taken && entry.fallbackUrl && <button type="button" className="text-[11px] text-slate-500 underline decoration-dotted hover:text-teal-700" aria-label={`使用 HF 镜像下载 ${entry.name}`} onClick={() => onMarketDownload(entry, true)}>HF 镜像备选{entry.fallbackGated ? '（需授权）' : ''}</button>}
+                </div>
+                <p className="line-clamp-2 text-xs leading-5 text-slate-500" title={entry.description}>{entry.description}</p>
               </div>
             })}
             {filtered.length === 0 && <p className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">没有匹配的模型。可切换到 ModelScope／HF 镜像在线搜索，或调整筛选条件。</p>}
