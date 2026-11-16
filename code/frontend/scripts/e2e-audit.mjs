@@ -268,7 +268,9 @@ async function main() {
   ])
   check('导出模型清单 CSV', Boolean(csv && csv.suggestedFilename().endsWith('.csv')), csv ? csv.suggestedFilename() : 'no download')
   await page.goto(base + '/models?tab=local', { waitUntil: 'networkidle' })
-  await page.waitForTimeout(1200)
+  // 数据行渲染依赖多次接口往返，固定短等待在重载机器上不稳定。
+  await page.getByRole('row').first().waitFor({ timeout: 15000 }).catch(() => {})
+  await page.waitForTimeout(500)
   const retryButtons = await page.getByRole('button', { name: /重试/ }).count()
   check('未完成下载提供重试入口', retryButtons > 0, `retry=${retryButtons}`)
   const copyButtons = await page.getByRole('button', { name: /复制 .* 路径/ }).count()
@@ -291,7 +293,9 @@ async function main() {
 
   // 在线获取
   await page.goto(base + '/models?tab=online', { waitUntil: 'networkidle' })
-  await page.waitForTimeout(1500)
+  // 在线目录需实时拉取 ModelScope，网络波动时首屏超过 1.5 秒。
+  await page.locator('[data-testid^="market-entry-"]').first().waitFor({ timeout: 45000 }).catch(() => {})
+  await page.waitForTimeout(500)
   check('在线获取页签', await page.getByRole('tab', { name: '在线获取', selected: true }).count() > 0)
   check('在线面板有搜索输入', (await page.getByPlaceholder(/搜索模型名称|搜索模型仓库/).count()) > 0)
   const entryTops = await page.locator('[data-testid^="market-entry-"]').evaluateAll((nodes) => nodes.slice(0, 2).map((node) => Math.round(node.getBoundingClientRect().top)))
@@ -403,7 +407,8 @@ async function main() {
   const securityText = await page.locator('main').innerText()
   check('安全页展示会话/密码能力', securityText.includes('密码') || securityText.includes('会话'))
   await page.goto(base + '/system/audit', { waitUntil: 'networkidle' })
-  await page.waitForTimeout(1500)
+  // 审计记录较多时首屏渲染偏慢，等待表格出现再计数。
+  await page.locator('main table').first().waitFor({ timeout: 15000 }).catch(() => {})
   check('审计页有记录表格', (await page.locator('main table').count()) > 0)
 
   console.log('\n[9] 404 与非法参数')
@@ -487,7 +492,8 @@ async function main() {
   // 面包屑与失败原因
   if (instanceName) {
     await page.goto(base + `/instances/${encodeURIComponent(instanceName)}`, { waitUntil: 'networkidle' })
-    await page.waitForTimeout(1000)
+    await page.locator('header').first().waitFor({ timeout: 15000 })
+    await page.waitForTimeout(500)
     const crumb = await page.locator('header').innerText()
     check('详情面包屑含对象名', crumb.includes(instanceName), crumb.replace(/\n/g, ' '))
   } else {
