@@ -188,7 +188,7 @@ export function MarketPanel({ onMarketDownload, onOnlineDownload, existingPaths 
         type="button"
         key={key}
         data-testid={`source-tab-${key}`}
-        className={`flex min-h-9 cursor-pointer items-center justify-center gap-1.5 rounded-md text-xs font-medium transition-colors ${source === key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+        className={`flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-md text-sm font-medium transition-colors ${source === key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
         onClick={() => { setSource(key); setQuery(''); setResults(null); setSearchError(''); setExpandedRepo(null) }}>
         {statusId && <SourceDot status={statusOf(statusId)} />}{label}
       </button>)}
@@ -214,22 +214,22 @@ export function MarketPanel({ onMarketDownload, onOnlineDownload, existingPaths 
             <span>{catalog.source === 'cache' && catalog.refreshedAt ? `目录已同步 · ${new Date(catalog.refreshedAt).toLocaleString('zh-CN', { hour12: false })}` : '内置目录 · 未在线同步'} · 共 {filtered.length} 个模型</span>
             <button type="button" className="btn-quiet text-xs" disabled={refreshing} onClick={refresh}><RefreshCw className={`size-3.5 ${refreshing ? 'animate-spin' : ''}`} />{refreshing ? '正在同步 ModelScope…' : '更新目录'}</button>
           </div>
-          <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+          <div className="max-h-[58vh] space-y-3 overflow-y-auto pr-1 xl:grid xl:grid-cols-2 xl:gap-3 xl:space-y-0">
             {filtered.map((entry) => {
               const taken = occupied.has(`${entry.category}/${entry.fileName}`) || (entry.category === 'other' && occupied.has(entry.fileName))
-              return <div key={entry.id} className="rounded-lg border border-slate-200 px-3 py-2.5" data-testid={`market-entry-${entry.id}`}>
+              return <div key={entry.id} className="rounded-lg border border-slate-200 px-4 py-3 transition-colors hover:border-slate-300" data-testid={`market-entry-${entry.id}`}>
                 {/* 单行信息层级：名称＋类型徽章＋大小＋可达性一眼扫读；描述默认收起一行 */}
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="w-full min-w-0 truncate text-sm font-semibold text-slate-900 sm:w-auto sm:flex-1" title={entry.name}>{entry.name}</span>
-                  <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">{entry.typeLabel}</span>
-                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${entry.reachable ? 'bg-teal-50 text-teal-700' : 'bg-amber-100 text-amber-800'}`}>{formatBytes(entry.sizeBytes)} · {entry.reachable ? '可达' : '暂不可达'}</span>
+                  <span className="w-full min-w-0 truncate text-[15px] font-semibold text-slate-900 sm:w-auto sm:flex-1" title={entry.name}>{entry.name}</span>
+                  <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{entry.typeLabel}</span>
+                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${entry.reachable ? 'bg-teal-50 text-teal-700' : 'bg-amber-100 text-amber-800'}`}>{formatBytes(entry.sizeBytes)} · {entry.reachable ? '可达' : '暂不可达'}</span>
                   {taken
                     ? <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700"><Check className="size-3.5" />已入库</span>
-                    : <button type="button" className="btn-primary shrink-0 px-3 py-1.5 text-xs" aria-label={`下载 ${entry.name}`} onClick={() => onMarketDownload(entry, false)}><CloudDownload className="size-3.5" />下载</button>}
+                    : <button type="button" className="btn-primary shrink-0 px-3.5 py-2 text-sm" aria-label={`下载 ${entry.name}`} onClick={() => onMarketDownload(entry, false)}><CloudDownload className="size-4" />下载</button>}
                 </div>
                 {/* 显示名与 ComfyUI 官方模板引用的文件名保持一致 */}
                 <p className="mt-1 truncate font-mono text-[11px] text-slate-500" title={`${entry.repo} · ${entry.filePath}`}>{entry.fileName}</p>
-                <p className="mt-0.5 truncate text-xs text-slate-500" title={entry.description}>{entry.description}</p>
+                <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500" title={entry.description}>{entry.description}</p>
                 {!taken && entry.fallbackUrl && <button type="button" className="mt-1 text-[11px] text-slate-500 underline decoration-dotted hover:text-teal-700" aria-label={`使用 HF 镜像下载 ${entry.name}`} onClick={() => onMarketDownload(entry, true)}>HF 镜像备选{entry.fallbackGated ? '（需授权）' : ''}</button>}
               </div>
             })}
@@ -242,7 +242,7 @@ export function MarketPanel({ onMarketDownload, onOnlineDownload, existingPaths 
       {searchError && <div className="flex items-start gap-3 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800"><CircleAlert className="mt-0.5 size-4 shrink-0" />{searchError}</div>}
       {!results && !searchError && !searching && <p className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">输入模型名（如 MiniMax-H3、Wan2.1、FLUX）回车搜索 {source === 'modelscope' ? 'ModelScope' : 'HF 镜像'} 全站；也可直接粘贴仓库名（Comfy-Org/MiniMax-H3）或源站链接直达文件列表。</p>}
       {searching && <div className="flex items-center justify-center gap-2 py-12 text-sm text-slate-500"><LoaderCircle className="size-4 animate-spin" />正在搜索 {source === 'modelscope' ? 'ModelScope' : 'HF 镜像'}…</div>}
-      {results && !searching && <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+      {results && !searching && <div className="max-h-[58vh] space-y-3 overflow-y-auto pr-1">
         {attempts.length > 1 && results.length > 0 && <p className="rounded-lg bg-teal-50 px-3 py-2 text-xs text-teal-800">原关键词「{attempts[0]}」未命中，已自动扩展搜索：{attempts.slice(1).join('、')}</p>}
         {results.length === 0 && <p className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-sm text-slate-500">已尝试 {attempts.length > 1 ? attempts.map((item) => `「${item}」`).join('、') : '搜索'} 仍未找到相关仓库。可切换到另一个源再试，或直接粘贴仓库名（如 Comfy-Org/MiniMax-H3）／源站链接直达。</p>}
         {results.map((repo) => {

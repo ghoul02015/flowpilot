@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ChevronDown, Download, HardDriveDownload, Pause, Play, Plus, Search, Trash2 } from 'lucide-react'
+import { Ban, ChevronDown, Copy, Download, HardDriveDownload, Pause, Play, Plus, RotateCcw, Search, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import type { CatalogEntry, OnlineFile } from '@/api'
 import { EmptyState, PageHeader, Panel, ProgressBar, StatusBadge } from '@/components/common'
@@ -23,7 +23,8 @@ interface Props {
   tab: ModelTabKey
   onTabChange: (tab: ModelTabKey) => void
   onAdd: () => void
-  onPause: (id: string) => void
+  /** 下载任务操作：暂停／继续／取消／重试。 */
+  onDownloadAction: (id: string, action: 'pause' | 'resume' | 'cancel' | 'retry') => void
   onDelete: (id: string) => void
   onLocalize: (id: string) => void
   onBatchDelete: (ids: string[]) => void
@@ -68,8 +69,25 @@ function isStale(item: ModelItem): boolean {
   return parseSize(item.size) > STALE_MIN_BYTES && modified < Date.now() - STALE_DAYS * 86400_000
 }
 
-function ModelRow({ item, duplicateCount, selected, onToggleSelect, onPause, onDelete, onLocalize }: { item: ModelItem; duplicateCount: number; selected: boolean; onToggleSelect: (id: string) => void; onPause: Props['onPause']; onDelete: (id: string) => void; onLocalize: Props['onLocalize'] }) {
+function copyText(value: string) {
+  // 局域网 http 下 Clipboard API 不可用，回退到临时文本框。
+  if (navigator.clipboard?.writeText) {
+    return navigator.clipboard.writeText(value)
+  }
+  const area = document.createElement('textarea')
+  area.value = value
+  area.style.position = 'fixed'
+  area.style.opacity = '0'
+  document.body.appendChild(area)
+  area.select()
+  document.execCommand('copy')
+  area.remove()
+  return Promise.resolve()
+}
+
+function ModelRow({ item, duplicateCount, selected, onToggleSelect, onDownloadAction, onDelete, onLocalize }: { item: ModelItem; duplicateCount: number; selected: boolean; onToggleSelect: (id: string) => void; onDownloadAction: Props['onDownloadAction']; onDelete: (id: string) => void; onLocalize: Props['onLocalize'] }) {
   const selectable = Boolean(item.origin)
+  const isTask = item.id.startsWith('dl-')
   const stale = isStale(item)
   return <tr>
     <td><div className="flex items-center gap-3">
@@ -91,15 +109,25 @@ function ModelRow({ item, duplicateCount, selected, onToggleSelect, onPause, onD
       : item.origin === 'local'
         ? <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">本地仓库</span>
         : <span className="text-xs text-slate-500">{item.source}</span>}</td>
-    <td><div className="flex gap-1">
-      {['downloading', 'paused'].includes(item.status) && <button type="button" className="icon-button" title={item.status === 'downloading' ? '暂停下载' : '继续下载'} aria-label={item.status === 'downloading' ? `暂停 ${item.name}` : `继续 ${item.name}`} onClick={() => onPause(item.id)}>{item.status === 'downloading' ? <Pause className="size-4" /> : <Play className="size-4" />}</button>}
+    <td><div className="flex flex-wrap items-center gap-1">
+      {isTask && item.status === 'downloading' && <>
+        <button type="button" className="icon-button" title="暂停下载" aria-label={`暂停 ${item.name}`} onClick={() => onDownloadAction(item.id, 'pause')}><Pause className="size-4" /></button>
+        <button type="button" className="icon-button text-rose-600 hover:bg-rose-50" title="取消下载" aria-label={`取消 ${item.name}`} onClick={() => onDownloadAction(item.id, 'cancel')}><Ban className="size-4" /></button>
+      </>}
+      {isTask && item.status === 'paused' && <>
+        <button type="button" className="icon-button text-teal-700 hover:bg-teal-50" title="断点续传：从已完成分片继续" aria-label={`继续 ${item.name}`} onClick={() => onDownloadAction(item.id, 'resume')}><Play className="size-4" /></button>
+        <button type="button" className="icon-button text-rose-600 hover:bg-rose-50" title="取消下载" aria-label={`取消 ${item.name}`} onClick={() => onDownloadAction(item.id, 'cancel')}><Ban className="size-4" /></button>
+      </>}
+      {isTask && ['failed', 'cancelled'].includes(item.status) && <button type="button" className="btn-quiet px-2 text-xs" title="重试：沿用已下载分片重新开始" aria-label={`重试 ${item.name}`} onClick={() => onDownloadAction(item.id, 'retry')}><RotateCcw className="size-3.5" />重试</button>}
+      {isTask && !['downloading', 'paused'].includes(item.status) && <button type="button" className="icon-button text-rose-600 hover:bg-rose-50" title="删除任务记录" aria-label={`删除记录 ${item.name}`} onClick={() => onDelete(item.id)}><Trash2 className="size-4" /></button>}
+      {item.status === 'ready' && item.rawPath && <button type="button" className="icon-button" title="复制仓库路径" aria-label={`复制 ${item.name} 路径`} onClick={() => { void copyText(item.rawPath ?? '').then(() => toast.success('路径已复制', { description: item.rawPath ?? '' })).catch(() => toast.error('复制失败')) }}><Copy className="size-4" /></button>}
       {item.origin === 'network' && <button type="button" className="icon-button text-teal-700 hover:bg-teal-50" title="本地化：复制到本地仓库，实例加载走本机高速盘" aria-label={`本地化 ${item.name}`} onClick={() => onLocalize(item.id)}><HardDriveDownload className="size-4" /></button>}
-      {item.origin !== 'network' && <button type="button" className="icon-button text-rose-600 hover:bg-rose-50" title="删除模型" aria-label={`删除 ${item.name}`} onClick={() => onDelete(item.id)}><Trash2 className="size-4" /></button>}
+      {item.origin === 'local' && <button type="button" className="icon-button text-rose-600 hover:bg-rose-50" title="删除模型" aria-label={`删除 ${item.name}`} onClick={() => onDelete(item.id)}><Trash2 className="size-4" /></button>}
     </div></td>
   </tr>
 }
 
-export function Models({ models, realMode, modelsRoot, totalBytes, network, runningInstanceNames, tab, onTabChange, onAdd, onPause, onDelete, onLocalize, onBatchDelete, onBatchLocalize, onMarketDownload, onOnlineDownload, existingPaths }: Props) {
+export function Models({ models, realMode, modelsRoot, totalBytes, network, runningInstanceNames, tab, onTabChange, onAdd, onDownloadAction, onDelete, onLocalize, onBatchDelete, onBatchLocalize, onMarketDownload, onOnlineDownload, existingPaths }: Props) {
   const [query, setQuery] = useState('')
   const [type, setType] = useState('all')
   const [sort, setSort] = useState<'default' | 'size' | 'time'>('default')
@@ -159,6 +187,32 @@ export function Models({ models, realMode, modelsRoot, totalBytes, network, runn
   const networkFiles = models.filter((item) => item.origin === 'network')
   const networkBytes = networkFiles.reduce((sum, item) => sum + parseSize(item.size), 0)
 
+  // 导出当前筛选结果为 CSV，便于交付与库存核对。
+  function exportList() {
+    const statusLabels: Record<string, string> = { ready: '就绪', downloading: '下载中', paused: '已暂停', failed: '失败', cancelled: '已取消', waiting: '等待中' }
+    const escape = (value: string) => `"${value.replace(/"/g, '""')}"`
+    const lines = [['名称', '类型', '大小', '状态', '来源', '仓库路径', '更新时间'].map(escape).join(',')]
+    for (const item of filtered) {
+      lines.push([
+        item.name,
+        item.type,
+        item.size,
+        statusLabels[item.status] ?? item.status,
+        item.origin === 'network' ? '网络存储' : item.origin === 'local' ? '本地仓库' : item.source,
+        item.rawPath ?? '',
+        item.createdAt,
+      ].map((value) => escape(String(value))).join(','))
+    }
+    const blob = new Blob([`\ufeff${lines.join('\r\n')}`], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `flowpilot-models-${new Date().toISOString().slice(0, 10)}.csv`
+    anchor.click()
+    URL.revokeObjectURL(url)
+    toast.success('模型清单已导出', { description: `共 ${filtered.length} 条（当前筛选结果）` })
+  }
+
   function requestDelete(id: string) {
     if (runningInstanceNames.length > 0) {
       toast.error('当前无法删除模型', { description: `保护策略：请先停止运行中的实例（${runningInstanceNames.join('、')}）。` })
@@ -209,7 +263,10 @@ export function Models({ models, realMode, modelsRoot, totalBytes, network, runn
     ]
 
   return <>
-    <PageHeader eyebrow="MODEL STORE" title="模型中心" description="本地仓库负责文件与下载，在线获取对接 ModelScope／HF 镜像，组合套装按场景整组部署和验收。" action={tab === 'local' ? <button type="button" className="btn-primary" onClick={onAdd}><Plus className="size-4" />添加模型</button> : undefined} />
+    <PageHeader eyebrow="MODEL STORE" title="模型中心" description="本地仓库负责文件与下载，在线获取对接 ModelScope／HF 镜像，组合套装按场景整组部署和验收。" action={tab === 'local' ? <div className="flex flex-wrap gap-2">
+      <button type="button" className="btn-secondary" onClick={exportList}><Download className="size-4" />导出清单</button>
+      <button type="button" className="btn-primary" onClick={onAdd}><Plus className="size-4" />添加模型</button>
+    </div> : undefined} />
     <div className="mb-4 flex gap-1 overflow-x-auto rounded-lg bg-slate-100 p-1 text-sm" role="tablist" aria-label="模型中心页签">
       {([['local', '本地仓库'], ['online', '在线获取'], ['bundles', '组合套装']] as [ModelTabKey, string][]).map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={tab === key} aria-controls={`model-panel-${key}`} className={`min-h-9 rounded-md px-4 py-1.5 font-medium whitespace-nowrap transition ${tab === key ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`} onClick={() => onTabChange(key)}>{label}</button>)}
     </div>
@@ -244,7 +301,7 @@ export function Models({ models, realMode, modelsRoot, totalBytes, network, runn
             <span className="text-xs text-slate-500">{group.items.length} 个{group.bytes > 0 ? ` · ${formatTotal(group.bytes)}` : ''}</span>
           </button>
           {!isCollapsed && <div className="overflow-x-auto border-t border-slate-100"><table className="data-table min-w-[980px]"><thead><tr><th>模型名称</th><th>大小</th><th>状态／进度</th><th>来源</th><th>操作</th></tr></thead><tbody>
-            {group.items.map((item) => <ModelRow key={item.id} item={item} duplicateCount={duplicateOf(item)} selected={selectedIds.includes(item.id)} onToggleSelect={toggleSelect} onPause={onPause} onDelete={requestDelete} onLocalize={onLocalize} />)}
+            {group.items.map((item) => <ModelRow key={item.id} item={item} duplicateCount={duplicateOf(item)} selected={selectedIds.includes(item.id)} onToggleSelect={toggleSelect} onDownloadAction={onDownloadAction} onDelete={requestDelete} onLocalize={onLocalize} />)}
           </tbody></table></div>}
         </Panel>
       })}

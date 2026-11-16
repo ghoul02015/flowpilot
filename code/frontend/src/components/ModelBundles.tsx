@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
 import { usePolling } from '@/hooks/use-polling'
 import { AlertTriangle, ArrowRight, CheckCircle2, Cpu, Download, ExternalLink, FileText, Layers, LoaderCircle, Pause, Play, RefreshCw, ShieldAlert, XCircle } from 'lucide-react'
 import { toast } from 'sonner'
@@ -89,6 +89,7 @@ export default function ModelBundles() {
   const [error, setError] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
   // 套装详情支持 ?bundle= 深链接：刷新或分享后仍能打开同一套装。
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [detailId, setDetailId] = useState<string | null>(() => searchParams.get('bundle'))
   const [detail, setDetail] = useState<BundleDetail | null>(null)
@@ -158,6 +159,25 @@ export default function ModelBundles() {
       else next.delete('bundle')
       return next
     }, { replace: true })
+  }
+
+  // 查看进度：安装中的套装直接进入当前子任务详情；尚无子任务（排队）时退回详情抽屉。
+  async function openProgress(card: BundleCard) {
+    try {
+      const data = await getModelBundle(card.id)
+      const install = data.install
+      const items = install?.items ?? []
+      const current = items.find((item) => item.itemKey === install?.currentItemKey && item.childTaskId)
+        ?? items.find((item) => item.status === 'downloading' && item.childTaskId)
+        ?? items.find((item) => item.childTaskId)
+      if (current?.childTaskId) {
+        navigate(`/tasks/${encodeURIComponent(current.childTaskId)}`)
+        return
+      }
+    } catch {
+      // 详情读取失败时退回详情抽屉，用户仍可看到安装状态与错误。
+    }
+    void openDetail(card.id)
   }
 
   // 浏览器前进后退或手动改地址时，详情抽屉跟随 URL。
@@ -261,7 +281,11 @@ export default function ModelBundles() {
 
             <div className="mt-auto flex items-center gap-2 pt-3">
               <button type="button" className="btn-secondary h-9 px-3 text-xs" onClick={() => void openDetail(card.id)}>查看</button>
-              <button type="button" className="btn-primary h-9 px-3 text-xs" onClick={() => { void openDetail(card.id); setWizardOpen(true) }}>
+              <button type="button" className="btn-primary h-9 px-3 text-xs" onClick={() => {
+                if (active && ['queued', 'installing'].includes(active.status)) { void openProgress(card); return }
+                void openDetail(card.id)
+                setWizardOpen(true)
+              }}>
                 {active && ['queued', 'installing'].includes(active.status) ? '查看进度' : card.state.state === 'partial' ? '继续安装' : '预检安装'}
               </button>
             </div>

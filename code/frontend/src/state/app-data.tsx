@@ -50,6 +50,7 @@ interface AppDataValue {
   deleteInstance: (id: string, purge?: boolean) => void
   addModel: (input: AddModelInput) => Promise<boolean>
   pauseModel: (id: string) => void
+  downloadActionModel: (id: string, action: 'pause' | 'resume' | 'cancel' | 'retry') => void
   deleteModel: (id: string) => void
   localizeModel: (id: string) => void
   batchDeleteModels: (ids: string[]) => Promise<void>
@@ -86,7 +87,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const [comfyStatuses, setComfyStatuses] = useState<Record<string, ComfyStatus>>({})
   const [busyIds, setBusyIds] = useState<string[]>([])
   const busyRef = useRef<Set<string>>(new Set())
-  const [backendVersion, setBackendVersion] = useState('0.1.0.8')
+  const [backendVersion, setBackendVersion] = useState('0.1.0.9')
   const [taskSummary, setTaskSummary] = useState({ active: 0, total: 0 })
 
   // 认证引导：先查初始化状态，再尝试恢复会话；401 全局跳登录。
@@ -424,6 +425,23 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       })
   }, [realDownloads, refreshDownloads, requireBackend])
 
+  // 下载任务操作：暂停／继续／取消／重试；成功后同时刷新下载与模型投影。
+  const downloadActionModel = useCallback((id: string, action: 'pause' | 'resume' | 'cancel' | 'retry') => {
+    if (!requireBackend('下载操作')) return
+    downloadActionApi(id, action)
+      .then(() => {
+        const label = action === 'pause' ? '已暂停' : action === 'resume' ? '已继续' : action === 'cancel' ? '已取消' : '已重新开始'
+        toast.success(`下载任务${label}`, { description: id })
+        emitRefresh('downloads', 'models', 'task-summary')
+        void refreshDownloads()
+        void refreshModels()
+      })
+      .catch((error: unknown) => {
+        toast.error('下载操作失败', { description: error instanceof Error ? error.message : '请求失败' })
+        void refreshDownloads()
+      })
+  }, [refreshDownloads, refreshModels, requireBackend])
+
   const deleteModel = useCallback((id: string) => {
     // 下载任务条目（dl- 前缀）：取消并移除任务记录；仓库文件条目：物理删除文件。
     if (id.startsWith('dl-')) {
@@ -551,7 +569,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     activeTasks: taskSummary.active,
     existingModelPaths, createOpen, addModelOpen, setCreateOpen, setAddModelOpen,
     logout, markLoggedIn, openCreateDialog, openAddModelDialog, requireBackend,
-    instanceAction, createInstance, deleteInstance, addModel, pauseModel, deleteModel, localizeModel,
+    instanceAction, createInstance, deleteInstance, addModel, pauseModel, downloadActionModel, deleteModel, localizeModel,
     batchDeleteModels, batchLocalizeModels, marketDownload, onlineDownload,
     refreshInstances, refreshModels, refreshDownloads,
   }

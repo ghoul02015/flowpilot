@@ -94,7 +94,7 @@ function ModelsRoute() {
     network={data.realModels?.network}
     runningInstanceNames={data.displayInstances.filter((item) => item.status === 'running').map((item) => item.name)}
     onAdd={data.openAddModelDialog}
-    onPause={data.pauseModel}
+    onDownloadAction={data.downloadActionModel}
     onDelete={data.deleteModel}
     onLocalize={data.localizeModel}
     onBatchDelete={data.batchDeleteModels}

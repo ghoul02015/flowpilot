@@ -261,6 +261,18 @@ async function main() {
     check('模型分组可折叠', before !== after, `${before}→${after}`)
     await groupToggle.click()
   }
+  // 导出清单与下载任务操作
+  const [csv] = await Promise.all([
+    page.waitForEvent('download', { timeout: 10000 }).catch(() => null),
+    page.getByRole('button', { name: '导出清单' }).click(),
+  ])
+  check('导出模型清单 CSV', Boolean(csv && csv.suggestedFilename().endsWith('.csv')), csv ? csv.suggestedFilename() : 'no download')
+  await page.goto(base + '/models?tab=local', { waitUntil: 'networkidle' })
+  await page.waitForTimeout(1200)
+  const retryButtons = await page.getByRole('button', { name: /重试/ }).count()
+  check('未完成下载提供重试入口', retryButtons > 0, `retry=${retryButtons}`)
+  const copyButtons = await page.getByRole('button', { name: /复制 .* 路径/ }).count()
+  check('就绪模型提供复制路径', copyButtons > 0, `copy=${copyButtons}`)
   // 添加模型弹窗
   await page.getByRole('button', { name: '添加模型' }).click()
   await page.waitForTimeout(1500)
@@ -282,6 +294,10 @@ async function main() {
   await page.waitForTimeout(1500)
   check('在线获取页签', await page.getByRole('tab', { name: '在线获取', selected: true }).count() > 0)
   check('在线面板有搜索输入', (await page.getByPlaceholder(/搜索模型名称|搜索模型仓库/).count()) > 0)
+  const entryTops = await page.locator('[data-testid^="market-entry-"]').evaluateAll((nodes) => nodes.slice(0, 2).map((node) => Math.round(node.getBoundingClientRect().top)))
+  check('大屏在线目录双列展示', entryTops.length === 2 && Math.abs(entryTops[0] - entryTops[1]) < 4, JSON.stringify(entryTops))
+  const listHeight = await page.locator('#model-panel-online .overflow-y-auto').first().evaluate((node) => node.clientHeight).catch(() => 0)
+  check('在线列表可视高度不小于 400px', listHeight >= 400, `height=${listHeight}`)
   await shot(page, '07-models-online')
   // 组合套装
   await page.goto(base + '/models?tab=bundles', { waitUntil: 'networkidle' })
@@ -320,7 +336,8 @@ async function main() {
   const detailButton = page.getByRole('button', { name: '详情' }).first()
   if (await detailButton.count()) {
     await detailButton.click()
-    await page.waitForTimeout(1200)
+    await page.waitForURL(/\/tasks\/[^/]+$/, { timeout: 15000 }).catch(() => {})
+    await page.getByText('任务信息').first().waitFor({ timeout: 15000 }).catch(() => {})
     check('任务详情路由打开', /\/tasks\/.+/.test(page.url()), page.url())
     const detailText = await page.locator('main').innerText()
     check('详情含任务字段与失败原因/信息', detailText.includes('任务信息') && /失败原因|最新信息/.test(detailText))
@@ -481,7 +498,8 @@ async function main() {
   const failDetailButton = page.getByRole('button', { name: '详情' }).first()
   if (await failDetailButton.count()) {
     await failDetailButton.click()
-    await page.waitForTimeout(1200)
+    await page.waitForURL(/\/tasks\/[^/]+$/, { timeout: 15000 }).catch(() => {})
+    await page.getByText('任务信息').first().waitFor({ timeout: 15000 }).catch(() => {})
     const detailFail = await page.locator('main').innerText()
     check('失败任务展示失败原因区块', detailFail.includes('失败原因'), detailFail.slice(0, 80))
     const gridClass = await page.evaluate(() => document.querySelector('main > div.grid')?.className ?? '')
