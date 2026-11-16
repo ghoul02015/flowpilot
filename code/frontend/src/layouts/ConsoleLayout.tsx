@@ -6,7 +6,7 @@ import { Activity, Box, ChevronRight, Cpu, Database, Images, LayoutDashboard, Lo
 import { Toaster } from 'sonner'
 import { AddModelDialog } from '@/components/AddModelDialog'
 import { CreateInstanceDialog } from '@/components/CreateInstanceDialog'
-import logoMark from '@/assets/logo-mark.png'
+import logoFull from '@/assets/logo-hl.png'
 import { documentTitle, pageFromPath, pageLabels, pagePaths, pageTitles } from '@/lib/routes'
 import { useAppData } from '@/state/app-data'
 import type { PageKey } from '@/types'
@@ -52,11 +52,12 @@ export function ConsoleLayout() {
     <div className="min-h-dvh bg-[oklch(0.975_0.007_340)] text-slate-800">
       <Toaster position="top-right" richColors closeButton />
       {mobileOpen && <button type="button" aria-label="关闭导航" className="fixed inset-0 z-30 cursor-pointer bg-slate-950/45 md:hidden" onClick={() => setMobileOpen(false)} />}
-      <aside className={`fixed inset-y-0 left-0 z-40 flex w-[248px] flex-col bg-[oklch(0.20_0.028_340)] text-slate-300 transition-transform duration-200 md:translate-x-0 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="flex h-20 items-center gap-3 border-b border-white/8 px-5">
-          <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-white p-1.5 shadow-sm"><img src={logoMark} alt="慧浪智算" className="h-full w-full object-contain" /></div>
-          <div><div className="font-bold tracking-wide text-white">慧浪智算</div><div className="mt-0.5 text-xs font-medium tracking-[0.16em] text-teal-300">FLOWPILOT</div></div>
-          <button type="button" className="ml-auto cursor-pointer rounded-md p-2 text-slate-300 hover:bg-white/10 md:hidden" aria-label="关闭菜单" onClick={() => setMobileOpen(false)}><X className="size-5" /></button>
+      <aside className={`fixed inset-y-0 left-0 z-40 flex w-[248px] flex-col border-r border-slate-200 bg-white text-slate-600 transition-transform duration-200 md:translate-x-0 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <div className="flex h-20 items-center gap-3 border-b border-slate-100 px-5">
+          <NavLink to={pagePaths.dashboard} aria-label="返回主页面" title="返回主页面" className="flex min-w-0 flex-1 items-center rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600" onClick={() => setMobileOpen(false)}>
+            <img src={logoFull} alt="慧浪智算 FlowPilot" className="h-10 w-auto max-w-full object-contain object-left" />
+          </NavLink>
+          <button type="button" className="ml-auto cursor-pointer rounded-md p-2 text-slate-400 hover:bg-slate-100 md:hidden" aria-label="关闭菜单" onClick={() => setMobileOpen(false)}><X className="size-5" /></button>
         </div>
         <nav className="flex-1 space-y-1 px-3 py-5" aria-label="主导航">
           {navigation.map(({ key, label, icon: Icon }) => (
@@ -64,22 +65,22 @@ export function ConsoleLayout() {
               key={key}
               to={pagePaths[key]}
               onClick={() => setMobileOpen(false)}
-              className={({ isActive }) => `flex min-h-12 w-full items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-300 ${isActive ? 'bg-white/10 text-white' : 'text-slate-400 hover:bg-white/5 hover:text-white'}`}
+              className={({ isActive }) => `flex min-h-12 w-full items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 ${isActive ? 'bg-brand-50 font-semibold text-brand-700' : 'text-slate-500 hover:bg-brand-50/60 hover:text-brand-700'}`}
               aria-current={page === key ? 'page' : undefined}
             >
               {({ isActive }) => <>
-                <Icon className={`size-5 ${isActive ? 'text-teal-300' : ''}`} />
+                <Icon className={`size-5 ${isActive ? 'text-brand-600' : ''}`} />
                 <span className="flex-1 text-left">{label}</span>
-                {key === 'tasks' && activeTasks > 0 && <span className="rounded-full bg-teal-400/15 px-2 py-0.5 text-xs text-teal-300">{activeTasks}</span>}
+                {key === 'tasks' && activeTasks > 0 && <span className="rounded-full bg-brand-100 px-2 py-0.5 text-xs text-brand-700">{activeTasks}</span>}
               </>}
             </NavLink>
           ))}
         </nav>
-        <div className="mx-3 mb-3 rounded-lg border border-white/8 p-4">
-          <div className="flex items-center gap-2 text-sm font-medium text-white"><span className={`size-2 rounded-full ${backendOnline ? 'bg-emerald-400' : 'bg-rose-400'}`} />{hostInfo.name}</div>
-          <div className="mt-2 text-xs leading-5 text-slate-400">{hostInfo.gpuSummary}<br />{backendOnline ? '管理端运行正常' : '等待后端连接'}</div>
+        <div className="mx-3 mb-3 rounded-lg border border-slate-200 bg-slate-50/70 p-4">
+          <div className="flex items-center gap-2 text-sm font-medium text-slate-800"><span className={`size-2 rounded-full ${backendOnline ? 'bg-emerald-500' : 'bg-rose-500'}`} />{hostInfo.name}</div>
+          <div className="mt-2 text-xs leading-5 text-slate-500">{hostInfo.gpuSummary}<br />{backendOnline ? '管理端运行正常' : '等待后端连接'}</div>
         </div>
-        <div className="border-t border-white/8 px-5 py-4 text-xs text-slate-500">FlowPilot · v{backendVersion}</div>
+        <div className="border-t border-slate-100 px-5 py-4 text-xs text-slate-400">FlowPilot · v{backendVersion}</div>
       </aside>
 
       <div className="min-h-dvh md:pl-[248px]">
