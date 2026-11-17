@@ -196,6 +196,8 @@ sudo /tmp/flowpilot-native/install.sh install
 
 `amd64` 机器请替换包名。离线包已包含 Go 服务、前端、安装器、文档和许可文件，目标机无需访问 GitHub；安装 Docker、NVIDIA 驱动及后续拉取 ComfyUI 镜像／模型仍可能需要网络。
 
+自定义数据目录位于 `/home` 等 systemd 受保护路径时，安装器自动使用 `ProtectHome=read-only`，并仅为 `flowpilot` 账号添加父目录进入权限（ACL `--x`，不允许列出父目录内容）；`ReadWritePaths` 仍只开放数据目录和日志目录，卸载时恢复原始 ACL。此场景需要 `acl` 软件包（提供 `setfacl`／`getfacl`），缺失时安装器会尝试通过 `apt` 安装；完全离线环境请预装该软件包。默认 `/var/lib/flowpilot` 仍使用更严格的 `ProtectHome=true`。
+
 ## 9. 安装目录与文件
 
 | 路径 | 用途 |

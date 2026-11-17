@@ -99,6 +99,7 @@ done
 printf '\n[3/7] 验证真实健康接口与管理员登录\n'
 health="$(curl --noproxy '*' -fsS http://127.0.0.1:18080/api/v1/health)"
 printf '%s\n' "${health}" | grep -q '"version":"0.1.0.16"'
+grep -q '^ProtectHome=true$' /etc/systemd/system/flowpilot.service
 password="$(sed -n 's/^password=//p' /var/lib/flowpilot/initial-credentials)"
 [ -n "${password}" ]
 [ "$(stat -c '%a' /var/lib/flowpilot/initial-credentials)" = "600" ]
@@ -123,23 +124,50 @@ flowpilot-native uninstall --yes
 [ ! -e /opt/flowpilot ]
 [ ! -e /etc/systemd/system/flowpilot.service ]
 
-printf '\n[6/7] 离线目录后台重装后彻底卸载\n'
-rm -f /var/lib/flowpilot/.install/complete.done
-"${WORK}/bundle/install.sh" install --non-interactive --background --random-password --allow-no-gpu --region global
+printf '\n[6/7] Home 自定义目录离线后台重装、最小 ACL 与彻底卸载\n'
+HOME_PARENT=/home/flowpilot-native-test
+HOME_DATA="${HOME_PARENT}/nested/shared"
+mkdir -p "${HOME_DATA}"
+chmod 0700 "${HOME_PARENT}" "${HOME_PARENT}/nested"
+command -v getfacl >/dev/null 2>&1 || {
+  apt-get update -o Acquire::Retries=3
+  apt-get install -y --no-install-recommends acl
+}
+# 同时覆盖预先存在 mask 与没有扩展 ACL 的父目录，卸载后两者都必须逐字恢复。
+setfacl -m mask:--- "${HOME_PARENT}/nested"
+getfacl -p /home "${HOME_PARENT}" "${HOME_PARENT}/nested" > "${WORK}/home-acl.before"
+"${WORK}/bundle/install.sh" install --non-interactive --background --random-password --allow-no-gpu \
+  --region global --data-dir "${HOME_DATA}"
 for _ in $(seq 1 120); do
-  [ -f /var/lib/flowpilot/.install/complete.done ] && break
+  [ -f "${HOME_DATA}/.install/complete.done" ] && break
   sleep 1
 done
-[ -f /var/lib/flowpilot/.install/complete.done ] || {
+[ -f "${HOME_DATA}/.install/complete.done" ] || {
   tail -n 120 /var/log/flowpilot/install/*.log >&2
   exit 1
 }
 curl --noproxy '*' -fsS http://127.0.0.1:18080/api/v1/health | grep -q '"version":"0.1.0.16"'
+grep -q '^ProtectHome=read-only$' /etc/systemd/system/flowpilot.service
+grep -Fq "ReadWritePaths=${HOME_DATA} /var/log/flowpilot" /etc/systemd/system/flowpilot.service
+getfacl -cp "${HOME_PARENT}" | grep -q '^user:flowpilot:--x$'
+getfacl -cp "${HOME_PARENT}/nested" | grep -q '^user:flowpilot:--x$'
+su -s /bin/bash flowpilot -c "printf 'home-data-write-ok\n' > '${HOME_DATA}/acl-write-test'"
+[ "$(cat "${HOME_DATA}/acl-write-test")" = "home-data-write-ok" ]
+if su -s /bin/bash flowpilot -c "ls '${HOME_PARENT}' >/dev/null 2>&1"; then
+  printf 'flowpilot must not list the protected home parent\n' >&2
+  exit 1
+fi
+printf 'preserve-home-data\n' > "${HOME_DATA}/purge-test-sentinel"
 flowpilot-native uninstall --purge --yes
-[ ! -e /var/lib/flowpilot ]
+[ ! -e "${HOME_DATA}" ]
 [ ! -e /opt/flowpilot ]
 [ ! -e /etc/flowpilot ]
 [ ! -e /var/log/flowpilot ]
+getfacl -p /home "${HOME_PARENT}" "${HOME_PARENT}/nested" > "${WORK}/home-acl.after"
+cmp -s "${WORK}/home-acl.before" "${WORK}/home-acl.after" || {
+  printf 'home parent ACLs were not restored\n' >&2
+  exit 1
+}
 if [ "${FLOWPILOT_USER_PREEXISTED}" = "1" ]; then
   # 安装器不得删除底镜像或物理机上原本就存在的同名账户。
   id flowpilot >/dev/null 2>&1 || {

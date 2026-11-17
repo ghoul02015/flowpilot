@@ -245,16 +245,36 @@ require_root() {
   esac
 }
 
+data_dir_in_protected_home() {
+  case "${DATA_DIR}" in
+    /home/*|/root|/root/*|/run/user/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 ensure_tools() {
-  local missing=()
-  command -v curl >/dev/null 2>&1 || missing+=(curl)
-  command -v tar >/dev/null 2>&1 || missing+=(tar)
-  command -v sha256sum >/dev/null 2>&1 || missing+=(coreutils)
+  local missing=() packages=()
+  if ! command -v curl >/dev/null 2>&1; then
+    missing+=(curl)
+    packages+=(ca-certificates curl)
+  fi
+  if ! command -v tar >/dev/null 2>&1; then
+    missing+=(tar)
+    packages+=(tar)
+  fi
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    missing+=(coreutils)
+    packages+=(coreutils)
+  fi
+  if data_dir_in_protected_home && ! command -v setfacl >/dev/null 2>&1; then
+    missing+=(acl)
+    packages+=(acl)
+  fi
   if [ "${#missing[@]}" -gt 0 ]; then
     log "INFO" "安装基础工具：${missing[*]}"
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -o Acquire::Retries=3
-    apt-get install -y --no-install-recommends ca-certificates curl tar coreutils
+    apt-get install -y --no-install-recommends "${packages[@]}"
   fi
 }
 
@@ -595,6 +615,30 @@ backup_before_upgrade() {
   fi
 }
 
+configure_data_dir_access() {
+  data_dir_in_protected_home || return 0
+  command -v setfacl >/dev/null 2>&1 || fail "Home 下自定义数据目录需要 setfacl；请安装 acl 软件包后重试"
+  command -v getfacl >/dev/null 2>&1 || fail "Home 下自定义数据目录需要 getfacl；请安装 acl 软件包后重试"
+  local state="${CONFIG_DIR}/data-dir-access-parents"
+  touch "${state}"
+  chmod 0600 "${state}"
+  local parent="" original="" original_mask="" original_acl=""
+  parent="$(dirname "${DATA_DIR}")"
+  while [ "${parent}" != "/" ]; do
+    [ -d "${parent}" ] || fail "数据目录父路径不存在：${parent}"
+    if ! awk -F '\t' -v path="${parent}" '$1 == path { found=1 } END { exit !found }' "${state}"; then
+      original_acl="$(getfacl -cp "${parent}")"
+      original="$(printf '%s\n' "${original_acl}" | awk -F: '$1 == "user" && $2 == "flowpilot" { print $3; exit }')"
+      original_mask="$(printf '%s\n' "${original_acl}" | awk -F: '$1 == "mask" { print $3; exit }')"
+      printf '%s\t%s\t%s\n' "${parent}" "${original:--}" "${original_mask:--}" >> "${state}"
+    fi
+    # 仅允许进入目录，不允许列出或读取父目录中的其他内容。
+    setfacl -m u:flowpilot:--x "${parent}"
+    parent="$(dirname "${parent}")"
+  done
+  log "INFO" "已为 Home 下数据目录配置 flowpilot 父目录进入权限（仅 ACL --x）"
+}
+
 install_files() {
   ensure_user
   backup_before_upgrade
@@ -639,14 +683,19 @@ install_files() {
   chown -R root:root "${STATE_DIR}"
   chmod 0750 "${DATA_DIR}"
   chmod 0700 "${STATE_DIR}"
+  configure_data_dir_access
   mark_done files
   log "INFO" "程序目录：${PREFIX}/current"
   log "INFO" "数据目录：${DATA_DIR}"
 }
 
 write_service() {
-  local comfy_image="" comfy_workdir="" candidate=""
+  local comfy_image="" comfy_workdir="" candidate="" protect_home="true"
   local models_target="/data/models" outputs_target="/data/outputs" workflows_target="/data/workflows"
+  if data_dir_in_protected_home; then
+    # ReadWritePaths 仍只开放数据目录；read-only 仅让该路径穿过 Home 隔离。
+    protect_home="read-only"
+  fi
   while IFS= read -r candidate; do
     [ -n "${candidate}" ] && [ "${candidate}" != "<none>:<none>" ] || continue
     if [ "$(docker image inspect "${candidate}" --format '{{ index .Config.Labels "flowpilot.kind" }}' 2>/dev/null || true)" = "comfyui" ]; then
@@ -703,7 +752,7 @@ TimeoutStopSec=20s
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ProtectHome=true
+ProtectHome=${protect_home}
 ReadWritePaths=${DATA_DIR} ${LOG_DIR}
 StandardOutput=append:${LOG_DIR}/service.log
 StandardError=append:${LOG_DIR}/service.log
@@ -815,8 +864,8 @@ install_main() {
   trap 'on_signal HUP' HUP
   trap 'on_signal INT' INT
   trap 'on_signal TERM' TERM
-  ensure_tools
   prompt_wizard
+  ensure_tools
   save_config
   if ! is_done preflight; then
     preflight
@@ -885,6 +934,36 @@ owned_tree() {
   [ "${path}" = "${default_path}" ] || [ -f "${path}/${marker}" ]
 }
 
+restore_data_dir_access() {
+  local state="${CONFIG_DIR}/data-dir-access-parents"
+  [ -f "${state}" ] || return 0
+  command -v setfacl >/dev/null 2>&1 || fail "恢复数据目录父路径 ACL 需要 setfacl；请安装 acl 软件包后重试卸载"
+  local parent="" original="" original_mask=""
+  while IFS=$'\t' read -r parent original original_mask; do
+    [ -n "${parent}" ] || continue
+    valid_path "${parent}" || fail "ACL 恢复记录包含不安全路径：${parent}"
+    case "${parent}" in
+      /home|/home/*|/root|/run|/run/user|/run/user/*) ;;
+      *) fail "ACL 恢复记录超出允许范围：${parent}" ;;
+    esac
+    [ -d "${parent}" ] || continue
+    if [ "${original:--}" = "-" ]; then
+      setfacl -x u:flowpilot "${parent}"
+    else
+      [[ "${original}" =~ ^[rwx-]{3}$ ]] || fail "ACL 恢复记录格式无效：${parent}"
+      setfacl -m "u:flowpilot:${original}" "${parent}"
+    fi
+    if [ "${original_mask:--}" = "-" ]; then
+      setfacl -x mask "${parent}"
+    else
+      [[ "${original_mask}" =~ ^[rwx-]{3}$ ]] || fail "ACL mask 恢复记录格式无效：${parent}"
+      setfacl -m "mask:${original_mask}" "${parent}"
+    fi
+  done < "${state}"
+  rm -f "${state}"
+  log "INFO" "已恢复数据目录父路径原始 ACL"
+}
+
 uninstall_main() {
   require_root
   init_logging
@@ -910,6 +989,7 @@ uninstall_main() {
   rm -f "/etc/systemd/system/${SERVICE_NAME}"
   systemctl daemon-reload
   systemctl reset-failed "${SERVICE_NAME}" >/dev/null 2>&1 || true
+  restore_data_dir_access
   [ "${REMOVE_INSTANCES}" != "1" ] || remove_instances
   rm -f /usr/local/bin/flowpilot-native
   rm -rf -- "${PREFIX}"

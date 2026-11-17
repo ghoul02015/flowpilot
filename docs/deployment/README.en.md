@@ -196,6 +196,8 @@ sudo /tmp/flowpilot-native/install.sh install
 
 Substitute the `amd64` archive where appropriate. The offline archive contains the Go service, frontend, installer, documentation, and license files; GitHub access is not required on the target. Docker or NVIDIA installation and later ComfyUI image/model downloads may still require network access.
 
+For a custom data directory under a systemd-protected path such as `/home`, the installer automatically uses `ProtectHome=read-only` and grants the `flowpilot` account traverse-only access (`--x`) to parent directories, without permission to list their contents. `ReadWritePaths` remains limited to the data and log directories, and the original ACLs are restored during uninstall. This requires the `acl` package (`setfacl` / `getfacl`); the installer attempts an `apt` installation when it is missing, so fully offline hosts should preinstall it. The default `/var/lib/flowpilot` layout retains the stricter `ProtectHome=true` setting.
+
 ## 9. Installation layout
 
 | Path | Purpose |
