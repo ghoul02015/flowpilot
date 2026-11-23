@@ -1,0 +1,401 @@
+#!/usr/bin/env bash
+###############################################################################
+# FlowPilot ComfyUI 镜像一键安装脚本（多显卡自适应）
+# 由 FlowPilot 平台生成（独立分发模板（需通过 COMFYUI_COMMIT 指定固定提交）），也可独立分发使用。
+#
+# 适用：纯净 Linux 主机（x86_64 / aarch64），自动检测显卡并选择对应构建配方：
+#   - NVIDIA Blackwell GB10（sm_121，如 DGX Spark）→ PyTorch cu130
+#   - NVIDIA Blackwell 消费级 / B 系列（sm_100/sm_120）→ PyTorch cu128
+#   - NVIDIA Ampere / Ada / Hopper（sm_80–sm_90）→ PyTorch cu126
+#   - NVIDIA Turing 及更早（<= sm_75）→ PyTorch cu121
+#   - AMD GPU（/dev/kfd 或 rocm-smi）→ PyTorch ROCm 6.2
+#   - 无 GPU → CPU 版 PyTorch
+#
+# 本脚本只负责"纯净机器 → 可运行的 ComfyUI 镜像"：
+#   安装 Docker → 配置国内加速 → NVIDIA Container Toolkit →
+#   克隆 ComfyUI 源码（多通道加速）→ 生成 Dockerfile → 构建镜像。
+# 模型下载与共享仓库挂载由 FlowPilot 平台（模型中心／实例管理）负责，
+# 本脚本不下载任何模型。
+#
+# 用法：bash install-comfyui-image.sh
+# 可用环境变量（非交互自定义，等同生成时向导参数）：
+#   VARIANT=auto              auto|nvidia-cu130|nvidia-cu128|nvidia-cu126|nvidia-cu121|amd-rocm|cpu
+#   IMAGE_NAME=flowpilot/comfyui:local        构建出的本地镜像名
+#   COMFYUI_REF=v0.45.0        ComfyUI 原始版本引用（信息展示）
+#   COMFYUI_COMMIT=989d93d…    ComfyUI 固定 commit（本示例已固定，可用环境变量覆盖）
+#   WITH_MANAGER=1        1=内置 ComfyUI-Manager 自定义节点
+#   INSTALL_DIR=~/comfyui-image 安装（构建上下文）目录
+#   PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple  容器内 pip 源
+#   TORCH_INDEX_URL=            torch 轮子源（默认按显卡配方自动选择）
+#   NONINTERACTIVE=1            跳过所有询问，全用默认/环境变量值
+###############################################################################
+set -euo pipefail
+
+# --------------------------- 向导参数（生成时固化默认值） --------------------
+VARIANT="${VARIANT:-auto}"
+IMAGE_NAME="${IMAGE_NAME:-flowpilot/comfyui:local}"
+COMFYUI_REF="${COMFYUI_REF:-v0.45.0}"
+COMFYUI_COMMIT="${COMFYUI_COMMIT:-989d93d0d968e704c589ce0146bb18c77f6b50cc}"
+COMFYUI_VERSION="${COMFYUI_VERSION:-v0.45.0}"
+COMFYUI_CHANNEL="${COMFYUI_CHANNEL:-release}"
+COMFYUI_COMMIT_AT="${COMFYUI_COMMIT_AT:-}"
+COMFYUI_PUBLISHED_AT="${COMFYUI_PUBLISHED_AT:-2026-11-10T21:42:42Z}"
+COMFYUI_RESOLVED_AT="${COMFYUI_RESOLVED_AT:-2026-11-11T06:00:00Z}"
+COMFYUI_REPOSITORY="${COMFYUI_REPOSITORY:-Comfy-Org/ComfyUI}"
+[ -n "$COMFYUI_VERSION" ] || COMFYUI_VERSION="$COMFYUI_REF"
+[ -n "$COMFYUI_COMMIT" ] || die "安装脚本缺少固定 ComfyUI commit，请重新从 FlowPilot 生成"
+WITH_MANAGER="${WITH_MANAGER:-1}"
+PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+TORCH_INDEX_URL="${TORCH_INDEX_URL:-}"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/comfyui-image}"
+
+# 国内实测可用的 Docker Hub 加速源（冗余多个）
+REGISTRY_MIRRORS='[
+  "https://docker.m.daocloud.io",
+  "https://docker.1ms.run",
+  "https://docker.xuanyuan.me",
+  "https://docker.mirrors.ustc.edu.cn"
+]'
+# GitHub 克隆通道（按优先级排序；低速自动放弃：30 秒低于 100KB/s 即换下一家）
+GIT_CLONE_CHANNELS=(
+  "https://ghfast.top/https://github.com/%s.git"
+  "https://gh-proxy.com/https://github.com/%s.git"
+  "https://gitclone.com/github.com/%s"
+  "https://github.com/%s.git"
+)
+GIT_LOW_SPEED_LIMIT="${GIT_LOW_SPEED_LIMIT:-102400}"
+GIT_LOW_SPEED_TIME="${GIT_LOW_SPEED_TIME:-30}"
+GIT_CLONE_TIMEOUT="${GIT_CLONE_TIMEOUT:-300}"
+
+# ----------------------------- 小工具函数 -----------------------------------
+log()  { printf "\033[1;32m[✓]\033[0m %s\n" "$*"; }
+info() { printf "\033[1;34m[i]\033[0m %s\n" "$*"; }
+warn() { printf "\033[1;33m[!]\033[0m %s\n" "$*"; }
+die()  { printf "\033[1;31m[✗]\033[0m %s\n" "$*" >&2; exit 1; }
+
+need_sudo() {
+  if [ "$(id -u)" -ne 0 ]; then
+    command -v sudo >/dev/null 2>&1 || die "需要 sudo 权限，请用普通用户 + sudo 运行"
+    SUDO="sudo"
+    # 预检 sudo 凭据：交互模式先 sudo -v 缓存凭据，避免后续步骤在
+    # 下载/构建中途卡在密码提示；非交互模式要求免密 sudo 或先交互跑一次。
+    if ! sudo -n true 2>/dev/null; then
+      if [ "${NONINTERACTIVE:-0}" = "1" ]; then
+        die "当前用户 sudo 需要密码，NONINTERACTIVE 模式无法继续；请先交互执行一次本脚本（sudo 凭据会缓存），或配置 NOPASSWD 后重试"
+      fi
+      sudo -v || die "sudo 认证失败"
+    fi
+  else
+    SUDO=""
+  fi
+}
+
+confirm_default() {
+  # confirm_default <提示> <当前值> —— 交互模式允许回车采用当前值
+  [ "${NONINTERACTIVE:-0}" = "1" ] && return 0
+  local answer
+  read -r -p "$1 [$2]: " answer
+  printf '%s' "${answer:-$2}"
+}
+
+# ------------------------- 0. 环境预检 --------------------------------------
+info "========== 步骤 0/6：环境预检 =========="
+ARCH="$(uname -m)"
+case "$ARCH" in x86_64|aarch64) ;; *) warn "未验证的架构：$ARCH，继续尝试";; esac
+need_sudo
+
+# 显卡检测（VARIANT=auto 时）
+GPU_KIND="cpu"; GPU_NAME="无"; COMPUTE_CAP=""
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+  GPU_KIND="nvidia"
+  GPU_NAME="$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+  COMPUTE_CAP="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | tr -d ' ')"
+elif [ -e /dev/kfd ] || command -v rocm-smi >/dev/null 2>&1; then
+  GPU_KIND="amd"
+  GPU_NAME="$(rocm-smi --showproductname 2>/dev/null | awk -F': ' '/Card series/{print $2; exit}' || echo 'AMD GPU')"
+fi
+log "硬件检测：架构 $ARCH · 显卡 $GPU_KIND（$GPU_NAME）${COMPUTE_CAP:+ · 计算能力 $COMPUTE_CAP}"
+
+# 按计算能力推导 NVIDIA 配方
+resolve_variant() {
+  case "$VARIANT" in
+    auto|"")
+      case "$GPU_KIND" in
+        nvidia)
+          local major="${COMPUTE_CAP%%.*}"
+          [ -z "$major" ] && major=0
+          if [ "$major" -ge 12 ]; then echo "nvidia-cu130"
+          elif [ "$major" -ge 10 ]; then echo "nvidia-cu128"
+          elif [ "$major" -ge 8 ];  then echo "nvidia-cu126"
+          else echo "nvidia-cu121"; fi ;;
+        amd) echo "amd-rocm" ;;
+        *)   echo "cpu" ;;
+      esac ;;
+    *) echo "$VARIANT" ;;
+  esac
+}
+VARIANT_RESOLVED="$(resolve_variant)"
+log "构建配方：$VARIANT_RESOLVED"
+
+# 配方参数表：torch 轮子源与构建标签
+case "$VARIANT_RESOLVED" in
+  nvidia-cu130) TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu130}" ;;
+  nvidia-cu128) TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}" ;;
+  nvidia-cu126) TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu126}" ;;
+  nvidia-cu121) TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu121}" ;;
+  amd-rocm)     TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/rocm6.2}" ;;
+  cpu)          TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}" ;;
+  *) die "未知配方：$VARIANT_RESOLVED" ;;
+esac
+
+# 交互确认关键参数
+if [ "${NONINTERACTIVE:-0}" != "1" ]; then
+  IMAGE_NAME="$(confirm_default '镜像名称' "$IMAGE_NAME")"
+  info "ComfyUI 已固定：${COMFYUI_VERSION:-$COMFYUI_REF}@${COMFYUI_COMMIT:0:7}（构建不会跟随分支漂移）"
+fi
+
+# -------------------- 1. 安装 Docker 与 GPU 运行时 ---------------------------
+info "========== 步骤 1/6：Docker 与 GPU 运行时 =========="
+if ! command -v docker >/dev/null 2>&1; then
+  warn "未检测到 Docker，使用阿里云镜像脚本安装..."
+  curl -fsSL https://get.docker.com | $SUDO bash -s docker --mirror Aliyun
+  $SUDO usermod -aG docker "$USER" || true
+fi
+if [ "$GPU_KIND" = "nvidia" ]; then
+  if ! docker info 2>/dev/null | grep -qi nvidia && ! docker info 2>/dev/null | grep -q '"gpu"'; then
+    warn "Docker 未启用 NVIDIA 运行时，安装 nvidia-container-toolkit..."
+    $SUDO apt-get update && $SUDO apt-get install -y nvidia-container-toolkit
+    $SUDO nvidia-ctk runtime configure --runtime=docker || true
+    $SUDO systemctl restart docker
+  fi
+fi
+DOCKER="docker"
+docker ps >/dev/null 2>&1 || DOCKER="$SUDO docker"
+log "Docker 就绪：$($DOCKER version --format '{{.Server.Version}}' 2>/dev/null || echo unknown)"
+
+# -------------------- 2. 配置 Docker Hub 国内镜像加速 ------------------------
+info "========== 步骤 2/6：配置 Docker Hub 国内镜像加速 =========="
+$SUDO python3 - <<PYEOF
+import json, os
+p = "/etc/docker/daemon.json"
+cfg = {}
+if os.path.exists(p):
+    try:
+        cfg = json.load(open(p))
+    except Exception:
+        os.rename(p, p + ".bak"); cfg = {}
+mirrors = json.loads('''$REGISTRY_MIRRORS''')
+if cfg.get("registry-mirrors") != mirrors:
+    cfg["registry-mirrors"] = mirrors
+    json.dump(cfg, open(p, "w"), indent=2, ensure_ascii=False)
+    print("UPDATED")
+else:
+    print("UNCHANGED")
+PYEOF
+$SUDO systemctl restart docker
+sleep 2
+log "镜像加速已配置"
+
+# -------------------- 3. 获取 ComfyUI 源码（固定 commit） ---------------------
+info "========== 步骤 3/6：获取 ComfyUI 源码（$COMFYUI_REF@${COMFYUI_COMMIT:0:7}） =========="
+mkdir -p "$INSTALL_DIR"
+git_clone_latest() {
+  local repo_path="$1" dest="$2" ref="${3:-}"
+  if [ -d "$dest/.git" ]; then
+    log "已存在，跳过克隆：$dest"
+    return 0
+  fi
+  rm -rf "$dest"
+  local tmpl url
+  for tmpl in "${GIT_CLONE_CHANNELS[@]}"; do
+    url="$(printf "$tmpl" "$repo_path")"
+    info "尝试通道：$url"
+    local args=(clone --depth 1)
+    [ -n "$ref" ] && args+=(--branch "$ref")
+    if timeout "$GIT_CLONE_TIMEOUT" git \
+        -c http.lowSpeedLimit="$GIT_LOW_SPEED_LIMIT" \
+        -c http.lowSpeedTime="$GIT_LOW_SPEED_TIME" \
+        "${args[@]}" "$url" "$dest"; then
+      log "克隆成功：$url"
+      return 0
+    fi
+    warn "该通道失败或速度过慢，换下一家..."
+    rm -rf "$dest"
+  done
+  die "所有 GitHub 通道均失败。可手动克隆后放到 $dest（需含 .git 目录），再重跑本脚本"
+}
+git_fetch_fixed_commit() {
+  local repo_path="$1" dest="$2" commit="$3"
+  if [ -d "$dest/.git" ] && [ "$(git -C "$dest" rev-parse HEAD 2>/dev/null || true)" = "$commit" ]; then
+    log "已存在固定提交，跳过获取：$dest@${commit:0:7}"
+    return 0
+  fi
+  rm -rf "$dest"
+  local tmpl url
+  for tmpl in "${GIT_CLONE_CHANNELS[@]}"; do
+    url="$(printf "$tmpl" "$repo_path")"
+    info "尝试通道：$url（固定 ${commit:0:7}）"
+    rm -rf "$dest"
+    mkdir -p "$dest"
+    git -C "$dest" init -q
+    git -C "$dest" remote add origin "$url"
+    if timeout "$GIT_CLONE_TIMEOUT" git -C "$dest" \
+        -c http.lowSpeedLimit="$GIT_LOW_SPEED_LIMIT" \
+        -c http.lowSpeedTime="$GIT_LOW_SPEED_TIME" \
+        fetch --depth 1 origin "$commit" \
+      && git -C "$dest" checkout -q --detach "$commit" \
+      && [ "$(git -C "$dest" rev-parse HEAD)" = "$commit" ]; then
+      log "固定提交获取成功：$url@${commit:0:7}"
+      return 0
+    fi
+    warn "该通道失败、速度过慢或 commit 不一致，换下一家..."
+  done
+  rm -rf "$dest"
+  die "无法获取固定 commit ${commit}。请检查网络或手动准备 $dest（HEAD 必须等于该 commit）"
+}
+git_fetch_fixed_commit "Comfy-Org/ComfyUI" "$INSTALL_DIR/ComfyUI" "$COMFYUI_COMMIT"
+if [ "$WITH_MANAGER" = "1" ]; then
+  git_clone_latest "ltdrdata/ComfyUI-Manager" "$INSTALL_DIR/ComfyUI-Manager"
+fi
+
+# -------------------- 4. 生成 Dockerfile ------------------------------------
+info "========== 步骤 4/6：生成 Dockerfile（$VARIANT_RESOLVED） =========="
+COMMON_ENV='ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    HF_ENDPOINT=https://hf-mirror.com \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True'
+cat > "$INSTALL_DIR/comfyui-source.json" <<JSON
+{
+  "repository": "${COMFYUI_REPOSITORY}",
+  "ref": "${COMFYUI_REF}",
+  "version": "${COMFYUI_VERSION}",
+  "commit": "${COMFYUI_COMMIT}",
+  "channel": "${COMFYUI_CHANNEL}",
+  "commitAt": "${COMFYUI_COMMIT_AT}",
+  "publishedAt": "${COMFYUI_PUBLISHED_AT}",
+  "resolvedAt": "${COMFYUI_RESOLVED_AT}"
+}
+JSON
+SOURCE_LABELS="$(cat <<LABELS
+LABEL org.opencontainers.image.title="ComfyUI" \
+      org.opencontainers.image.revision="${COMFYUI_COMMIT}" \
+      org.opencontainers.image.version="${COMFYUI_VERSION}" \
+      org.opencontainers.image.source="https://github.com/Comfy-Org/ComfyUI" \
+      flowpilot.kind="comfyui" \
+      flowpilot.build.variant="${VARIANT_RESOLVED}" \
+      flowpilot.build.platform="${ARCH}" \
+      flowpilot.comfyui.ref="${COMFYUI_REF}" \
+      flowpilot.comfyui.version="${COMFYUI_VERSION}" \
+      flowpilot.comfyui.commit="${COMFYUI_COMMIT}" \
+      flowpilot.comfyui.channel="${COMFYUI_CHANNEL}" \
+      flowpilot.comfyui.commit_date="${COMFYUI_COMMIT_AT}" \
+      flowpilot.comfyui.published_at="${COMFYUI_PUBLISHED_AT}" \
+      flowpilot.comfyui.resolved_at="${COMFYUI_RESOLVED_AT}" \
+      flowpilot.comfyui.repository="${COMFYUI_REPOSITORY}"
+LABELS
+)"
+
+if [ "$VARIANT_RESOLVED" = "amd-rocm" ]; then
+  # AMD：基于官方 ROCm PyTorch 镜像，省去手工装 ROCm 运行时
+  cat > "$INSTALL_DIR/Dockerfile" <<EOF
+FROM rocm/pytorch:rocm6.2_ubuntu22.04_py3.10_pytorch_release_2.3.0
+ARG PIP_INDEX_URL=${PIP_INDEX_URL}
+${SOURCE_LABELS}
+${COMMON_ENV}
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git curl ca-certificates ffmpeg libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -U pip setuptools wheel -i \$PIP_INDEX_URL
+COPY ComfyUI /app/ComfyUI
+COPY comfyui-source.json /opt/flowpilot/comfyui-source.json
+WORKDIR /app/ComfyUI
+RUN --mount=type=cache,target=/root/.cache/pip \
+    grep -vE '^(torch|torchvision|torchaudio)\b' requirements.txt > /tmp/req.txt \
+    && ( pip install -r /tmp/req.txt -i \$PIP_INDEX_URL \
+      || pip install -r /tmp/req.txt -i https://mirrors.aliyun.com/pypi/simple/ \
+      || pip install -r /tmp/req.txt -i https://pypi.org/simple )
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install accelerate sentencepiece einops opencv-python-headless gitpython -i \$PIP_INDEX_URL \
+    && python -c "import torch; print('torch', torch.__version__, 'hip', torch.version.hip)" \
+    && python -c "import torchsde, einops, safetensors, transformers, aiohttp; print('依赖自检通过')"
+EOF
+else
+  # NVIDIA / CPU：Ubuntu 基底 + 按配方安装对应 torch 轮子。
+  # 关键顺序：必须先装带 CUDA 的 torch，再装 requirements ——
+  # 否则 kornia 等包会把 PyPI 上的巨型 nvidia-* 轮子整套拉下来。
+  cat > "$INSTALL_DIR/Dockerfile" <<EOF
+FROM ubuntu:24.04
+ARG PIP_INDEX_URL=${PIP_INDEX_URL}
+ARG TORCH_INDEX_URL=${TORCH_INDEX_URL}
+${SOURCE_LABELS}
+${COMMON_ENV}
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 python3-venv python3-dev git curl ca-certificates \
+      ffmpeg libgl1 libglib2.0-0 build-essential \
+    && rm -rf /var/lib/apt/lists/*
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:\$PATH"
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -U pip setuptools wheel -i \$PIP_INDEX_URL
+# 先装配方指定的 torch（CUDA/CPU 轮子源），再装 ComfyUI 依赖
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install torch torchvision torchaudio --index-url \$TORCH_INDEX_URL
+COPY ComfyUI /app/ComfyUI
+COPY comfyui-source.json /opt/flowpilot/comfyui-source.json
+WORKDIR /app/ComfyUI
+RUN --mount=type=cache,target=/root/.cache/pip \
+    grep -vE '^(torch|torchvision|torchaudio)\b' requirements.txt > /tmp/req.txt \
+    && ( pip install -r /tmp/req.txt -i \$PIP_INDEX_URL \
+      || pip install -r /tmp/req.txt -i https://mirrors.aliyun.com/pypi/simple/ \
+      || pip install -r /tmp/req.txt -i https://pypi.org/simple )
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install accelerate sentencepiece einops opencv-python-headless gitpython -i \$PIP_INDEX_URL \
+    && python -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda)" \
+    && python -c "import torchsde, einops, safetensors, transformers, aiohttp; print('依赖自检通过')"
+EOF
+fi
+
+if [ "$WITH_MANAGER" = "1" ]; then
+  cat >> "$INSTALL_DIR/Dockerfile" <<'EOF'
+COPY ComfyUI-Manager /app/ComfyUI/custom_nodes/ComfyUI-Manager
+EOF
+fi
+cat >> "$INSTALL_DIR/Dockerfile" <<'EOF'
+EXPOSE 8188
+CMD ["python", "main.py", "--listen", "0.0.0.0", "--port", "8188"]
+EOF
+log "Dockerfile 已生成"
+
+# -------------------- 5. 构建镜像 --------------------------------------------
+info "========== 步骤 5/6：构建镜像 $IMAGE_NAME（首次约 3GB，请耐心等待） =========="
+PLATFORM=""
+case "$ARCH" in
+  aarch64) PLATFORM="linux/arm64" ;;
+  x86_64)  PLATFORM="linux/amd64" ;;
+esac
+DOCKER_BUILDKIT=1 $DOCKER build \
+  --network=host \
+  ${PLATFORM:+--platform "$PLATFORM"} \
+  --build-arg PIP_INDEX_URL="$PIP_INDEX_URL" \
+  --build-arg TORCH_INDEX_URL="$TORCH_INDEX_URL" \
+  -t "$IMAGE_NAME" \
+  -f "$INSTALL_DIR/Dockerfile" "$INSTALL_DIR"
+log "镜像构建完成：$IMAGE_NAME"
+
+# -------------------- 6. 完成说明 --------------------------------------------
+info "========== 步骤 6/6：完成 =========="
+cat <<DONE
+
+  镜像已就绪：$IMAGE_NAME
+
+  下一步（在 FlowPilot 平台中）：
+    1. 打开 FlowPilot Web 界面 → ComfyUI 实例 → 新建实例
+    2. 镜像选择「$IMAGE_NAME」，按需分配 GPU 与端口
+    3. 模型请通过「模型中心」下载到共享仓库，新实例自动可见
+    4. 生成结果统一保存在共享数据目录的 outputs 下
+
+  手动试运行（可选，平台管理无需此步）：
+    $DOCKER run -d --name comfyui-manual $([ "$GPU_KIND" = "nvidia" ] && echo '--gpus all ')$([ "$GPU_KIND" = "amd" ] && echo '--device=/dev/kfd --device=/dev/dri ')-p 8188:8188 $IMAGE_NAME
+
+DONE

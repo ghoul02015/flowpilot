@@ -1,0 +1,122 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 20% 98%;
+    --foreground: 222 25% 14%;
+    --card: 210 20% 99%;
+    --card-foreground: 222 25% 14%;
+    --popover: 210 20% 99%;
+    --popover-foreground: 222 25% 14%;
+    --primary: 187 65% 26%;
+    --primary-foreground: 180 20% 98%;
+    --secondary: 210 20% 96%;
+    --secondary-foreground: 215 20% 20%;
+    --muted: 210 20% 96%;
+    --muted-foreground: 215 15% 42%;
+    --accent: 180 35% 94%;
+    --accent-foreground: 187 60% 22%;
+    --destructive: 0 65% 45%;
+    --destructive-foreground: 0 20% 98%;
+    --border: 210 16% 88%;
+    --input: 210 16% 85%;
+    --ring: 187 60% 38%;
+    --radius: 0.625rem;
+  }
+
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  html {
+    font-family: "Avenir Next", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: hsl(var(--background));
+  }
+
+  body {
+    margin: 0;
+    min-width: 320px;
+    min-height: 100dvh;
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-size: 16px;
+    line-height: 1.6;
+  }
+
+  button, input, select, textarea {
+    font: inherit;
+  }
+
+  button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  ::selection {
+    background: oklch(0.86 0.06 190);
+    color: oklch(0.25 0.04 190);
+  }
+}
+
+@layer components {
+  .btn-primary {
+    /* 主按钮用中深石灰与品牌品红形成「搭档不同色」的层次，避免大面积品红刺眼；slate-900 实测偏沉闷，定为 700。 */
+    @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg bg-slate-700 px-4 text-sm font-semibold text-white shadow-sm transition-colors duration-200 hover:bg-slate-600 active:bg-slate-800;
+  }
+
+  .btn-secondary {
+    @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 transition-colors duration-200 hover:border-slate-400 hover:bg-slate-50 active:bg-slate-100;
+  }
+
+  .btn-danger {
+    @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg bg-rose-700 px-4 text-sm font-semibold text-white transition-colors duration-200 hover:bg-rose-800;
+  }
+
+  .btn-quiet {
+    @apply inline-flex min-h-10 cursor-pointer items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-slate-600 transition-colors duration-200 hover:bg-slate-100 hover:text-slate-900;
+  }
+
+  .icon-button {
+    @apply inline-flex size-11 cursor-pointer items-center justify-center rounded-lg text-slate-500 transition-colors duration-200 hover:bg-slate-100 hover:text-slate-900;
+  }
+
+  .field-label {
+    @apply grid gap-2 text-sm font-medium text-slate-700;
+  }
+
+  .field-input {
+    @apply min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-800 transition-colors duration-200 placeholder:text-slate-400 hover:border-slate-400 focus:border-teal-600;
+  }
+
+  .data-table {
+    @apply w-full border-collapse text-left text-sm;
+  }
+
+  .data-table th {
+    @apply bg-slate-50 px-5 py-3 text-xs font-semibold tracking-wide text-slate-500;
+  }
+
+  .data-table td {
+    @apply border-t border-slate-100 px-5 py-4 align-middle text-slate-700;
+  }
+
+  .data-table tbody tr {
+    @apply transition-colors duration-200 hover:bg-slate-50/80;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

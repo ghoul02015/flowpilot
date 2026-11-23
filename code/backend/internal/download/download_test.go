@@ -1,0 +1,367 @@
+package download
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+var payload = []byte(strings.Repeat("flowpilot-model-weights;", 4096)) // 96 KB
+
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// rangeServer 支持 Range 与限速的测试源。
+func rangeServer(t *testing.T, throttleBytes int64) *httptest.Server {
+	t.Helper()
+	var served atomic.Int64
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := 0
+		if rangeHeader := r.Header.Get("Range"); rangeHeader != "" {
+			if _, err := fmt.Sscanf(rangeHeader, "bytes=%d-", &start); err != nil || start < 0 || start >= len(payload) {
+				w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+				return
+			}
+			w.WriteHeader(http.StatusPartialContent)
+		}
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)-start))
+		for i := start; i < len(payload); i++ {
+			w.Write(payload[i : i+1])
+			if throttleBytes > 0 && served.Add(1)%throttleBytes == 0 {
+				time.Sleep(2 * time.Millisecond)
+			}
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		}
+	}))
+}
+
+func waitStatus(t *testing.T, manager *Manager, id, want string) Task {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		task, err := manager.Get(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if task.Status == want {
+			return task
+		}
+		if task.Status == "failed" && want != "failed" {
+			t.Fatalf("任务失败：%s", task.Message)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("状态未变为 %s：%+v", want, manager.tasks[id].task)
+	return Task{}
+}
+
+// TestMain 测试白名单：httptest 本地服务器需要放行 loopback。
+func TestMain(m *testing.M) {
+	SetDownloadAllowHosts([]string{"127.0.0.1", "localhost"})
+	os.Exit(m.Run())
+}
+
+func TestDownloadCompletesIntoRepository(t *testing.T) {
+	server := rangeServer(t, 0)
+	defer server.Close()
+	root := t.TempDir()
+	manager := NewManager(root, nil, "")
+
+	task, err := manager.Create(Spec{URL: server.URL + "/models/test.safetensors", Category: "checkpoints", SHA256: sha256Hex(payload)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := waitStatus(t, manager, task.ID, "completed")
+	if done.TotalBytes != int64(len(payload)) || done.DownloadedBytes != int64(len(payload)) {
+		t.Fatalf("进度错误：%+v", done)
+	}
+	content, err := os.ReadFile(filepath.Join(root, "checkpoints", "test.safetensors"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != string(payload) {
+		t.Fatal("仓库文件内容不一致")
+	}
+	if _, err := os.Stat(filepath.Join(root, stagingDirName, task.ID+".part")); !os.IsNotExist(err) {
+		t.Fatal("临时分片应已归档")
+	}
+}
+
+func TestPauseAndResume(t *testing.T) {
+	server := rangeServer(t, 256) // 限速，确保能在中途暂停
+	defer server.Close()
+	root := t.TempDir()
+	manager := NewManager(root, nil, "")
+
+	task, err := manager.Create(Spec{URL: server.URL + "/m.bin", Category: "loras"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 等到有进度后暂停。
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		current, _ := manager.Get(task.ID)
+		if current.DownloadedBytes > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("下载无进度")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, err := manager.Action(task.ID, "pause"); err != nil {
+		t.Fatal(err)
+	}
+	paused := waitStatus(t, manager, task.ID, "paused")
+	if paused.DownloadedBytes == 0 || paused.DownloadedBytes >= int64(len(payload)) {
+		t.Fatalf("暂停时进度异常：%d", paused.DownloadedBytes)
+	}
+
+	if _, err := manager.Action(task.ID, "resume"); err != nil {
+		t.Fatal(err)
+	}
+	done := waitStatus(t, manager, task.ID, "completed")
+	if done.DownloadedBytes != int64(len(payload)) {
+		t.Fatalf("续传后大小错误：%d", done.DownloadedBytes)
+	}
+	content, _ := os.ReadFile(filepath.Join(root, "loras", "m.bin"))
+	if string(content) != string(payload) {
+		t.Fatal("续传文件内容不一致")
+	}
+}
+
+func TestSHA256MismatchFails(t *testing.T) {
+	server := rangeServer(t, 0)
+	defer server.Close()
+	manager := NewManager(t.TempDir(), nil, "")
+
+	task, err := manager.Create(Spec{URL: server.URL + "/m.bin", Category: "vae", SHA256: strings.Repeat("0", 64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := waitStatus(t, manager, task.ID, "failed")
+	if !strings.Contains(failed.Message, "SHA256 校验失败") {
+		t.Fatalf("应报告校验失败：%s", failed.Message)
+	}
+	if _, err := os.Stat(filepath.Join(manager.root, "vae", "m.bin")); !os.IsNotExist(err) {
+		t.Fatal("校验失败不应写入仓库")
+	}
+}
+
+func TestCreateValidationAndConflict(t *testing.T) {
+	server := rangeServer(t, 0)
+	defer server.Close()
+	root := t.TempDir()
+	manager := NewManager(root, nil, "")
+
+	var validation *ValidationError
+	if _, err := manager.Create(Spec{URL: "ftp://x/y.bin"}); !errors.As(err, &validation) {
+		t.Fatalf("非 http URL 应被拒绝：%v", err)
+	}
+	if _, err := manager.Create(Spec{URL: server.URL + "/x.bin", Category: "Bad Name"}); !errors.As(err, &validation) {
+		t.Fatalf("非法类别应被拒绝：%v", err)
+	}
+	if _, err := manager.Create(Spec{URL: server.URL + "/x.bin", SHA256: "abc"}); !errors.As(err, &validation) {
+		t.Fatalf("非法 SHA256 应被拒绝：%v", err)
+	}
+
+	// 仓库已有同名文件时冲突。
+	if err := os.MkdirAll(filepath.Join(root, "vae"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "vae", "exist.bin"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var conflict *ConflictError
+	if _, err := manager.Create(Spec{URL: server.URL + "/exist.bin", Category: "vae"}); !errors.As(err, &conflict) {
+		t.Fatalf("已存在文件应返回冲突：%v", err)
+	}
+}
+
+func TestCancelDeletesPartFile(t *testing.T) {
+	server := rangeServer(t, 256)
+	defer server.Close()
+	manager := NewManager(t.TempDir(), nil, "")
+
+	task, err := manager.Create(Spec{URL: server.URL + "/m.bin", Category: "vae"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if _, err := manager.Action(task.ID, "cancel"); err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, manager, task.ID, "cancelled")
+	if _, err := os.Stat(manager.partPath(task.ID)); !os.IsNotExist(err) {
+		t.Fatal("取消后分片应被删除")
+	}
+	if err := manager.Delete(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Get(task.ID); err == nil {
+		t.Fatal("删除后任务不应存在")
+	}
+}
+
+func TestImportCopiesIntoRepository(t *testing.T) {
+	root := t.TempDir()
+	importDir := t.TempDir()
+	source := filepath.Join(importDir, "seed.safetensors")
+	if err := os.WriteFile(source, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(root, []string{importDir}, "")
+
+	task, err := manager.CreateImport(ImportSpec{Path: source, Category: "checkpoints", SHA256: sha256Hex(payload)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Kind != "import" || task.TotalBytes != int64(len(payload)) {
+		t.Fatalf("任务字段错误：%+v", task)
+	}
+	done := waitStatus(t, manager, task.ID, "completed")
+	if done.Message != "SHA256 校验通过，已写入共享仓库" {
+		t.Fatalf("完成消息异常：%s", done.Message)
+	}
+	content, err := os.ReadFile(filepath.Join(root, "checkpoints", "seed.safetensors"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != string(payload) {
+		t.Fatal("导入文件内容不一致")
+	}
+}
+
+// 下载期间用户手工放入同名文件时，归档不得覆盖该文件。
+func TestFinishDoesNotOverwriteManuallyPlacedFile(t *testing.T) {
+	server := rangeServer(t, 256) // 限速，留出放入文件的窗口
+	defer server.Close()
+	root := t.TempDir()
+	manager := NewManager(root, nil, "")
+
+	task, err := manager.Create(Spec{URL: server.URL + "/m.bin", Category: "vae"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if err := os.MkdirAll(filepath.Join(root, "vae"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manual := []byte("manually-placed")
+	if err := os.WriteFile(filepath.Join(root, "vae", "m.bin"), manual, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	failed := waitStatus(t, manager, task.ID, "failed")
+	if !strings.Contains(failed.Message, "已存在") {
+		t.Fatalf("应报告目标已存在：%s", failed.Message)
+	}
+	content, _ := os.ReadFile(filepath.Join(root, "vae", "m.bin"))
+	if string(content) != string(manual) {
+		t.Fatal("手工放入的文件不应被覆盖")
+	}
+}
+
+func TestImportRejectsOutsideAllowedDirs(t *testing.T) {
+	root := t.TempDir()
+	manager := NewManager(root, []string{filepath.Join(root, "allowed")}, "")
+
+	var validation *ValidationError
+	if _, err := manager.CreateImport(ImportSpec{Path: "/etc/hostname"}); !errors.As(err, &validation) {
+		t.Fatalf("目录外文件应被拒绝：%v", err)
+	}
+	if _, err := manager.CreateImport(ImportSpec{Path: "relative/path.bin"}); !errors.As(err, &validation) {
+		t.Fatalf("相对路径应被拒绝：%v", err)
+	}
+}
+
+// 任务持久化：重启（新建 Manager）后任务记录恢复，
+// 重启前 running 的任务转为 paused，且可以断点续传完成。
+func TestTasksPersistAcrossRestart(t *testing.T) {
+	server := rangeServer(t, 512)
+	defer server.Close()
+	root := t.TempDir()
+	store := filepath.Join(t.TempDir(), "tasks.json")
+
+	importDir := t.TempDir()
+	importSource := filepath.Join(importDir, "done.bin")
+	if err := os.WriteFile(importSource, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first := NewManager(root, []string{importDir}, store)
+	done, err := first.CreateImport(ImportSpec{Path: importSource})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, first, done.ID, "completed")
+
+	running, err := first.Create(Spec{URL: server.URL + "/big.bin", Category: "loras"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 等到有部分进度，模拟运行中宕机（不取消协程，直接弃用 Manager）。
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		current, _ := first.Get(running.ID)
+		if current.DownloadedBytes > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("下载无进度")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	pausedBefore, err := first.Action(running.ID, "pause")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, first, running.ID, "paused")
+
+	// 模拟重启：新 Manager 从同一持久化文件恢复。
+	second := NewManager(root, nil, store)
+	restored := second.List()
+	if len(restored) != 2 {
+		t.Fatalf("应恢复 2 个任务：%+v", restored)
+	}
+	restoredDone, err := second.Get(done.ID)
+	if err != nil || restoredDone.Status != "completed" {
+		t.Fatalf("已完成任务应原样恢复：%v %+v", err, restoredDone)
+	}
+	restoredPaused, err := second.Get(pausedBefore.ID)
+	if err != nil || restoredPaused.Status != "paused" {
+		t.Fatalf("暂停任务应恢复为 paused：%v %+v", err, restoredPaused)
+	}
+
+	// 恢复的任务可以继续并完成（分片保留，断点续传）。
+	if _, err := second.Action(running.ID, "resume"); err != nil {
+		t.Fatal(err)
+	}
+	finished := waitStatus(t, second, running.ID, "completed")
+	if finished.DownloadedBytes != int64(len(payload)) {
+		t.Fatalf("续传后大小错误：%d", finished.DownloadedBytes)
+	}
+
+	// 运行中宕机（未暂停）的任务恢复后应为 paused。
+	third := NewManager(root, nil, store)
+	late, err := third.Create(Spec{URL: server.URL + "/late.bin", Category: "vae"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitStatus(t, third, late.ID, "completed") // 避免协程泄漏影响后续断言
+	fourth := NewManager(root, nil, store)
+	if got := len(fourth.List()); got != 3 {
+		t.Fatalf("应恢复 3 个任务：%d", got)
+	}
+}

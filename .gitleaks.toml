@@ -1,0 +1,10 @@
+title = "FlowPilot secret-scan policy"
+
+[allowlist]
+description = "SMB credential file path placeholder; contains no credential value"
+paths = [
+  '''code/backend/internal/storage/script.go''',
+]
+regexes = [
+  '''credentials=\$HOME/\.smbcredentials''',
+]

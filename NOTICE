@@ -1,0 +1,13 @@
+FlowPilot
+Copyright 2026 慧浪智算 (Huilang Zhisuan)
+
+This product includes software developed by the FlowPilot project
+(https://github.com/ghoul02015/flowpilot), licensed under the Apache License,
+Version 2.0.
+
+This product bundles the following third-party components:
+- Go standard library and third-party modules — see THIRD_PARTY_NOTICES.md
+- npm packages — see frontend/package-lock.json
+- ComfyUI (GPL-3.0) is NOT bundled in this repository; it is fetched at
+  image build time from its upstream repository. Users building ComfyUI
+  images must comply with the GPL-3.0 license of ComfyUI and ComfyUI-Manager.
