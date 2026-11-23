@@ -73,11 +73,44 @@ export PATH="${WORK}/bin:${PATH}"
 tar -xzf "${BUNDLE}" -C "${WORK}/bundle" --strip-components=1
 cp "${WORK}/bundle/install.sh" "${WORK}/installer.sh"
 chmod +x "${WORK}/installer.sh"
+EXPECTED_VERSION="$(tr -d '[:space:]' < "${WORK}/bundle/VERSION")"
+
+printf '\n前置检查：Docker 缺失时只提示，不安装、不启动\n'
+mv "${WORK}/bin/docker" "${WORK}/bin/docker.available"
+if "${WORK}/installer.sh" install --non-interactive --random-password --allow-no-gpu \
+  --region global --bundle "${BUNDLE}" > "${WORK}/docker-missing.log" 2>&1; then
+  printf 'expected missing Docker preflight failure\n' >&2
+  exit 1
+fi
+grep -q '安装器不会安装 Docker' "${WORK}/docker-missing.log"
+[ ! -e /var/lib/flowpilot/.install/preflight.done ]
+if grep -Eq 'apt-get.*docker|systemctl enable --now docker' "${WORK}/docker-missing.log"; then
+  printf 'installer attempted to modify Docker\n' >&2
+  exit 1
+fi
+mv "${WORK}/bin/docker.available" "${WORK}/bin/docker"
+
+# 多行 nvidia-smi 输出用于覆盖 pipefail 下提前关闭管道导致的 141 回归。
+cat > "${WORK}/bin/nvidia-smi" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  *--query-gpu=driver_version*) printf '580.159.03\n580.159.03\n' ;;
+  *--query-gpu=name,memory.total,driver_version*) printf 'NVIDIA GB10, 128 GiB, 580.159.03\nNVIDIA GB10, 128 GiB, 580.159.03\n' ;;
+  *) printf 'NVIDIA-SMI 580.159.03  Driver Version: 580.159.03  CUDA Version: 13.0\n' ;;
+esac
+EOF
+chmod +x "${WORK}/bin/nvidia-smi"
 
 printf '\n[1/7] 注入缺失包故障，确认安装安全退出\n'
 if "${WORK}/installer.sh" install --non-interactive --random-password --allow-no-gpu \
   --region global --bundle "${WORK}/missing.tar.gz"; then
   printf 'expected injected installation failure\n' >&2
+  exit 1
+fi
+grep -q 'NVIDIA 驱动检测通过：580.159.03' /var/log/flowpilot/install/latest.log
+grep -q 'NVIDIA 驱动支持的 CUDA 版本：13.0' /var/log/flowpilot/install/latest.log
+if grep -q '退出码 141' /var/log/flowpilot/install/latest.log; then
+  printf 'NVIDIA preflight terminated with SIGPIPE\n' >&2
   exit 1
 fi
 [ -s /var/lib/flowpilot/.install/admin-password ]
@@ -98,7 +131,8 @@ done
 
 printf '\n[3/7] 验证真实健康接口与管理员登录\n'
 health="$(curl --noproxy '*' -fsS http://127.0.0.1:18080/api/v1/health)"
-printf '%s\n' "${health}" | grep -q '"version":"0.1.0.16"'
+printf '%s\n' "${health}" | grep -q "\"version\":\"${EXPECTED_VERSION}\""
+grep -q '^ProtectHome=true$' /etc/systemd/system/flowpilot.service
 password="$(sed -n 's/^password=//p' /var/lib/flowpilot/initial-credentials)"
 [ -n "${password}" ]
 [ "$(stat -c '%a' /var/lib/flowpilot/initial-credentials)" = "600" ]
@@ -123,23 +157,50 @@ flowpilot-native uninstall --yes
 [ ! -e /opt/flowpilot ]
 [ ! -e /etc/systemd/system/flowpilot.service ]
 
-printf '\n[6/7] 离线目录后台重装后彻底卸载\n'
-rm -f /var/lib/flowpilot/.install/complete.done
-"${WORK}/bundle/install.sh" install --non-interactive --background --random-password --allow-no-gpu --region global
+printf '\n[6/7] Home 自定义目录离线后台重装、最小 ACL 与彻底卸载\n'
+HOME_PARENT=/home/flowpilot-native-test
+HOME_DATA="${HOME_PARENT}/nested/shared"
+mkdir -p "${HOME_DATA}"
+chmod 0700 "${HOME_PARENT}" "${HOME_PARENT}/nested"
+command -v getfacl >/dev/null 2>&1 || {
+  apt-get update -o Acquire::Retries=3
+  apt-get install -y --no-install-recommends acl
+}
+# 同时覆盖预先存在 mask 与没有扩展 ACL 的父目录，卸载后两者都必须逐字恢复。
+setfacl -m mask:--- "${HOME_PARENT}/nested"
+getfacl -p /home "${HOME_PARENT}" "${HOME_PARENT}/nested" > "${WORK}/home-acl.before"
+"${WORK}/bundle/install.sh" install --non-interactive --background --random-password --allow-no-gpu \
+  --region global --data-dir "${HOME_DATA}"
 for _ in $(seq 1 120); do
-  [ -f /var/lib/flowpilot/.install/complete.done ] && break
+  [ -f "${HOME_DATA}/.install/complete.done" ] && break
   sleep 1
 done
-[ -f /var/lib/flowpilot/.install/complete.done ] || {
+[ -f "${HOME_DATA}/.install/complete.done" ] || {
   tail -n 120 /var/log/flowpilot/install/*.log >&2
   exit 1
 }
-curl --noproxy '*' -fsS http://127.0.0.1:18080/api/v1/health | grep -q '"version":"0.1.0.16"'
+curl --noproxy '*' -fsS http://127.0.0.1:18080/api/v1/health | grep -q "\"version\":\"${EXPECTED_VERSION}\""
+grep -q '^ProtectHome=read-only$' /etc/systemd/system/flowpilot.service
+grep -Fq "ReadWritePaths=${HOME_DATA} /var/log/flowpilot" /etc/systemd/system/flowpilot.service
+getfacl -cp "${HOME_PARENT}" | grep -q '^user:flowpilot:--x$'
+getfacl -cp "${HOME_PARENT}/nested" | grep -q '^user:flowpilot:--x$'
+su -s /bin/bash flowpilot -c "printf 'home-data-write-ok\n' > '${HOME_DATA}/acl-write-test'"
+[ "$(cat "${HOME_DATA}/acl-write-test")" = "home-data-write-ok" ]
+if su -s /bin/bash flowpilot -c "ls '${HOME_PARENT}' >/dev/null 2>&1"; then
+  printf 'flowpilot must not list the protected home parent\n' >&2
+  exit 1
+fi
+printf 'preserve-home-data\n' > "${HOME_DATA}/purge-test-sentinel"
 flowpilot-native uninstall --purge --yes
-[ ! -e /var/lib/flowpilot ]
+[ ! -e "${HOME_DATA}" ]
 [ ! -e /opt/flowpilot ]
 [ ! -e /etc/flowpilot ]
 [ ! -e /var/log/flowpilot ]
+getfacl -p /home "${HOME_PARENT}" "${HOME_PARENT}/nested" > "${WORK}/home-acl.after"
+cmp -s "${WORK}/home-acl.before" "${WORK}/home-acl.after" || {
+  printf 'home parent ACLs were not restored\n' >&2
+  exit 1
+}
 if [ "${FLOWPILOT_USER_PREEXISTED}" = "1" ]; then
   # 安装器不得删除底镜像或物理机上原本就存在的同名账户。
   id flowpilot >/dev/null 2>&1 || {

@@ -3,7 +3,7 @@
 # The management service runs natively under systemd; ComfyUI instances still use Docker.
 set -Eeuo pipefail
 
-VERSION="0.1.0.16"
+VERSION="0.1.0.17"
 REPO="ghoul02015/flowpilot"
 PREFIX="/opt/flowpilot"
 DATA_DIR="/var/lib/flowpilot"
@@ -22,7 +22,6 @@ NON_INTERACTIVE=0
 BACKGROUND=0
 RESUME=0
 ALLOW_NO_GPU=0
-INSTALL_DOCKER=0
 PURGE=0
 REMOVE_INSTANCES=0
 RANDOM_PASSWORD=0
@@ -56,7 +55,6 @@ FlowPilot 原生安装器 / Native installer
   --random-password         生成随机密码，保存到数据目录 initial-credentials
   --background              后台安装；终端断开后仍继续
   --non-interactive         不向终端提问；未提供密码时自动生成随机密码
-  --install-docker          Docker 缺失时使用系统 apt 仓库自动安装 docker.io
   --allow-no-gpu            无可用 NVIDIA 驱动时允许继续（仅 CPU 管理）
   --yes                     跳过确认；不会跳过密码及安全检查
   --resume                  复用配置、已下载分片和已完成状态继续安装
@@ -117,6 +115,8 @@ save_config() {
     printf 'REPO=%q\n' "${REPO}"
     printf 'MIRROR=%q\n' "${MIRROR}"
     printf 'ARCH=%q\n' "${ARCH}"
+    # 后台 worker 和后续 resume 都需要保留用户对无 GPU 环境的显式确认。
+    printf 'ALLOW_NO_GPU=%q\n' "${ALLOW_NO_GPU}"
     printf 'BUNDLE=%q\n' "${BUNDLE}"
     printf 'OFFLINE_DIR=%q\n' "${OFFLINE_DIR}"
   } > "${CONFIG_FILE}.tmp"
@@ -134,11 +134,14 @@ is_done() {
 }
 
 detect_arch() {
-  case "$(uname -m)" in
+  local machine=""
+  machine="$(uname -m)"
+  case "${machine}" in
     x86_64|amd64) ARCH="amd64" ;;
     aarch64|arm64) ARCH="arm64" ;;
-    *) fail "不支持的 CPU 架构：$(uname -m)；仅支持 linux/amd64 与 linux/arm64" ;;
+    *) fail "不支持的 CPU 架构：${machine}；仅支持 linux/amd64 与 linux/arm64" ;;
   esac
+  log "INFO" "CPU 架构：${machine}；自动选择发布包：linux/${ARCH}"
 }
 
 parse_args() {
@@ -165,7 +168,6 @@ parse_args() {
       --random-password) RANDOM_PASSWORD=1; shift ;;
       --background) BACKGROUND=1; shift ;;
       --non-interactive) NON_INTERACTIVE=1; shift ;;
-      --install-docker) INSTALL_DOCKER=1; shift ;;
       --allow-no-gpu) ALLOW_NO_GPU=1; shift ;;
       --yes|-y) ASSUME_YES=1; shift ;;
       --resume) RESUME=1; shift ;;
@@ -245,16 +247,36 @@ require_root() {
   esac
 }
 
+data_dir_in_protected_home() {
+  case "${DATA_DIR}" in
+    /home/*|/root|/root/*|/run/user/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 ensure_tools() {
-  local missing=()
-  command -v curl >/dev/null 2>&1 || missing+=(curl)
-  command -v tar >/dev/null 2>&1 || missing+=(tar)
-  command -v sha256sum >/dev/null 2>&1 || missing+=(coreutils)
+  local missing=() packages=()
+  if ! command -v curl >/dev/null 2>&1; then
+    missing+=(curl)
+    packages+=(ca-certificates curl)
+  fi
+  if ! command -v tar >/dev/null 2>&1; then
+    missing+=(tar)
+    packages+=(tar)
+  fi
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    missing+=(coreutils)
+    packages+=(coreutils)
+  fi
+  if data_dir_in_protected_home && ! command -v setfacl >/dev/null 2>&1; then
+    missing+=(acl)
+    packages+=(acl)
+  fi
   if [ "${#missing[@]}" -gt 0 ]; then
     log "INFO" "安装基础工具：${missing[*]}"
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -o Acquire::Retries=3
-    apt-get install -y --no-install-recommends ca-certificates curl tar coreutils
+    apt-get install -y --no-install-recommends "${packages[@]}"
   fi
 }
 
@@ -309,12 +331,22 @@ check_port() {
 
 check_gpu() {
   if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
-    log "INFO" "NVIDIA 驱动检测通过：$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -n 1)"
+    local cuda_version="" toolkit_version=""
+    # pipefail 下不能通过 head/awk 提前退出管道，否则多 GPU 输出可能使命令以 141 中断。
+    log "INFO" "NVIDIA 驱动检测通过：$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | awk 'NR == 1 {print}')"
     nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader 2>/dev/null || true
+    cuda_version="$(nvidia-smi 2>/dev/null | awk -F 'CUDA Version:' 'NF > 1 && !found {print $2; found=1}' | awk '{print $1}')"
+    log "INFO" "NVIDIA 驱动支持的 CUDA 版本：${cuda_version:-未知}"
+    if command -v nvcc >/dev/null 2>&1; then
+      toolkit_version="$(nvcc --version 2>/dev/null | awk '/release/ && !found {print $NF; found=1}')"
+      log "INFO" "宿主机 CUDA Toolkit：${toolkit_version:-已安装，版本未知}"
+    else
+      log "INFO" "宿主机 CUDA Toolkit：未检测到；GPU 容器通常不需要宿主机安装 CUDA Toolkit"
+    fi
     if command -v docker >/dev/null 2>&1 && docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -qi nvidia; then
       log "INFO" "NVIDIA Container Runtime 已注册"
     else
-      log "WARN" "未检测到 NVIDIA Container Runtime；创建 GPU ComfyUI 实例前需配置 NVIDIA Container Toolkit"
+      log "WARN" "未检测到 NVIDIA Container Runtime；创建 GPU ComfyUI 实例前需自行配置 NVIDIA Container Toolkit"
     fi
     return 0
   fi
@@ -323,6 +355,7 @@ check_gpu() {
   else
     log "WARN" "未检测到可用 NVIDIA 驱动；平台可运行，但只能管理 CPU 实例"
   fi
+  log "WARN" "安装器不会安装或修改 NVIDIA 驱动、CUDA、NVIDIA Container Toolkit"
   if [ "${ALLOW_NO_GPU}" != "1" ] && [ "${NON_INTERACTIVE}" != "1" ]; then
     confirm "仍要继续安装吗？" && return 0
     fail "用户取消；可先修复 NVIDIA 驱动，或使用 --allow-no-gpu"
@@ -330,27 +363,16 @@ check_gpu() {
   [ "${ALLOW_NO_GPU}" = "1" ] || fail "无可用 NVIDIA 驱动；非交互安装需显式传入 --allow-no-gpu"
 }
 
-ensure_docker() {
-  if ! command -v docker >/dev/null 2>&1; then
-    if [ "${INSTALL_DOCKER}" != "1" ] && [ "${NON_INTERACTIVE}" != "1" ]; then
-      if confirm "未检测到 Docker。是否通过系统 apt 仓库安装 docker.io？"; then
-        INSTALL_DOCKER=1
-      fi
-    fi
-    [ "${INSTALL_DOCKER}" = "1" ] || fail "ComfyUI 实例管理需要 Docker Engine；请安装后重试，或使用 --install-docker"
-    log "INFO" "通过系统软件源安装 Docker Engine（docker.io）"
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -o Acquire::Retries=3
-    apt-get install -y --no-install-recommends docker.io
-  fi
-  systemctl enable --now docker >/dev/null 2>&1 || true
-  docker info >/dev/null 2>&1 || fail "Docker Engine 不可用；请检查 docker 服务与 /var/run/docker.sock"
-  [ -S /var/run/docker.sock ] || fail "Docker Socket 不存在：/var/run/docker.sock"
+check_docker() {
+  command -v docker >/dev/null 2>&1 || fail "未检测到 Docker CLI；请自行安装并启动 Docker Engine 后重试，安装器不会安装 Docker"
+  docker info >/dev/null 2>&1 || fail "Docker Engine 不可用；请自行检查并启动 docker 服务及 /var/run/docker.sock，安装器不会启动或修改 Docker"
+  [ -S /var/run/docker.sock ] || fail "Docker Socket 不存在：/var/run/docker.sock；请自行配置 Docker Engine"
   log "INFO" "Docker：$(docker version --format '{{.Server.Version}}' 2>/dev/null || printf '已就绪')"
 }
 
 preflight() {
   log "INFO" "开始驱动、系统资源、网络与运行环境检查"
+  log "INFO" "基础环境边界：仅检测；不安装或启动 Docker，不安装或修改 NVIDIA 驱动、CUDA、NVIDIA Container Toolkit"
   valid_path "${PREFIX}" || fail "程序目录必须是仅含字母、数字、点、下划线、斜杠和连字符的绝对路径"
   valid_path "${DATA_DIR}" || fail "数据目录格式不安全：${DATA_DIR}"
   valid_path "${LOG_DIR}" || fail "日志目录格式不安全：${LOG_DIR}"
@@ -359,13 +381,16 @@ preflight() {
   check_port
   local available_kb=""
   available_kb="$(df -Pk "$(dirname "${DATA_DIR}")" 2>/dev/null | awk 'NR==2 {print $4}')"
+  if [ -n "${available_kb}" ]; then
+    log "INFO" "数据目录所在磁盘可用空间：$((available_kb / 1048576)) GiB"
+  fi
   if [ -n "${available_kb}" ] && [ "${available_kb}" -lt 1048576 ]; then
     fail "数据目录所在磁盘剩余空间不足 1 GiB"
   fi
   if [ -n "${available_kb}" ] && [ "${available_kb}" -lt 20971520 ]; then
     log "WARN" "磁盘剩余不足 20 GiB；平台可安装，但 ComfyUI 镜像和模型可能空间不足"
   fi
-  ensure_docker
+  check_docker
   check_gpu
   network_check
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
@@ -595,6 +620,30 @@ backup_before_upgrade() {
   fi
 }
 
+configure_data_dir_access() {
+  data_dir_in_protected_home || return 0
+  command -v setfacl >/dev/null 2>&1 || fail "Home 下自定义数据目录需要 setfacl；请安装 acl 软件包后重试"
+  command -v getfacl >/dev/null 2>&1 || fail "Home 下自定义数据目录需要 getfacl；请安装 acl 软件包后重试"
+  local state="${CONFIG_DIR}/data-dir-access-parents"
+  touch "${state}"
+  chmod 0600 "${state}"
+  local parent="" original="" original_mask="" original_acl=""
+  parent="$(dirname "${DATA_DIR}")"
+  while [ "${parent}" != "/" ]; do
+    [ -d "${parent}" ] || fail "数据目录父路径不存在：${parent}"
+    if ! awk -F '\t' -v path="${parent}" '$1 == path { found=1 } END { exit !found }' "${state}"; then
+      original_acl="$(getfacl -cp "${parent}")"
+      original="$(printf '%s\n' "${original_acl}" | awk -F: '$1 == "user" && $2 == "flowpilot" { print $3; exit }')"
+      original_mask="$(printf '%s\n' "${original_acl}" | awk -F: '$1 == "mask" { print $3; exit }')"
+      printf '%s\t%s\t%s\n' "${parent}" "${original:--}" "${original_mask:--}" >> "${state}"
+    fi
+    # 仅允许进入目录，不允许列出或读取父目录中的其他内容。
+    setfacl -m u:flowpilot:--x "${parent}"
+    parent="$(dirname "${parent}")"
+  done
+  log "INFO" "已为 Home 下数据目录配置 flowpilot 父目录进入权限（仅 ACL --x）"
+}
+
 install_files() {
   ensure_user
   backup_before_upgrade
@@ -639,14 +688,19 @@ install_files() {
   chown -R root:root "${STATE_DIR}"
   chmod 0750 "${DATA_DIR}"
   chmod 0700 "${STATE_DIR}"
+  configure_data_dir_access
   mark_done files
   log "INFO" "程序目录：${PREFIX}/current"
   log "INFO" "数据目录：${DATA_DIR}"
 }
 
 write_service() {
-  local comfy_image="" comfy_workdir="" candidate=""
+  local comfy_image="" comfy_workdir="" candidate="" protect_home="true"
   local models_target="/data/models" outputs_target="/data/outputs" workflows_target="/data/workflows"
+  if data_dir_in_protected_home; then
+    # ReadWritePaths 仍只开放数据目录；read-only 仅让该路径穿过 Home 隔离。
+    protect_home="read-only"
+  fi
   while IFS= read -r candidate; do
     [ -n "${candidate}" ] && [ "${candidate}" != "<none>:<none>" ] || continue
     if [ "$(docker image inspect "${candidate}" --format '{{ index .Config.Labels "flowpilot.kind" }}' 2>/dev/null || true)" = "comfyui" ]; then
@@ -703,7 +757,7 @@ TimeoutStopSec=20s
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ProtectHome=true
+ProtectHome=${protect_home}
 ReadWritePaths=${DATA_DIR} ${LOG_DIR}
 StandardOutput=append:${LOG_DIR}/service.log
 StandardError=append:${LOG_DIR}/service.log
@@ -815,18 +869,13 @@ install_main() {
   trap 'on_signal HUP' HUP
   trap 'on_signal INT' INT
   trap 'on_signal TERM' TERM
-  ensure_tools
   prompt_wizard
+  ensure_tools
   save_config
-  if ! is_done preflight; then
-    preflight
-  else
-    log "INFO" "复用预检状态，并重新检查端口、Docker 与网络"
-    detect_arch
-    check_port
-    ensure_docker
-    network_check
+  if is_done preflight; then
+    log "INFO" "复用安装配置；重新执行架构、磁盘、端口、Docker、GPU、CUDA 与网络完整预检"
   fi
+  preflight
   prepare_password
   if start_background; then
     :
@@ -837,14 +886,14 @@ install_main() {
   wait_healthy
   initialize_admin
   rm -f "${STATE_DIR}/worker.pid"
-  # complete.done 表示调用方已经可以安全地发起下一次安装或卸载。
-  # worker 的 tee 也继承锁描述符，因此显式解锁，不能只等待进程退出。
+  # 先写完成标记，再释放锁；调用方看到 complete.done 后可以安全发起下一次操作。
+  # worker 的 tee 也继承锁描述符，因此必须显式解锁，不能只等待进程退出。
+  mark_done complete
   if command -v flock >/dev/null 2>&1; then
     flock -u 9
   fi
   exec 9>&-
   rmdir /run/flowpilot-native-install.lock.d 2>/dev/null || true
-  mark_done complete
   print_summary
 }
 
@@ -885,6 +934,36 @@ owned_tree() {
   [ "${path}" = "${default_path}" ] || [ -f "${path}/${marker}" ]
 }
 
+restore_data_dir_access() {
+  local state="${CONFIG_DIR}/data-dir-access-parents"
+  [ -f "${state}" ] || return 0
+  command -v setfacl >/dev/null 2>&1 || fail "恢复数据目录父路径 ACL 需要 setfacl；请安装 acl 软件包后重试卸载"
+  local parent="" original="" original_mask=""
+  while IFS=$'\t' read -r parent original original_mask; do
+    [ -n "${parent}" ] || continue
+    valid_path "${parent}" || fail "ACL 恢复记录包含不安全路径：${parent}"
+    case "${parent}" in
+      /home|/home/*|/root|/run|/run/user|/run/user/*) ;;
+      *) fail "ACL 恢复记录超出允许范围：${parent}" ;;
+    esac
+    [ -d "${parent}" ] || continue
+    if [ "${original:--}" = "-" ]; then
+      setfacl -x u:flowpilot "${parent}"
+    else
+      [[ "${original}" =~ ^[rwx-]{3}$ ]] || fail "ACL 恢复记录格式无效：${parent}"
+      setfacl -m "u:flowpilot:${original}" "${parent}"
+    fi
+    if [ "${original_mask:--}" = "-" ]; then
+      setfacl -x mask "${parent}"
+    else
+      [[ "${original_mask}" =~ ^[rwx-]{3}$ ]] || fail "ACL mask 恢复记录格式无效：${parent}"
+      setfacl -m "mask:${original_mask}" "${parent}"
+    fi
+  done < "${state}"
+  rm -f "${state}"
+  log "INFO" "已恢复数据目录父路径原始 ACL"
+}
+
 uninstall_main() {
   require_root
   init_logging
@@ -910,6 +989,7 @@ uninstall_main() {
   rm -f "/etc/systemd/system/${SERVICE_NAME}"
   systemctl daemon-reload
   systemctl reset-failed "${SERVICE_NAME}" >/dev/null 2>&1 || true
+  restore_data_dir_access
   [ "${REMOVE_INSTANCES}" != "1" ] || remove_instances
   rm -f /usr/local/bin/flowpilot-native
   rm -rf -- "${PREFIX}"

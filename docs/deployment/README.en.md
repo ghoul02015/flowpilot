@@ -1,6 +1,6 @@
 # FlowPilot Product Overview and Installation Guide
 
-Current version: `0.1.0.16`
+Current version: `0.1.0.17`
 
 中文版：[简体中文](README.zh-CN.md)
 
@@ -34,16 +34,16 @@ flowpilotd (native Go process managed by systemd)
 ```
 
 - Go, Node.js, Python, Nginx, and Docker Compose are not required on the target server.
-- Docker Engine is still required for ComfyUI instances. The installer offers to install it if missing.
+- Docker Engine is still required for ComfyUI instances and must be installed and started by the user beforehand. The installer only checks the Docker CLI, Engine, and socket; it never installs or starts Docker.
 - The service listens on TCP `18080` on all interfaces by default. FlowPilot does not provide built-in TLS. Do not expose it directly to an untrusted public network; use a trusted management network or add your own HTTPS reverse proxy.
-- Supported targets are Ubuntu/Debian with systemd on Linux `amd64` or `arm64`. NVIDIA GPUs are recommended. CPU-only management requires an explicit acknowledgment.
+- Supported targets are Ubuntu/Debian with systemd on Linux `amd64` or `arm64`. One installer automatically maps `x86_64`/`amd64` and `aarch64`/`arm64` to the matching release archive; separate architecture-specific scripts are unnecessary. NVIDIA GPUs are recommended. CPU-only management requires an explicit acknowledgment.
 
 ## 3. Prerequisites
 
 1. An Ubuntu 22.04/24.04 or compatible Debian physical/virtual server with `root` or `sudo` access.
 2. At least 1 GiB free disk space for FlowPilot; allow 20 GiB or more for ComfyUI images and models.
-3. A working Docker Engine. If absent, approve `docker.io` installation from the configured system APT repository in the wizard, or use `--install-docker`.
-4. GPU instances require a working NVIDIA driver, and GPU containers require NVIDIA Container Toolkit. The installer detects and reports these dependencies but never replaces a driver automatically.
+3. Docker Engine must be installed and running beforehand, and the current user or `flowpilot` service account must be able to access its socket. The installer never installs Docker through APT and never enables or starts the Docker service.
+4. GPU instances require a working NVIDIA driver, and GPU containers require NVIDIA Container Toolkit. The installer only detects the driver, driver-supported CUDA capability, host CUDA Toolkit, and NVIDIA Container Runtime; it never installs or modifies the NVIDIA driver, CUDA, or NVIDIA Container Toolkit.
 5. Access to GitHub Releases, an offline release archive, or a suitable mirror. Use `--region cn` for mainland China network conditions.
 
 ## 4. Interactive online installation (recommended)
@@ -51,7 +51,7 @@ flowpilotd (native Go process managed by systemd)
 ```bash
 curl -fL --retry 3 \
   -o flowpilot-native.sh \
-  https://github.com/ghoul02015/flowpilot/releases/download/v0.1.0.16/flowpilot-native.sh
+  https://github.com/ghoul02015/flowpilot/releases/download/v0.1.0.17/flowpilot-native.sh
 chmod +x flowpilot-native.sh
 sudo ./flowpilot-native.sh install
 ```
@@ -63,7 +63,7 @@ The wizard prompts for:
 3. Data directory, default `/var/lib/flowpilot`;
 4. Network policy: `auto`, `cn`, or `global`;
 5. Whether to detach the installation into the background;
-6. Docker, GPU, network, disk, port, and runtime preflight checks;
+6. CPU architecture, Docker, GPU driver/CUDA capability, NVIDIA Container Runtime, network, disk, port, and runtime preflight checks;
 7. The initial `admin` password, entered without echo and confirmed. It must contain at least 8 characters, including letters and digits.
 
 When complete, open:
@@ -169,7 +169,6 @@ Common unattended options:
 --port 18080
 --region cn
 --mirror https://ghfast.top/
---install-docker
 --background
 --allow-no-gpu
 ```
@@ -179,8 +178,8 @@ Common unattended options:
 Download the archive for your architecture and `SHA256SUMS` from the same release:
 
 ```text
-flowpilot-0.1.0.16-linux-amd64.tar.gz
-flowpilot-0.1.0.16-linux-arm64.tar.gz
+flowpilot-0.1.0.17-linux-amd64.tar.gz
+flowpilot-0.1.0.17-linux-arm64.tar.gz
 SHA256SUMS
 ```
 
@@ -189,18 +188,20 @@ On the target server:
 ```bash
 sha256sum -c --ignore-missing SHA256SUMS
 mkdir -p /tmp/flowpilot-native
-tar -xzf flowpilot-0.1.0.16-linux-arm64.tar.gz \
+tar -xzf flowpilot-0.1.0.17-linux-arm64.tar.gz \
   -C /tmp/flowpilot-native --strip-components=1
 sudo /tmp/flowpilot-native/install.sh install
 ```
 
-Substitute the `amd64` archive where appropriate. The offline archive contains the Go service, frontend, installer, documentation, and license files; GitHub access is not required on the target. Docker or NVIDIA installation and later ComfyUI image/model downloads may still require network access.
+Substitute the `amd64` archive where appropriate. The offline archive contains the Go service, frontend, installer, documentation, and license files; GitHub access is not required on the target. The installer does not install Docker, the NVIDIA driver, CUDA, or NVIDIA Container Toolkit, so these prerequisites must be prepared beforehand. Later ComfyUI image/model downloads may still require network access.
+
+For a custom data directory under a systemd-protected path such as `/home`, the installer automatically uses `ProtectHome=read-only` and grants the `flowpilot` account traverse-only access (`--x`) to parent directories, without permission to list their contents. `ReadWritePaths` remains limited to the data and log directories, and the original ACLs are restored during uninstall. This requires the `acl` package (`setfacl` / `getfacl`); the installer attempts an `apt` installation when it is missing, so fully offline hosts should preinstall it. The default `/var/lib/flowpilot` layout retains the stricter `ProtectHome=true` setting.
 
 ## 9. Installation layout
 
 | Path | Purpose |
 |---|---|
-| `/opt/flowpilot/releases/0.1.0.16/` | Versioned native service and frontend |
+| `/opt/flowpilot/releases/0.1.0.17/` | Versioned native service and frontend |
 | `/opt/flowpilot/current` | Active release symlink for upgrades and rollback |
 | `/opt/flowpilot/bin/flowpilot-native` | Unified install/resume/status/uninstall entry point |
 | `/usr/local/bin/flowpilot-native` | Global command symlink |

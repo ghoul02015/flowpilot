@@ -1,6 +1,6 @@
 # 慧浪智算·FlowPilot 产品说明与安装使用手册
 
-当前版本：`0.1.0.16`
+当前版本：`0.1.0.17`
 
 英文版：[English](README.en.md)
 
@@ -34,16 +34,16 @@ flowpilotd（原生 Go 进程，systemd 管理）
 ```
 
 - 目标机不需要 Go、Node.js、Python、Nginx 或 Docker Compose。
-- Docker Engine 仍用于 ComfyUI 实例；仅安装管理平台而没有 Docker 时，安装器会提示安装。
+- Docker Engine 仍用于 ComfyUI 实例，必须由用户预先安装并启动；安装器只检测 Docker CLI、Engine 和 Socket，不安装或启动 Docker。
 - 默认监听所有网卡的 `18080` 端口。平台没有内置 TLS，请勿直接暴露到不受信任的公网；生产环境建议在受信任管理网内使用，或自行配置 HTTPS 反向代理。
-- 支持 Ubuntu／Debian、systemd、Linux `amd64`／`arm64`。NVIDIA GPU 为推荐配置；无可用驱动时可显式选择仅 CPU 管理。
+- 支持 Ubuntu／Debian、systemd、Linux `amd64`／`arm64`。同一个安装脚本自动识别 `x86_64`／`amd64` 与 `aarch64`／`arm64` 并选择对应发布包，无需维护两套脚本。NVIDIA GPU 为推荐配置；无可用驱动时可显式选择仅 CPU 管理。
 
 ## 3. 安装前准备
 
 1. 一台 Ubuntu 22.04／24.04 或兼容 Debian 系统的物理机／虚拟机，`root` 或 `sudo` 权限。
 2. 至少 1 GiB 可用磁盘用于平台；建议为 ComfyUI 镜像和模型额外预留 20 GiB 以上。
-3. Docker Engine 可用；缺失时可在向导中确认通过系统 `apt` 仓库安装 `docker.io`，或使用 `--install-docker`。
-4. GPU 实例需要可用的 NVIDIA 驱动；GPU 容器还需要 NVIDIA Container Toolkit。安装器只检测并报告，不擅自更换显卡驱动。
+3. Docker Engine 必须预先安装并启动，当前用户或 `flowpilot` 服务账号必须能够访问 Docker Socket；安装器不会通过 `apt` 安装 Docker，也不会启用或启动 Docker 服务。
+4. GPU 实例需要可用的 NVIDIA 驱动；GPU 容器还需要 NVIDIA Container Toolkit。安装器只检测驱动、驱动支持的 CUDA 能力、宿主机 CUDA Toolkit 和 NVIDIA Container Runtime，不安装或修改 NVIDIA 驱动、CUDA 或 NVIDIA Container Toolkit。
 5. 能访问 GitHub Releases，或准备离线发布包／可用镜像。国内网络可使用 `--region cn`。
 
 ## 4. 在线向导安装（推荐）
@@ -51,7 +51,7 @@ flowpilotd（原生 Go 进程，systemd 管理）
 ```bash
 curl -fL --retry 3 \
   -o flowpilot-native.sh \
-  https://github.com/ghoul02015/flowpilot/releases/download/v0.1.0.16/flowpilot-native.sh
+  https://github.com/ghoul02015/flowpilot/releases/download/v0.1.0.17/flowpilot-native.sh
 chmod +x flowpilot-native.sh
 sudo ./flowpilot-native.sh install
 ```
@@ -63,7 +63,7 @@ sudo ./flowpilot-native.sh install
 3. 数据目录，默认 `/var/lib/flowpilot`；
 4. 网络策略 `auto`／`cn`／`global`；
 5. 是否后台挂起安装；
-6. Docker、GPU、网络、磁盘、端口等预检；
+6. CPU 架构、Docker、GPU 驱动与 CUDA 能力、NVIDIA Container Runtime、网络、磁盘和端口等预检；
 7. `admin` 初始密码。密码隐藏输入并二次确认，至少 8 位且同时含字母和数字。
 
 安装完成后访问：
@@ -169,7 +169,6 @@ sudo cat /var/lib/flowpilot/initial-credentials
 --port 18080
 --region cn
 --mirror https://ghfast.top/
---install-docker
 --background
 --allow-no-gpu
 ```
@@ -179,8 +178,8 @@ sudo cat /var/lib/flowpilot/initial-credentials
 从同一 Release 下载对应架构的安装包和 `SHA256SUMS`：
 
 ```text
-flowpilot-0.1.0.16-linux-amd64.tar.gz
-flowpilot-0.1.0.16-linux-arm64.tar.gz
+flowpilot-0.1.0.17-linux-amd64.tar.gz
+flowpilot-0.1.0.17-linux-arm64.tar.gz
 SHA256SUMS
 ```
 
@@ -189,18 +188,20 @@ SHA256SUMS
 ```bash
 sha256sum -c --ignore-missing SHA256SUMS
 mkdir -p /tmp/flowpilot-native
-tar -xzf flowpilot-0.1.0.16-linux-arm64.tar.gz \
+tar -xzf flowpilot-0.1.0.17-linux-arm64.tar.gz \
   -C /tmp/flowpilot-native --strip-components=1
 sudo /tmp/flowpilot-native/install.sh install
 ```
 
-`amd64` 机器请替换包名。离线包已包含 Go 服务、前端、安装器、文档和许可文件，目标机无需访问 GitHub；安装 Docker、NVIDIA 驱动及后续拉取 ComfyUI 镜像／模型仍可能需要网络。
+`amd64` 机器请替换包名。离线包已包含 Go 服务、前端、安装器、文档和许可文件，目标机无需访问 GitHub。安装器不会安装 Docker、NVIDIA 驱动、CUDA 或 NVIDIA Container Toolkit，这些基础环境必须预先准备；后续拉取 ComfyUI 镜像／模型仍可能需要网络。
+
+自定义数据目录位于 `/home` 等 systemd 受保护路径时，安装器自动使用 `ProtectHome=read-only`，并仅为 `flowpilot` 账号添加父目录进入权限（ACL `--x`，不允许列出父目录内容）；`ReadWritePaths` 仍只开放数据目录和日志目录，卸载时恢复原始 ACL。此场景需要 `acl` 软件包（提供 `setfacl`／`getfacl`），缺失时安装器会尝试通过 `apt` 安装；完全离线环境请预装该软件包。默认 `/var/lib/flowpilot` 仍使用更严格的 `ProtectHome=true`。
 
 ## 9. 安装目录与文件
 
 | 路径 | 用途 |
 |---|---|
-| `/opt/flowpilot/releases/0.1.0.16/` | 当前版本程序与前端 |
+| `/opt/flowpilot/releases/0.1.0.17/` | 当前版本程序与前端 |
 | `/opt/flowpilot/current` | 当前版本软链接，用于升级与回滚 |
 | `/opt/flowpilot/bin/flowpilot-native` | 安装、续装、状态与卸载统一入口 |
 | `/usr/local/bin/flowpilot-native` | 全局命令软链接 |
